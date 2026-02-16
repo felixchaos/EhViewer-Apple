@@ -166,16 +166,7 @@ class GalleryCommentsViewModel {
     }
 }
 
-// MARK: - Helper
 
-private func getSite() -> String {
-    switch AppSettings.shared.gallerySite {
-    case .exHentai:
-        return "https://exhentai.org/"
-    case .eHentai:
-        return "https://e-hentai.org/"
-    }
-}
 
 #Preview {
     NavigationStack {

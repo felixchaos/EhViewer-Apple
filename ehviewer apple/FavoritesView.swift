@@ -379,7 +379,7 @@ struct FavoritesView: View {
         let selected = localFavorites.filter { selectedGids.contains($0.gid) }
         Task {
             for record in selected {
-                await DownloadManager.shared.startDownload(gallery: record.toGalleryInfo())
+                await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo())
             }
         }
         isSelectMode = false
@@ -391,7 +391,7 @@ struct FavoritesView: View {
         isBatchProcessing = true
         Task {
             for record in selected {
-                try? await EhAPI.shared.addFavorites(gid: record.gid, token: record.token, dstCat: slot)
+                await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
                 try? EhDatabase.shared.deleteLocalFavorite(gid: record.gid)
             }
             await MainActor.run {

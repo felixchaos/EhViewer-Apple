@@ -8,8 +8,6 @@
 import SwiftUI
 import EhModels
 import EhDatabase
-import EhDownload
-import EhAPI
 import EhSettings
 
 struct HistoryView: View {
@@ -112,21 +110,13 @@ struct HistoryView: View {
                 .contextMenu {
                     // 对齐 Android HistoryScene 长按菜单
                     Button {
-                        Task {
-                            await DownloadManager.shared.startDownload(gallery: record.toGalleryInfo())
-                        }
+                        Task { await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo()) }
                     } label: {
                         Label("下载", systemImage: "arrow.down.circle")
                     }
 
                     Button {
-                        let defaultSlot = AppSettings.shared.defaultFavSlot
-                        let slot = (defaultSlot >= 0 && defaultSlot <= 9) ? defaultSlot : 0
-                        Task {
-                            try? await EhAPI.shared.addFavorites(
-                                gid: record.gid, token: record.token, dstCat: slot
-                            )
-                        }
+                        Task { await GalleryActionService.shared.quickFavorite(gallery: record.toGalleryInfo()) }
                     } label: {
                         Label("收藏", systemImage: "heart")
                     }

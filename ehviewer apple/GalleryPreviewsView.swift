@@ -186,7 +186,7 @@ class GalleryPreviewsViewModel {
         await MainActor.run { isLoadingMore = true }
         
         do {
-            let site = getSite()
+            let site = GalleryActionService.siteBaseURL
             let urlStr = "\(site)g/\(gid)/\(token)/?p=\(nextPage)"
             print("[DEBUG] Loading preview page \(nextPage): \(urlStr)")
             let (previewSet, _) = try await EhAPI.shared.getPreviewSet(url: urlStr)
@@ -232,13 +232,4 @@ class GalleryPreviewsViewModel {
     }
 }
 
-// MARK: - Helper
 
-private func getSite() -> String {
-    switch AppSettings.shared.gallerySite {
-    case .exHentai:
-        return "https://exhentai.org/"
-    case .eHentai:
-        return "https://e-hentai.org/"
-    }
-}

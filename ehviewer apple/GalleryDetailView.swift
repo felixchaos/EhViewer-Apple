@@ -236,23 +236,14 @@ struct GalleryDetailView: View {
                          title: vm.isFavorited ? "已收藏" : "收藏",
                          action: {
                 if vm.isFavorited {
-                    // 已收藏 → 取消收藏 (对齐 Android: 同时移除本地和云端收藏)
-                    Task {
-                        await vm.removeFavorite(gid: gallery.gid, token: gallery.token)
-                        // 同时移除本地收藏
-                        try? EhDatabase.shared.deleteLocalFavorite(gid: gallery.gid)
-                    }
+                    Task { await vm.removeFavorite(gid: gallery.gid, token: gallery.token) }
                 } else {
-                    // 未收藏 → 检查默认收藏夹
                     let defaultSlot = AppSettings.shared.defaultFavSlot
                     if defaultSlot == -1 {
-                        // 默认收藏夹为本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
                         vm.addLocalFavorite(gallery: gallery)
                     } else if defaultSlot >= 0 && defaultSlot <= 9 {
-                        // 有默认云端收藏夹，直接添加
                         Task { await vm.addFavorite(gid: gallery.gid, token: gallery.token, slot: defaultSlot) }
                     } else {
-                        // 无默认收藏夹 (-2)，弹出选择器
                         showFavoritePicker = true
                     }
                 }
@@ -268,7 +259,7 @@ struct GalleryDetailView: View {
             }
             Divider().frame(height: 32)
             actionButton(icon: "square.and.arrow.up", title: "分享") {
-                let site = vm.getSiteUrl()
+                let site = GalleryActionService.siteBaseURL
                 let urlStr = "\(site)g/\(gallery.gid)/\(gallery.token)/"
                 #if os(iOS)
                 guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -645,7 +636,7 @@ class GalleryDetailViewModel {
         errorMessage = nil
 
         do {
-            let site = getSite()
+            let site = GalleryActionService.siteBaseURL
             let urlStr = "\(site)g/\(gid)/\(token)/"
             print("[DEBUG] Fetching detail from: \(urlStr)")
             let result = try await EhAPI.shared.getGalleryDetail(url: urlStr)
@@ -676,49 +667,19 @@ class GalleryDetailViewModel {
     }
 
     func addFavorite(gid: Int64, token: String, slot: Int) async {
-        do {
-            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
-            await MainActor.run {
-                self.isFavorited = true
-                // 更新最近使用的收藏夹
-                AppSettings.shared.recentFavCat = slot
-            }
-        } catch {
-            print("Add favorite failed: \(error)")
-        }
+        await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
+        await MainActor.run { self.isFavorited = true }
     }
 
     /// 添加到本地收藏 (对齐 Android FAV_CAT_LOCAL = -1, EhDB.putLocalFavorite)
     func addLocalFavorite(gallery: GalleryInfo) {
-        let record = LocalFavoriteRecord(
-            gid: gallery.gid, token: gallery.token, title: gallery.bestTitle,
-            category: gallery.category.rawValue, pages: gallery.pages, date: Date()
-        )
-        var r = record
-        r.titleJpn = gallery.titleJpn
-        r.thumb = gallery.thumb
-        r.posted = gallery.posted
-        r.uploader = gallery.uploader
-        r.rating = gallery.rating
-        do {
-            try EhDatabase.shared.insertLocalFavorite(r)
-            self.isFavorited = true
-        } catch {
-            print("Add local favorite failed: \(error)")
-        }
+        GalleryActionService.shared.addLocalFavorite(gallery: gallery)
+        self.isFavorited = true
     }
 
     func removeFavorite(gid: Int64, token: String) async {
-        do {
-            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
-            await MainActor.run { self.isFavorited = false }
-        } catch {
-            print("Remove favorite failed: \(error)")
-        }
-    }
-
-    func getSiteUrl() -> String {
-        getSite()
+        await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
+        await MainActor.run { self.isFavorited = false }
     }
 
     /// 自动记录浏览历史 (对齐 Android EhDB.putHistoryInfo)
@@ -743,16 +704,8 @@ class GalleryDetailViewModel {
     }
 
     func startDownload(gallery: GalleryInfo) async {
-        // 检查是否已在下载
-        let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
-        if state != DownloadManager.stateInvalid {
-            // 已在队列中
-            await MainActor.run { self.isDownloading = true }
-            return
-        }
-
+        await GalleryActionService.shared.startDownload(gallery: gallery)
         await MainActor.run { self.isDownloading = true }
-        await DownloadManager.shared.startDownload(gallery: gallery)
     }
 
     func rateGallery(gid: Int64, token: String, rating: Float) async {
@@ -782,7 +735,7 @@ class GalleryDetailViewModel {
         await MainActor.run { isLoadingComments = true }
 
         do {
-            let site = getSite()
+            let site = GalleryActionService.siteBaseURL
             // 添加 hc=1 参数来获取全部评论
             let urlStr = "\(site)g/\(gid)/\(token)/?hc=1"
             let result = try await EhAPI.shared.getGalleryDetail(url: urlStr)
@@ -806,19 +759,7 @@ class GalleryDetailViewModel {
         }
     }
 
-    private func getSite() -> String {
-        // 使用 AppSettings 的站点设置，而不是基于 Cookie 判断
-        // 对齐 Android: 使用 Settings.getGallerySite()
-        switch AppSettings.shared.gallerySite {
-        case .exHentai:
-            // 检查是否有 ExHentai 访问权限
-            let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
-            let hasEX = cookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
-            return hasEX ? "https://exhentai.org/" : "https://e-hentai.org/"
-        case .eHentai:
-            return "https://e-hentai.org/"
-        }
-    }
+
 }
 
 // MARK: - FlowLayout (Tags)

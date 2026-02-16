@@ -1299,7 +1299,7 @@ class ImageReaderViewModel {
     }
 
     func fetchGalleryInfo() async {
-        let site = getSite()
+        let site = GalleryActionService.siteBaseURL
         let urlStr = "\(site)g/\(gid)/\(token)/"
         guard let url = URL(string: urlStr) else { return }
 
@@ -1363,7 +1363,7 @@ class ImageReaderViewModel {
             do {
                 var request = URLRequest(url: url)
                 request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
-                request.setValue(getSite(), forHTTPHeaderField: "Referer")
+                request.setValue(GalleryActionService.siteBaseURL, forHTTPHeaderField: "Referer")
                 request.timeoutInterval = 60
 
                 let (asyncBytes, response) = try await Self.session.bytes(for: request)
@@ -1492,7 +1492,7 @@ class ImageReaderViewModel {
         defer { loadingPages.remove(index) }
 
         do {
-            let site = getSite()
+            let site = GalleryActionService.siteBaseURL
             let pageUrl: String
 
             if let pToken = pTokens[index] {
@@ -1600,7 +1600,7 @@ class ImageReaderViewModel {
     }
 
     private func fetchPToken(page: Int) async throws -> String {
-        let site = getSite()
+        let site = GalleryActionService.siteBaseURL
         let detailPage = page / 20
         let urlStr = "\(site)g/\(gid)/\(token)/\(detailPage > 0 ? "?p=\(detailPage)" : "")"
         guard let url = URL(string: urlStr) else {
@@ -1629,17 +1629,7 @@ class ImageReaderViewModel {
         throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "pToken not found"])
     }
 
-    private func getSite() -> String {
-        // 使用 AppSettings 的站点设置
-        switch AppSettings.shared.gallerySite {
-        case .exHentai:
-            let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
-            let hasEX = cookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
-            return hasEX ? "https://exhentai.org/" : "https://e-hentai.org/"
-        case .eHentai:
-            return "https://e-hentai.org/"
-        }
-    }
+
 }
 
 // MARK: - macOS Scroll Wheel Page Navigator

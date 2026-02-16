@@ -810,8 +810,6 @@ struct SimpleRatingView: View {
 
 struct GalleryRow: View {
     let gallery: GalleryInfo
-    var onFavorite: ((GalleryInfo) -> Void)?
-    var onDownload: ((GalleryInfo) -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -899,38 +897,32 @@ struct GalleryRow: View {
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .contextMenu {
-            // 收藏
-            Button {
-                onFavorite?(gallery)
-            } label: {
-                Label("收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.fill" : "heart")
-            }
-
             // 下载
             Button {
-                onDownload?(gallery)
+                Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
             } label: {
                 Label("下载", systemImage: "arrow.down.circle")
+            }
+
+            // 收藏
+            Button {
+                Task { await GalleryActionService.shared.quickFavorite(gallery: gallery) }
+            } label: {
+                Label("收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.fill" : "heart")
             }
 
             Divider()
 
             // 复制链接
             Button {
-                let url = "https://e-hentai.org/g/\(gallery.gid)/\(gallery.token)/"
-                #if os(macOS)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url, forType: .string)
-                #else
-                UIPasteboard.general.string = url
-                #endif
+                GalleryActionService.shared.copyLink(gid: gallery.gid, token: gallery.token)
             } label: {
                 Label("复制链接", systemImage: "doc.on.doc")
             }
 
             // 分享 (仅 iOS)
             #if os(iOS)
-            ShareLink(item: URL(string: "https://e-hentai.org/g/\(gallery.gid)/\(gallery.token)/")!) {
+            ShareLink(item: URL(string: GalleryActionService.shared.galleryURL(gid: gallery.gid, token: gallery.token))!) {
                 Label("分享", systemImage: "square.and.arrow.up")
             }
             #endif
