@@ -1296,6 +1296,7 @@ class GalleryListViewModel {
                 self.isLoading = false
             }
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             await MainActor.run {
                 self.errorMessage = EhError.localizedMessage(for: error)
                 self.isLoading = false
@@ -1320,6 +1321,7 @@ class GalleryListViewModel {
                     self.isLoading = false
                 }
             } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 await MainActor.run {
                     self.errorMessage = EhError.localizedMessage(for: error)
                     self.isLoading = false
@@ -1406,6 +1408,7 @@ class GalleryListViewModel {
                     self.isLoading = false
                 }
             } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 await MainActor.run {
                     self.errorMessage = EhError.localizedMessage(for: error)
                     self.isLoading = false
@@ -1435,6 +1438,7 @@ class GalleryListViewModel {
                     self.isLoading = false
                 }
             } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 await MainActor.run {
                     self.errorMessage = EhError.localizedMessage(for: error)
                     self.isLoading = false
@@ -1551,6 +1555,7 @@ class GalleryListViewModel {
                 self.isLoading = false
             }
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             await MainActor.run {
                 self.errorMessage = EhError.localizedMessage(for: error)
                 self.isLoading = false
@@ -1588,6 +1593,7 @@ class GalleryListViewModel {
                 self.isLoading = false
             }
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             await MainActor.run {
                 self.errorMessage = EhError.localizedMessage(for: error)
                 self.isLoading = false
@@ -1675,6 +1681,7 @@ class GalleryListViewModel {
             }
 
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             await MainActor.run {
                 self.errorMessage = EhError.localizedMessage(for: error)
                 self.isLoading = false

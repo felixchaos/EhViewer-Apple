@@ -98,21 +98,10 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
                         retryCount = 0
                         Task { await load() }
                     }
-                    .onAppear {
-                        // 视图重新出现时自动重试
-                        if retryCount < maxRetries {
-                            hasFailed = false
-                            retryCount = 0
-                            Task {
-                                try? await Task.sleep(nanoseconds: 300_000_000)
-                                await load()
-                            }
-                        }
-                    }
             } else {
                 ZStack {
                     placeholder()
-                    if isLoading {
+                    if isLoading && showProgress {
                         ProgressView()
                             .frame(width: 24, height: 24)
                     }
@@ -125,13 +114,15 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     }
 
     private func load() async {
-        guard let url, !isLoading else { return }
+        guard let url else { return }
+        // 如果已经有图片或正在加载，跳过
+        guard image == nil, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
 
         // 1. 内存图片缓存 (最快, 避免重复解码)
         if let memCached = ThumbnailMemoryCache.shared.get(url) {
-            await MainActor.run { self.image = memCached }
+            self.image = memCached
             return
         }
 
@@ -140,39 +131,53 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         if let cached = URLCache.shared.cachedResponse(for: cacheRequest),
            let img = PlatformImage(data: cached.data) {
             ThumbnailMemoryCache.shared.set(img, for: url)
-            await MainActor.run { self.image = img }
+            self.image = img
             return
         }
 
-        // 3. 网络下载 — 使用 data(for:) 一次性下载 (比 bytes 逐字节更快更可靠)
-        do {
-            var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy)
-            // 设置 Referer 头 (对齐 Android: 缩略图 CDN 要求合法 Referer 才返回图片)
-            let siteHost = AppSettings.shared.gallerySite == .exHentai
-                ? "https://exhentai.org/" : "https://e-hentai.org/"
-            request.setValue(siteHost, forHTTPHeaderField: "Referer")
-            let (data, response) = try await ImageSessionProvider.shared.data(for: request)
+        // 3. 网络下载 — 带重试 (非递归，使用循环)
+        let siteHost = AppSettings.shared.gallerySite == .exHentai
+            ? "https://exhentai.org/" : "https://e-hentai.org/"
 
-            // 缓存响应
-            let cachedResponse = CachedURLResponse(response: response, data: data)
-            URLCache.shared.storeCachedResponse(cachedResponse, for: request)
+        for attempt in 0..<maxRetries {
+            // 每次尝试前检查 Task 是否已取消
+            guard !Task.isCancelled else { return }
 
-            if let img = PlatformImage(data: data) {
-                ThumbnailMemoryCache.shared.set(img, for: url)
-                await MainActor.run { self.image = img }
-            } else {
-                await MainActor.run { self.hasFailed = true }
+            do {
+                var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy)
+                request.setValue(siteHost, forHTTPHeaderField: "Referer")
+                let (data, response) = try await ImageSessionProvider.shared.data(for: request)
+
+                // 缓存响应
+                let cachedResponse = CachedURLResponse(response: response, data: data)
+                URLCache.shared.storeCachedResponse(cachedResponse, for: request)
+
+                if let img = PlatformImage(data: data) {
+                    ThumbnailMemoryCache.shared.set(img, for: url)
+                    self.image = img
+                    return
+                } else {
+                    // 数据无法解码为图片 — 不重试
+                    self.hasFailed = true
+                    return
+                }
+            } catch is CancellationError {
+                // Task 被 SwiftUI 取消 (视图滚动出屏幕), 静默退出, 不算失败
+                return
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                // URLSession 请求被取消, 静默退出
+                return
+            } catch {
+                // 真实网络错误 — 延迟后重试
+                if attempt < maxRetries - 1 {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
+                }
             }
-        } catch {
-            print("[CachedAsyncImage] Failed to load \(url.absoluteString): \(error)")
-            await MainActor.run { self.retryCount += 1 }
-            if retryCount < maxRetries {
-                // 自动重试: 递增延迟
-                try? await Task.sleep(nanoseconds: UInt64(retryCount) * 500_000_000)
-                await load()
-            } else {
-                await MainActor.run { self.hasFailed = true }
-            }
+        }
+
+        // 所有重试用完 — 标记失败
+        if !Task.isCancelled {
+            self.hasFailed = true
         }
     }
 }
