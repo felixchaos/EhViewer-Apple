@@ -506,6 +506,8 @@ struct GalleryDetailView: View {
                         GalleryCommentsView(
                             gid: gallery.gid,
                             token: gallery.token,
+                            apiUid: vm.detail?.apiUid ?? -1,
+                            apiKey: vm.detail?.apiKey ?? "",
                             initialComments: vm.comments,
                             hasMore: vm.hasMoreComments
                         )

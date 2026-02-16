@@ -30,14 +30,19 @@ public actor SpiderQueen {
     private var imageUrls: [String?]    // 每页的图片 URL
     private var showKey: String?        // showpage API 的 showKey
     private var activeTasks: [Int: Task<Void, Never>] = [:]
-    private let maxConcurrent = 3       // 同时下载的最大数量
 
-    /// 共享 URLSession，避免每次请求创建新的 session 导致内存泄漏
+    /// 并发下载数 — 从 AppSettings 读取用户设置 (对齐 Android SpiderQueen.mWorkerPool 大小)
+    private var maxConcurrent: Int {
+        AppSettings.shared.multiThreadDownload
+    }
+
+    /// 共享 URLSession — 超时从 AppSettings 读取 (对齐 Android okhttp timeouts)
     private let sharedSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = .shared
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 60
+        let timeout = TimeInterval(AppSettings.shared.downloadTimeout)
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 4
         return URLSession(configuration: config)
     }()
 
@@ -211,10 +216,12 @@ public actor SpiderQueen {
 
                 // 2. 获取图片 URL
                 let imageUrl: String
+                let originImageUrl: String?
                 if showKey == nil {
                     let result = try await fetchPageHtml(gid: galleryInfo.gid, index: index, pToken: pToken)
                     showKey = result.showKey
                     imageUrl = result.imageUrl
+                    originImageUrl = result.originImageUrl
                 } else {
                     let result = try await fetchPageApi(
                         gid: galleryInfo.gid,
@@ -226,15 +233,25 @@ public actor SpiderQueen {
                         showKey = newShowKey
                     }
                     imageUrl = result.imageUrl
+                    originImageUrl = result.originImageUrl
+                }
+
+                // 2.5 如果用户启用了"下载原始图片"且有原图 URL，优先使用 (对齐 Android downloadOriginImage)
+                let finalImageUrl: String
+                if AppSettings.shared.downloadOriginImage,
+                   let origin = originImageUrl, !origin.isEmpty {
+                    finalImageUrl = origin
+                } else {
+                    finalImageUrl = imageUrl
                 }
 
                 // 3. URL 有效性
-                guard !imageUrl.isEmpty else {
+                guard !finalImageUrl.isEmpty else {
                     throw SpiderError.emptyImageUrl
                 }
 
                 // 4. 509 检测
-                if imageUrl.contains("509.gif") || imageUrl.contains("509s.gif") {
+                if finalImageUrl.contains("509.gif") || finalImageUrl.contains("509s.gif") {
                     pageStates[index] = Self.stateFailed
                     await delegate?.onImageLimitReached()
                     activeTasks.removeValue(forKey: index)
@@ -242,12 +259,12 @@ public actor SpiderQueen {
                 }
 
                 // 5. 下载图片并存储
-                try await downloadAndStore(imageUrl: imageUrl, index: index)
+                try await downloadAndStore(imageUrl: finalImageUrl, index: index)
 
                 // 6. 保存结果
-                imageUrls[index] = imageUrl
+                imageUrls[index] = finalImageUrl
                 pageStates[index] = Self.stateFinish
-                await delegate?.onPageLoaded(index: index, imageUrl: imageUrl)
+                await delegate?.onPageLoaded(index: index, imageUrl: finalImageUrl)
                 activeTasks.removeValue(forKey: index)
                 return
 
@@ -259,9 +276,11 @@ public actor SpiderQueen {
                 lastError = error
                 // showKey 可能过期，清除后下次使用 HTML 方式
                 if attempt > 0 { showKey = nil }
-                // 指数退避等待: 0.5s, 1s, 2s, 4s
+                // 使用用户配置的下载延迟 (downloadDelay, 毫秒) 作为基础，
+                // 结合指数退避: base * 2^attempt (对齐 Android SpiderQueen 重试策略)
                 if attempt < maxRetries - 1 {
-                    let delay = UInt64(pow(2.0, Double(attempt))) * 500_000_000
+                    let userDelay = max(500, AppSettings.shared.downloadDelay)
+                    let delay = UInt64(userDelay) * UInt64(pow(2.0, Double(attempt))) * 1_000_000
                     try? await Task.sleep(nanoseconds: delay)
                 }
             }

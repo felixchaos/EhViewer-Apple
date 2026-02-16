@@ -13,6 +13,8 @@ import EhSettings
 struct GalleryCommentsView: View {
     let gid: Int64
     let token: String
+    let apiUid: Int64
+    let apiKey: String
     let initialComments: [GalleryComment]
     let hasMore: Bool
     
@@ -98,7 +100,13 @@ struct GalleryCommentsView: View {
                 HStack(spacing: 16) {
                     if comment.voteUpAble {
                         Button {
-                            // TODO: Vote up
+                            Task {
+                                await vm.voteComment(
+                                    apiUid: apiUid, apiKey: apiKey,
+                                    gid: gid, token: token,
+                                    commentId: comment.id, vote: 1
+                                )
+                            }
                         } label: {
                             Label("赞同", systemImage: comment.voteUpEd ? "hand.thumbsup.fill" : "hand.thumbsup")
                                 .font(.caption)
@@ -109,7 +117,13 @@ struct GalleryCommentsView: View {
                     
                     if comment.voteDownAble {
                         Button {
-                            // TODO: Vote down
+                            Task {
+                                await vm.voteComment(
+                                    apiUid: apiUid, apiKey: apiKey,
+                                    gid: gid, token: token,
+                                    commentId: comment.id, vote: -1
+                                )
+                            }
                         } label: {
                             Label("反对", systemImage: comment.voteDownEd ? "hand.thumbsdown.fill" : "hand.thumbsdown")
                                 .font(.caption)
@@ -164,6 +178,35 @@ class GalleryCommentsViewModel {
             }
         }
     }
+
+    /// 评论投票 — 连通 EhAPI.voteComment (对齐 Android GalleryCommentsScene.voteComment)
+    func voteComment(
+        apiUid: Int64, apiKey: String,
+        gid: Int64, token: String,
+        commentId: Int64, vote: Int
+    ) async {
+        do {
+            let result = try await EhAPI.shared.voteComment(
+                apiUid: apiUid, apiKey: apiKey,
+                gid: gid, token: token,
+                commentId: commentId, commentVote: vote
+            )
+            // 更新本地评论状态
+            await MainActor.run {
+                if let idx = comments.firstIndex(where: { $0.id == commentId }) {
+                    comments[idx].score = result.score
+                    // vote == 1 → 用户点赞; vote == -1 → 用户点踩
+                    // result.vote: 服务端返回的最终投票状态 (1 = 已赞, -1 = 已踩, 0 = 取消)
+                    comments[idx].voteUpEd = result.vote == 1
+                    comments[idx].voteDownEd = result.vote == -1
+                }
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = EhError.localizedMessage(for: error)
+            }
+        }
+    }
 }
 
 
@@ -173,6 +216,8 @@ class GalleryCommentsViewModel {
         GalleryCommentsView(
             gid: 12345,
             token: "abc123",
+            apiUid: -1,
+            apiKey: "",
             initialComments: [],
             hasMore: true
         )

@@ -12,7 +12,7 @@ public final class EhDNS: @unchecked Sendable {
 
     /// 是否启用自定义 DNS — 从 AppSettings 读取，与设置界面联动
     public var isEnabled: Bool {
-        AppSettings.shared.builtInHosts || AppSettings.shared.domainFronting
+        AppSettings.shared.builtInHosts || AppSettings.shared.domainFronting || AppSettings.shared.dnsOverHttps
     }
 
     /// 内置 Hosts 映射 (对应 Android builtInHosts)
@@ -72,6 +72,25 @@ public final class EhDNS: @unchecked Sendable {
     /// 对齐 Android: 随机打乱实现负载均衡
     public func resolve(host: String) -> [String] {
         guard isEnabled else { return [] }
+        return forceResolve(host: host)
+    }
+
+    /// 异步解析 — 优先使用 DNS-over-HTTPS（若启用），回退到内置 Hosts
+    /// 调用方在需要动态解析时应优先使用此方法
+    public func resolveAsync(host: String) async -> [String] {
+        guard isEnabled else { return [] }
+
+        // 如果用户启用了 DoH，优先走 DoH
+        if AppSettings.shared.dnsOverHttps {
+            do {
+                let ips = try await resolveViaDoH(host: host)
+                if !ips.isEmpty { return ips }
+            } catch {
+                // DoH 失败，静默回退到内置 Hosts
+            }
+        }
+
+        // 回退到内置 Hosts 解析
         return forceResolve(host: host)
     }
 
