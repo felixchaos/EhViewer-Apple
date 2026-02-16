@@ -267,6 +267,15 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 发送简单的本地通知（公开方法，供磁盘满等系统级告警使用）
+    func sendLocalNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        sendNotificationImmediate(id: "system_alert_\(Date().timeIntervalSince1970)", content: content)
+    }
+
     private func removeNotification(id: String) {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])

@@ -69,4 +69,18 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
             DownloadNotificationService.shared.on509Error()
         }
     }
+
+    func onDiskFull() async {
+        await MainActor.run {
+            #if os(iOS)
+            DownloadLiveActivityManager.shared.endActivity()
+            #endif
+            // 发送磁盘满通知，让 UI 层弹窗提示用户
+            NotificationCenter.default.post(name: .ehDiskFull, object: nil)
+            DownloadNotificationService.shared.sendLocalNotification(
+                title: "下载已暂停",
+                body: "磁盘空间不足，所有下载已自动暂停。请释放存储空间后手动恢复下载。"
+            )
+        }
+    }
 }

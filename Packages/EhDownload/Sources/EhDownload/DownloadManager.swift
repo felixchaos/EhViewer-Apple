@@ -125,6 +125,24 @@ public actor DownloadManager {
         }
     }
 
+    /// 暂停所有下载（磁盘满时紧急调用）
+    public func pauseAllDownloads() {
+        // 取消当前活跃任务
+        if let spider = activeTask?.spider {
+            Task { await spider.cancelAll() }
+        }
+        activeTask = nil
+
+        // 暂停队列中所有等待/下载中的任务
+        for i in downloadQueue.indices {
+            if downloadQueue[i].state == Self.stateWait || downloadQueue[i].state == Self.stateDownload {
+                downloadQueue[i].state = Self.stateNone
+                try? EhDatabase.shared.updateDownloadState(gid: downloadQueue[i].gallery.gid, state: Self.stateNone)
+            }
+        }
+        print("[DownloadManager] ⚠️ 所有下载已暂停（磁盘空间不足）")
+    }
+
     /// 恢复下载
     public func resumeDownload(gid: Int64) {
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
@@ -457,6 +475,12 @@ final class SpiderInfoUpdater: SpiderDelegate, @unchecked Sendable {
         await listener?.on509Error()
     }
 
+    func onDiskFull() async {
+        print("[SpiderInfoUpdater] ⚠️ 磁盘空间不足，暂停所有下载")
+        await DownloadManager.shared.pauseAllDownloads()
+        await listener?.onDiskFull()
+    }
+
     func onDownloadProgress(downloaded: Int, total: Int) async {
         downloadedCount = downloaded
     }
@@ -476,4 +500,7 @@ public protocol DownloadListener: AnyObject, Sendable {
 
     /// 509错误
     func on509Error() async
+
+    /// 磁盘空间不足
+    func onDiskFull() async
 }

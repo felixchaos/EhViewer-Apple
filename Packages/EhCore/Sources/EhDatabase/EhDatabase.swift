@@ -10,31 +10,55 @@ public final class EhDatabase: Sendable {
         do {
             return try EhDatabase()
         } catch {
-            // 数据库初始化失败时尝试删除旧数据库重建，避免 fatalError 导致无法恢复
-            print("[EhDatabase] 初始化失败: \(error)，尝试重建...")
-            let dbPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-                .first!.appendingPathComponent("eh.sqlite").path
+            // 数据库初始化失败时备份旧数据库后重建
+            print("[EhDatabase] 初始化失败: \(error)，尝试备份并重建...")
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let dbPath = docsDir.appendingPathComponent("eh.sqlite").path
+
+            // 备份损坏的数据库（保留最近一次，用户可自行恢复）
+            let backupPath = docsDir.appendingPathComponent("eh.sqlite.corrupted_backup").path
+            try? FileManager.default.removeItem(atPath: backupPath) // 清理旧备份
+            try? FileManager.default.copyItem(atPath: dbPath, toPath: backupPath)
+            // 同时备份 WAL 和 SHM 文件
+            try? FileManager.default.copyItem(atPath: dbPath + "-wal", toPath: backupPath + "-wal")
+            try? FileManager.default.copyItem(atPath: dbPath + "-shm", toPath: backupPath + "-shm")
+            print("[EhDatabase] 已备份损坏数据库至 eh.sqlite.corrupted_backup")
+
+            // 删除原数据库及附属文件
             try? FileManager.default.removeItem(atPath: dbPath)
+            try? FileManager.default.removeItem(atPath: dbPath + "-wal")
+            try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+
             do {
                 return try EhDatabase()
             } catch {
-                fatalError("Failed to initialize database after rebuild: \(error)")
+                // 二次失败也不 fatalError（可能磁盘满），返回内存数据库作为降级模式
+                print("[EhDatabase] ⚠️ 重建仍失败: \(error)，使用内存数据库降级运行")
+                do {
+                    return try EhDatabase(inMemory: true)
+                } catch {
+                    // 内存数据库也失败的唯一可能是 migrate 代码本身有 bug
+                    fatalError("[EhDatabase] 内存数据库初始化失败，这是代码 bug: \(error)")
+                }
             }
         }
     }()
 
+    /// 标记是否处于降级模式（内存数据库，重启后数据丢失）
+    public let isDegraded: Bool
+
     private let dbQueue: DatabaseQueue
 
-    private init() throws {
-        let dbPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-            .first!.appendingPathComponent("eh.sqlite").path
+    private init(inMemory: Bool = false) throws {
+        self.isDegraded = inMemory
 
         var config = Configuration()
 
         // 启用 WAL 模式: 更好的写入性能 + 崩溃恢复能力
-        // GRDB DatabaseQueue 默认使用 DELETE journal mode, 需要显式启用 WAL
-        config.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA journal_mode=WAL")
+        if !inMemory {
+            config.prepareDatabase { db in
+                try db.execute(sql: "PRAGMA journal_mode=WAL")
+            }
         }
 
         #if DEBUG
@@ -43,7 +67,13 @@ public final class EhDatabase: Sendable {
         }
         #endif
 
-        dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
+        if inMemory {
+            dbQueue = try DatabaseQueue(configuration: config)
+        } else {
+            let dbPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                .first!.appendingPathComponent("eh.sqlite").path
+            dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -604,15 +634,29 @@ public final class EhDatabase: Sendable {
 
     // MARK: - 数据库维护 (V-05 修复: 定期 VACUUM)
 
-    /// 执行数据库维护 (VACUUM + WAL checkpoint)
+    /// 执行数据库维护 (integrity_check + VACUUM + WAL checkpoint)
     /// 调用时机: 每 7 天一次, 由 App 启动时检查
     public func performMaintenanceIfNeeded() {
+        guard !isDegraded else { return } // 内存数据库无需维护
+
         let key = "eh_lastDatabaseMaintenance"
         let lastDate = UserDefaults.standard.object(forKey: key) as? Date ?? .distantPast
         let interval: TimeInterval = 7 * 24 * 3600 // 7 天
         guard Date().timeIntervalSince(lastDate) > interval else { return }
 
         do {
+            // 先执行完整性检查，防止在损坏的数据库上 VACUUM 扩大损坏
+            let integrityOk: Bool = try dbQueue.read { db in
+                // quick_check 比 integrity_check 快，足以检测大多数损坏
+                let result = try String.fetchOne(db, sql: "PRAGMA quick_check")
+                return result == "ok"
+            }
+
+            guard integrityOk else {
+                print("[EhDatabase] ⚠️ quick_check 失败，数据库可能损坏，跳过 VACUUM")
+                return
+            }
+
             // VACUUM 必须在事务外执行
             try dbQueue.writeWithoutTransaction { db in
                 // 先 checkpoint WAL 文件, 减少 VACUUM 耗时

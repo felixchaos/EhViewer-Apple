@@ -193,4 +193,6 @@ extension Notification.Name {
     static let openGalleryFromClipboard = Notification.Name("openGalleryFromClipboard")
     /// 标签搜索 (对齐 Android: onTagClick → mUrlBuilder.set(tag) → mHelper.refresh())
     static let tagSearchRequested = Notification.Name("tagSearchRequested")
+    /// 磁盘空间不足，所有下载已暂停
+    static let ehDiskFull = Notification.Name("ehDiskFull")
 }

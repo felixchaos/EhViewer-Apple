@@ -179,6 +179,15 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         guard let error = error,
               let taskInfo = activeTasks[task.taskIdentifier] else { return }
 
+        // 保存 resume data 以支持断点续传
+        if let nsError = error as NSError?,
+           let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            // 存储 resume data，下次可以恢复下载
+            let key = "resumeData_\(task.taskIdentifier)"
+            UserDefaults.standard.set(resumeData, forKey: key)
+            print("[BackgroundDownload] 已保存 resume data (\(resumeData.count) bytes)，可断点续传")
+        }
+
         taskInfo.completion(.failure(error))
         activeTasks.removeValue(forKey: task.taskIdentifier)
     }

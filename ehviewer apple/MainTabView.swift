@@ -11,7 +11,14 @@ import EhSettings
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
+    @State private var selectedTab: Tab = {
+        // 恢复上次 Tab（如果有），否则使用启动页设置
+        if let saved = UserDefaults.standard.string(forKey: "eh_lastSelectedTab"),
+           let tab = Tab(rawValue: saved) {
+            return tab
+        }
+        return Tab.fromLaunchPage(AppSettings.shared.launchPage)
+    }()
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
@@ -101,9 +108,11 @@ struct MainTabView: View {
                 contentPath.append(TagSearchDestination(tag: tag))
             })
         }
-        .onChange(of: selectedTab) { _, _ in
+        .onChange(of: selectedTab) { _, newTab in
             selectedGallery = nil
             contentPath = NavigationPath()
+            // 持久化当前 Tab，App 被杀后重启可恢复
+            UserDefaults.standard.set(newTab.rawValue, forKey: "eh_lastSelectedTab")
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHome)) { _ in
             selectedTab = .home
@@ -189,6 +198,10 @@ struct MainTabView: View {
             if newSizeClass == .compact {
                 selectedTab = Tab.bottomTabSafe(selectedTab)
             }
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            // 持久化当前 Tab，App 被杀后重启可恢复
+            UserDefaults.standard.set(newTab.rawValue, forKey: "eh_lastSelectedTab")
         }
         #endif
     }

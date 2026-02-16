@@ -336,7 +336,13 @@ public actor SpiderQueen {
         // 从 URL 或 Content-Type 获取扩展名
         let ext = getImageExtension(from: imageUrl, response: httpResponse)
 
-        // 存储到 SpiderDen
+        // 存储到 SpiderDen（先检查磁盘空间）
+        if !SpiderDen.hasSufficientDiskSpace(bytes: Int64(data.count) + 10 * 1024 * 1024) {
+            // 磁盘满: 通知代理暂停所有下载，不再重试当前页
+            await delegate?.onDiskFull()
+            throw SpiderError.diskFull
+        }
+
         let success = await spiderDen.write(data: data, index: index, extension: ext)
         if !success {
             throw SpiderError.storageFailed
@@ -508,6 +514,7 @@ public protocol SpiderDelegate: AnyObject, Sendable {
     func onPageFailed(index: Int, error: Error) async
     func onImageLimitReached() async
     func onDownloadProgress(downloaded: Int, total: Int) async
+    func onDiskFull() async
 }
 
 // MARK: - 错误
@@ -522,6 +529,7 @@ public enum SpiderError: LocalizedError, Sendable {
     case invalidResponseData
     case notImplemented
     case storageFailed
+    case diskFull
 
     public var errorDescription: String? {
         switch self {
@@ -534,6 +542,7 @@ public enum SpiderError: LocalizedError, Sendable {
         case .invalidResponseData: return "Invalid response data"
         case .notImplemented: return "Not implemented"
         case .storageFailed: return "Failed to save image to disk"
+        case .diskFull: return "磁盘空间不足，无法保存图片"
         }
     }
 }

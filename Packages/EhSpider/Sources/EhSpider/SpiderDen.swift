@@ -299,15 +299,50 @@ public actor SpiderDen {
     private func writeToDownloadDir(data: Data, index: Int, extension ext: String) -> Bool {
         guard ensureDownloadDir() else { return false }
 
+        // 磁盘空间预检查: 至少需要 数据大小 + 10MB 余量
+        let requiredBytes = Int64(data.count) + 10 * 1024 * 1024
+        if !Self.hasSufficientDiskSpace(bytes: requiredBytes) {
+            print("[SpiderDen] ⚠️ 磁盘空间不足，需要 \(requiredBytes / 1024 / 1024)MB，跳过写入")
+            return false
+        }
+
         let filename = Self.generateImageFilename(index: index, extension: ext)
         let file = downloadDir.appendingPathComponent(filename)
 
         do {
             try data.write(to: file)
             return true
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileWriteOutOfSpaceError {
+            print("[SpiderDen] ❌ 磁盘已满，无法写入页面 \(index)")
+            return false
         } catch {
             print("[SpiderDen] Failed to write to download dir: \(error)")
             return false
+        }
+    }
+
+    /// 检查磁盘可用空间是否足够
+    public static func hasSufficientDiskSpace(bytes: Int64 = 50 * 1024 * 1024) -> Bool {
+        do {
+            let attrs = try FileManager.default.attributesOfFileSystem(
+                forPath: NSHomeDirectory()
+            )
+            if let freeSize = attrs[.systemFreeSize] as? Int64 {
+                return freeSize >= bytes
+            }
+        } catch {}
+        return true // 无法检查时乐观处理
+    }
+
+    /// 获取磁盘可用空间 (bytes)
+    public static func availableDiskSpace() -> Int64? {
+        do {
+            let attrs = try FileManager.default.attributesOfFileSystem(
+                forPath: NSHomeDirectory()
+            )
+            return attrs[.systemFreeSize] as? Int64
+        } catch {
+            return nil
         }
     }
 

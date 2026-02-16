@@ -96,6 +96,7 @@ public actor EhAPI {
     // MARK: - 请求辅助
 
     /// 在发送请求前清洁 Cookie，先走系统代理/VPN，失败后回退到域名前置直连
+    /// 离线时回退到 URLCache 缓存数据 (避免已浏览内容在断网时不可用)
     /// 对应 Android: OkHttp 默认使用内置 DNS，iOS 需手动实现回退逻辑
     private func sanitizedData(for request: URLRequest) async throws -> (Data, URLResponse) {
         if let url = request.url {
@@ -111,7 +112,21 @@ public actor EhAPI {
             }
         } catch let error where Self.shouldTryDirectFallback(error) {
             // 主要路径失败 → 尝试域名前置直连 (对应 Android 内置 DNS)
-            return try await attemptDomainFronting(for: request, using: directSession, originalError: error)
+            do {
+                return try await attemptDomainFronting(for: request, using: directSession, originalError: error)
+            } catch {
+                // 域名前置也失败 → 最后尝试离线缓存回退
+                if let cachedResponse = Self.offlineCacheFallback(for: request) {
+                    return cachedResponse
+                }
+                throw error
+            }
+        } catch let error as URLError where error.code == .notConnectedToInternet {
+            // 明确离线 → 直接查缓存
+            if let cachedResponse = Self.offlineCacheFallback(for: request) {
+                return cachedResponse
+            }
+            throw error
         }
     }
 
@@ -234,6 +249,16 @@ public actor EhAPI {
         case .dnsLookupFailed: return "dnsLookupFailed"
         default: return "code(\(code.rawValue))"
         }
+    }
+
+    /// 离线缓存回退: 网络完全不可用时从 URLCache 返回已缓存的响应
+    /// 避免用户在地铁/飞行模式时看到空白页
+    private static func offlineCacheFallback(for request: URLRequest) -> (Data, URLResponse)? {
+        guard let cachedResponse = URLCache.shared.cachedResponse(for: request) else {
+            return nil
+        }
+        print("[EhAPI] 📴 离线模式: 从缓存返回 \(request.url?.lastPathComponent ?? "unknown")")
+        return (cachedResponse.data, cachedResponse.response)
     }
 
     // MARK: - 公开 API 方法

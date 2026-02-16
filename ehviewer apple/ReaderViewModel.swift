@@ -17,6 +17,7 @@ import UIKit
 #else
 import AppKit
 #endif
+import ImageIO
 
 // MARK: - Reading Direction
 
@@ -144,13 +145,90 @@ class ReaderViewModel {
     private var downloadingImages: Set<Int> = []
     private var downloadDir: URL?
 
+    /// 最大解码像素尺寸 (屏幕长边 × 3 倍，限制超大图解码内存)
+    /// 15000×20000 的长条漫会被降采样到合理尺寸，避免 OOM
+    private static let maxDecodePixelSize: CGFloat = {
+        #if os(iOS)
+        let screenMax = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
+        #else
+        let screenMax = max(NSScreen.main?.frame.width ?? 2560, NSScreen.main?.frame.height ?? 1440) * (NSScreen.main?.backingScaleFactor ?? 2)
+        #endif
+        return max(screenMax * 3, 4096) // 至少 4096px，最大约 3× 屏幕
+    }()
+
     /// NSCache 后端: 控制内存用量 (250MB / 40 张)
+    /// cost 使用解码后像素字节数而非压缩数据大小
     private static let imageCache: NSCache<NSNumber, PlatformImage> = {
         let cache = NSCache<NSNumber, PlatformImage>()
         cache.totalCostLimit = 250 * 1024 * 1024
         cache.countLimit = 40
         return cache
     }()
+
+    /// 降采样解码: 用 ImageIO 在解码阶段限制像素尺寸，而非先全量解码再缩放
+    /// 一张 15000×20000 JPEG 全量解码 = 1.2GB; 降采样到 4096px 宽 ≈ 40MB
+    private static func downsampledImage(data: Data) -> PlatformImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false  // 不缓存原始数据
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }
+
+        // 获取原图尺寸
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let pixelWidth = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+              let pixelHeight = properties[kCGImagePropertyPixelHeight] as? CGFloat else {
+            // 无法读取尺寸，退回普通解码但仍有 NSCache 保护
+            return PlatformImage(data: data)
+        }
+
+        let maxDimension = max(pixelWidth, pixelHeight)
+
+        // 如果图片在安全范围内，直接解码
+        if maxDimension <= maxDecodePixelSize {
+            let thumbOpts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+                kCGImageSourceShouldCacheImmediately: true
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) else {
+                return PlatformImage(data: data)
+            }
+            #if os(iOS)
+            return UIImage(cgImage: cgImage)
+            #else
+            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            #endif
+        }
+
+        // 超大图: 降采样到 maxDecodePixelSize
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDecodePixelSize,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) else {
+            return PlatformImage(data: data)
+        }
+        #if os(iOS)
+        return UIImage(cgImage: cgImage)
+        #else
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        #endif
+    }
+
+    /// 计算解码后图片的实际像素内存占用 (bytes)
+    private static func decodedCost(of image: PlatformImage) -> Int {
+        #if os(iOS)
+        guard let cg = image.cgImage else { return 1024 * 1024 } // 1MB fallback
+        return cg.bytesPerRow * cg.height
+        #else
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return 1024 * 1024 }
+        return rep.bytesPerRow * rep.pixelsHigh
+        #endif
+    }
 
     /// 共享 URLSession (保持 cookies)
     private static let session: URLSession = {
@@ -259,27 +337,46 @@ class ReaderViewModel {
     }
 
     /// 双页合成: 将两张图片水平拼合
+    /// 安全限制: 合成结果不超过 maxDecodePixelSize，防止双大图合成导致 OOM
     private func compositeImages(left: PlatformImage, right: PlatformImage) -> PlatformImage {
+        var maxH = max(left.size.height, right.size.height)
+        var totalW = left.size.width + right.size.width
+
+        // 安全阀: 如果合成尺寸过大，按比例缩小
+        let maxDimension = max(totalW, maxH)
+        let scale: CGFloat = maxDimension > Self.maxDecodePixelSize
+            ? Self.maxDecodePixelSize / maxDimension
+            : 1.0
+
+        if scale < 1.0 {
+            totalW *= scale
+            maxH *= scale
+        }
+
         #if os(iOS)
-        let maxH = max(left.size.height, right.size.height)
-        let totalW = left.size.width + right.size.width
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: maxH))
         return renderer.image { _ in
-            let leftY = (maxH - left.size.height) / 2
-            left.draw(in: CGRect(x: 0, y: leftY, width: left.size.width, height: left.size.height))
-            let rightY = (maxH - right.size.height) / 2
-            right.draw(in: CGRect(x: left.size.width, y: rightY, width: right.size.width, height: right.size.height))
+            let lw = left.size.width * scale
+            let lh = left.size.height * scale
+            let rw = right.size.width * scale
+            let rh = right.size.height * scale
+            let leftY = (maxH - lh) / 2
+            left.draw(in: CGRect(x: 0, y: leftY, width: lw, height: lh))
+            let rightY = (maxH - rh) / 2
+            right.draw(in: CGRect(x: lw, y: rightY, width: rw, height: rh))
         }
         #else
-        let maxH = max(left.size.height, right.size.height)
-        let totalW = left.size.width + right.size.width
         let composited = NSImage(size: NSSize(width: totalW, height: maxH))
         composited.lockFocus()
-        let leftY = (maxH - left.size.height) / 2
-        left.draw(in: NSRect(x: 0, y: leftY, width: left.size.width, height: left.size.height),
+        let lw = left.size.width * scale
+        let lh = left.size.height * scale
+        let rw = right.size.width * scale
+        let rh = right.size.height * scale
+        let leftY = (maxH - lh) / 2
+        left.draw(in: NSRect(x: 0, y: leftY, width: lw, height: lh),
                   from: .zero, operation: .copy, fraction: 1.0)
-        let rightY = (maxH - right.size.height) / 2
-        right.draw(in: NSRect(x: left.size.width, y: rightY, width: right.size.width, height: right.size.height),
+        let rightY = (maxH - rh) / 2
+        right.draw(in: NSRect(x: lw, y: rightY, width: rw, height: rh),
                    from: .zero, operation: .copy, fraction: 1.0)
         composited.unlockFocus()
         return composited
@@ -475,8 +572,8 @@ class ReaderViewModel {
                     }
                 }
 
-                if let img = PlatformImage(data: data) {
-                    let cost = data.count
+                if let img = Self.downsampledImage(data: data) {
+                    let cost = Self.decodedCost(of: img)
                     Self.imageCache.setObject(img, forKey: NSNumber(value: index), cost: cost)
                     await MainActor.run {
                         self.cachedImages[index] = img

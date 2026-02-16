@@ -35,6 +35,8 @@ struct RootView: View {
 
     /// Sad Panda / igneous 失效警告 (V-15)
     @State private var showSadPandaAlert = false
+    /// 磁盘空间不足警告
+    @State private var showDiskFullAlert = false
     enum OnboardingStep {
         case checking      // 检查状态中
         case warning       // 18+ 警告
@@ -122,6 +124,15 @@ struct RootView: View {
         // Sad Panda / igneous 失效警告 (V-15)
         .onReceive(NotificationCenter.default.publisher(for: .ehSadPandaDetected)) { _ in
             showSadPandaAlert = true
+        }
+        // 磁盘空间不足警告
+        .onReceive(NotificationCenter.default.publisher(for: .ehDiskFull)) { _ in
+            showDiskFullAlert = true
+        }
+        .alert("磁盘空间不足", isPresented: $showDiskFullAlert) {
+            Button("我知道了", role: .cancel) {}
+        } message: {
+            Text("磁盘剩余空间不足，所有下载已自动暂停。\n请前往系统设置释放存储空间后，手动恢复下载。")
         }
         .alert("ExHentai 访问失效", isPresented: $showSadPandaAlert) {
             Button("重新登录") {
