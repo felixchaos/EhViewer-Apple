@@ -40,6 +40,13 @@ image/
 # Profiling data
 *.profraw
 
+# Build output (distribute_mac.sh)
+build/
+
+# Credentials (NEVER commit)
+.env
+*.env
+
 # Migration/audit docs (internal)
 MIGRATION_PLAN.md
 EXECUTION_PLAN.md

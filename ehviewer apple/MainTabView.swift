@@ -69,7 +69,7 @@ struct MainTabView: View {
                     }
             }
             .id(selectedTab)
-            .navigationSplitViewColumnWidth(min: 280, ideal: 380)
+            .navigationSplitViewColumnWidth(min: 350, ideal: 480)
         } detail: {
             NavigationStack {
                 if let gallery = selectedGallery {
@@ -107,14 +107,43 @@ struct MainTabView: View {
             selectedGallery = gallery
         }
         #else
-        // iOS: iPad 显示全部标签, iPhone 保持4个底部标签 (对齐 Android DrawerLayout)
-        TabView(selection: $selectedTab) {
-            ForEach(horizontalSizeClass == .regular ? Tab.allCases.filter { $0 != .more } : Tab.defaultBottomTabs, id: \.self) { tab in
-                tabContent(tab)
-                    .tabItem {
-                        Label(tab.rawValue, systemImage: tab.icon)
+        // iOS: iPad regular → 侧边栏 NavigationSplitView, iPhone → 底部 TabView
+        Group {
+            if horizontalSizeClass == .regular {
+                // iPad 横屏 / 外接键盘: 侧边栏导航
+                NavigationSplitView {
+                    List {
+                        ForEach(Tab.allCases.filter { $0 != .more }, id: \.self) { tab in
+                            Button {
+                                selectedTab = tab
+                            } label: {
+                                HStack {
+                                    Label(tab.rawValue, systemImage: tab.icon)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.15) : nil)
+                        }
                     }
-                    .tag(tab)
+                    .listStyle(.sidebar)
+                    .navigationTitle("EhViewer")
+                } detail: {
+                    tabContent(selectedTab)
+                        .id(selectedTab)
+                }
+            } else {
+                // iPhone / iPad 竖屏: 底部标签栏
+                TabView(selection: $selectedTab) {
+                    ForEach(Tab.defaultBottomTabs, id: \.self) { tab in
+                        tabContent(tab)
+                            .tabItem {
+                                Label(tab.rawValue, systemImage: tab.icon)
+                            }
+                            .tag(tab)
+                    }
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in

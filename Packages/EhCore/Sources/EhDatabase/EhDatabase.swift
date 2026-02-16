@@ -10,7 +10,16 @@ public final class EhDatabase: Sendable {
         do {
             return try EhDatabase()
         } catch {
-            fatalError("Failed to initialize database: \(error)")
+            // 数据库初始化失败时尝试删除旧数据库重建，避免 fatalError 导致无法恢复
+            print("[EhDatabase] 初始化失败: \(error)，尝试重建...")
+            let dbPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                .first!.appendingPathComponent("eh.sqlite").path
+            try? FileManager.default.removeItem(atPath: dbPath)
+            do {
+                return try EhDatabase()
+            } catch {
+                fatalError("Failed to initialize database after rebuild: \(error)")
+            }
         }
     }()
 
@@ -21,9 +30,11 @@ public final class EhDatabase: Sendable {
             .first!.appendingPathComponent("eh.sqlite").path
 
         var config = Configuration()
+        #if DEBUG
         config.prepareDatabase { db in
-            db.trace { print("SQL: \($0)") } // 仅 debug 模式
+            db.trace { print("SQL: \($0)") }
         }
+        #endif
 
         dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
         try migrator.migrate(dbQueue)

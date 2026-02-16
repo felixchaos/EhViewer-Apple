@@ -124,6 +124,76 @@ open "ehviewer apple.xcodeproj"
 - **免费账号限制**: 免费 Apple ID 签名的应用有效期为 **7 天**，到期后需要重新连接 Mac 用 Xcode 重新安装
 - **无线调试**: 首次有线连接成功后，可在 Xcode 中启用无线调试（**Window → Devices and Simulators**，勾选 **Connect via network**）
 
+### 5. 构建 macOS 分发安装包（Developer ID 签名 + 公证）
+
+如果你拥有 Apple Developer 付费账号（$99/年），可以使用 `distribute_mac.sh` 脚本构建一个**已公证、无安全警告、有效期约1年**的 `.dmg` 安装包，直接分发给其他用户。
+
+#### 5.1 获取 App 专用密码 (App-Specific Password)
+
+Apple 公证服务要求使用 App 专用密码（而非你的 Apple ID 登录密码）：
+
+1. 访问 [appleid.apple.com](https://appleid.apple.com/)，使用 Apple ID 登录
+2. 进入 **登录和安全 → App 专用密码**（或直接访问 [appleid.apple.com/account/manage/section/security](https://appleid.apple.com/account/manage/section/security)）
+3. 点击 **生成 App 专用密码**
+4. 输入一个标签名（如 `ehviewer-notarize`），点击 **创建**
+5. 记录生成的密码（格式如 `xxxx-xxxx-xxxx-xxxx`），**此密码只显示一次**
+
+#### 5.2 查找 Team ID
+
+1. 访问 [developer.apple.com/account](https://developer.apple.com/account)
+2. 在页面上方找到 **Membership Details**
+3. **Team ID** 是一个 10 位字母数字组合（如 `HWZEUNLCY6`）
+
+或者在终端中执行：
+```bash
+# 列出 Keychain 中所有 Developer ID 证书及 Team ID
+security find-identity -v -p codesigning | grep "Developer ID"
+```
+
+#### 5.3 确保已安装 Developer ID 证书
+
+1. 打开 Xcode → **Settings → Accounts**
+2. 选择你的 Apple ID → 点击 **Manage Certificates**
+3. 如果没有 **Developer ID Application** 证书，点击左下角 **+** 创建
+4. 证书会自动下载到 Keychain
+
+#### 5.4 配置环境变量
+
+在项目根目录创建 `.env` 文件（已加入 `.gitignore`，不会被提交）：
+
+```bash
+# .env
+APPLE_ID=your-email@example.com
+TEAM_ID=HWZEUNLCY6
+APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
+```
+
+或者直接导出环境变量：
+```bash
+export APPLE_ID="your-email@example.com"
+export TEAM_ID="HWZEUNLCY6"
+export APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+```
+
+#### 5.5 运行构建脚本
+
+```bash
+cd "ehviewer apple"   # 进入包含 .xcodeproj 的目录
+./distribute_mac.sh
+```
+
+脚本会自动完成以下流程：
+1. **Archive** — Release 模式编译项目
+2. **导出 .app** — 使用 Developer ID 方式导出
+3. **深度签名** — Hardened Runtime + Timestamp
+4. **创建 DMG** — 带 Applications 快捷方式的安装镜像
+5. **Apple 公证** — 提交至 Apple 服务器并等待审核通过
+6. **植入票据** — Staple 公证票据到 DMG
+
+完成后在 `build/` 目录下生成 `EhViewer-Apple-1.0.0.dmg`。
+
+> **签名有效期**: Developer ID Application 证书有效期为 **1 年**（从证书创建日起算）。到期前在 Xcode 中续签证书，重新运行脚本即可。
+
 ## 📱 截图
 
 <!-- 

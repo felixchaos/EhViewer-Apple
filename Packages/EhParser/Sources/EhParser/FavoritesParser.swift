@@ -76,15 +76,19 @@ public enum FavoritesParser {
         }
 
         // 检测当前选中的分类
-        // Android: 检查 .fp.fps 类 → selected
+        // Android: 检查 .fp.fps 类 → selected (fps = "favorite panel selected")
         if let selected = try doc.select(".fp.fps").first() {
             let selectedText = try selected.text()
-            if selectedText.lowercased().contains("favorites") && !selectedText.contains("0") && fps.array().first === selected {
+            // 判断是否为 "All Favorites": 文本含 "Favorites" 且在第一个位置
+            let selectedOuterHtml = try selected.outerHtml()
+            let firstFpHtml = fps.array().first.flatMap({ try? $0.outerHtml() })
+            if selectedText.lowercased().contains("favorites") && !selectedText.contains("0") && selectedOuterHtml == firstFpHtml {
                 result.currentCat = -1  // "All Favorites"
             } else {
                 // 查找它在 fp 列表中的索引 (排除第一个)
                 for (idx, fp) in fps.array().enumerated() {
-                    if fp === selected {
+                    let fpHtml = try fp.outerHtml()
+                    if fpHtml == selectedOuterHtml {
                         result.currentCat = idx > 0 ? idx - 1 : -1
                         break
                     }

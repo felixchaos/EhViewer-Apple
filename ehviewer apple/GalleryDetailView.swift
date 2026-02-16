@@ -46,6 +46,10 @@ struct GalleryDetailView: View {
 
     /// 标签点击导航动作 — 在 Split/三栏布局中将标签列表推入左侧栏
     @Environment(\.tagNavigationAction) private var tagNavigationAction
+    @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         ScrollView {
@@ -79,6 +83,16 @@ struct GalleryDetailView: View {
         }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(horizontalSizeClass == .compact ? .hidden : .automatic, for: .navigationBar)
+        .overlay(alignment: .topLeading) {
+            // iPhone: 自定义返回按钮 (导航栏隐藏后)
+            if horizontalSizeClass == .compact {
+                AppBackButton(action: { dismiss() }, style: .dark)
+                .padding(.top, 4)
+                .padding(.leading, 12)
+            }
+        }
+        .enableEdgeSwipeBack()
         #endif
         #if os(iOS)
         .fullScreenCover(isPresented: $vm.startReading) {
@@ -93,8 +107,8 @@ struct GalleryDetailView: View {
             )
         }
         #else
-        .sheet(isPresented: $vm.startReading) {
-            // macOS: 使用 sheet 呈现阅读器
+        .navigationDestination(isPresented: $vm.startReading) {
+            // macOS: 在导航栈中推入阅读器，支持窗口自由调整大小
             ImageReaderView(
                 gid: gallery.gid,
                 token: gallery.token,
@@ -102,7 +116,6 @@ struct GalleryDetailView: View {
                 previewSet: vm.detail?.previewSet,
                 initialPage: vm.readerInitialPage
             )
-            .frame(minWidth: 800, minHeight: 600)
         }
         #endif
         .task {

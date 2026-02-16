@@ -220,6 +220,7 @@ struct AdvancedSearchView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                 }
+                #if os(iOS)
                 ToolbarItem(placement: .bottomBar) {
                     Button(role: .destructive) {
                         state.reset()
@@ -228,6 +229,16 @@ struct AdvancedSearchView: View {
                     }
                     .tint(.red)
                 }
+                #else
+                ToolbarItem(placement: .automatic) {
+                    Button(role: .destructive) {
+                        state.reset()
+                    } label: {
+                        Label("重置所有选项", systemImage: "arrow.counterclockwise")
+                    }
+                    .tint(.red)
+                }
+                #endif
             }
         }
         #if os(iOS)

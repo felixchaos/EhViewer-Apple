@@ -35,6 +35,7 @@ struct RootView: View {
     enum OnboardingStep {
         case checking      // 检查状态中
         case warning       // 18+ 警告
+        case rejected      // 拒绝 18+ 警告 (iOS 不能 exit, 显示永久阻断页)
         case security      // 安全认证
         case selectSite    // 站点选择
         case login         // 登录页
@@ -55,11 +56,11 @@ struct RootView: View {
                         determineNextStep()
                     },
                     onReject: {
-                        // 退出应用
+                        // macOS: 正常退出; iOS: 显示永久阻断页面 (Apple 禁止 exit(0))
                         #if os(macOS)
                         NSApplication.shared.terminate(nil)
                         #else
-                        exit(0)
+                        flowStep = .rejected
                         #endif
                     }
                 )
@@ -68,6 +69,19 @@ struct RootView: View {
                 SecurityView(onAuthenticated: {
                     determineNextStep()
                 })
+                
+            case .rejected:
+                // iOS: 用户拒绝 18+ 警告后显示此页面，无法继续使用
+                VStack(spacing: 20) {
+                    Image(systemName: "hand.raised.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.secondary)
+                    Text("您已拒绝使用条款")
+                        .font(.title2.bold())
+                    Text("请关闭应用。")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 
             case .selectSite:
                 SelectSiteView(onComplete: {
@@ -253,6 +267,32 @@ struct RootView: View {
     private func checkClipboardForGalleryUrl() {
         guard flowStep == .main else { return }
 
+        #if os(iOS)
+        // iOS 16+: 先用 detectPatterns 检测是否包含 URL，避免触发粘贴板隐私弹窗
+        if #available(iOS 16.0, *) {
+            Task {
+                do {
+                    let patterns: Set<PartialKeyPath<UIPasteboard.DetectedValues>> = [\.probableWebURL]
+                    let results = try await UIPasteboard.general.detectedPatterns(for: patterns)
+                    guard results.contains(\.probableWebURL) else { return }
+                    // 剪贴板确实包含 URL，再读取内容 (此时系统不会再弹隐私提示)
+                    await MainActor.run {
+                        readClipboardContent()
+                    }
+                } catch {
+                    // 检测失败则不读取
+                }
+            }
+        } else {
+            readClipboardContent()
+        }
+        #else
+        readClipboardContent()
+        #endif
+    }
+
+    /// 读取剪贴板内容并匹配画廊链接
+    private func readClipboardContent() {
         #if os(iOS)
         guard let content = UIPasteboard.general.string else { return }
         #else

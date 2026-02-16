@@ -358,12 +358,10 @@ public enum GalleryDetailParser {
 
         // Android: document.getElementById("cdiv").getElementsByClass("c1")
         guard let cdiv = try doc.select("#cdiv").first() else {
-            print("[DEBUG Parser] cdiv not found!")
             return ([], false)
         }
 
         let c1Elements = try cdiv.select(".c1")
-        print("[DEBUG Parser] Found \(c1Elements.size()) comment elements (c1)")
         for element in c1Elements {
             var comment = GalleryComment()
 
@@ -511,12 +509,8 @@ public enum GalleryDetailParser {
         var targetHtml = html
         if let gt200 = try doc.select(".gt200").first() {
             targetHtml = try gt200.html()
-            print("[DEBUG Parser] Using gt200 content")
         } else if let gt100 = try doc.select(".gt100").first() {
             targetHtml = try gt100.html()
-            print("[DEBUG Parser] Using gt100 content")
-        } else {
-            print("[DEBUG Parser] No gt200/gt100, using full HTML")
         }
         
         let fullRange = NSRange(targetHtml.startIndex..., in: targetHtml)
@@ -552,7 +546,6 @@ public enum GalleryDetailParser {
         }
         
         if !largePreviews.isEmpty {
-            print("[DEBUG Parser] Found \(largePreviews.count) large previews")
             return .large(largePreviews)
         }
         
@@ -695,11 +688,9 @@ public enum GalleryDetailParser {
         }
         
         if !normalPreviews.isEmpty {
-            print("[DEBUG Parser] Found \(normalPreviews.count) normal previews")
             return .normal(normalPreviews)
         }
         
-        print("[DEBUG Parser] No previews found!")
         return .normal([])
     }
 

@@ -132,6 +132,9 @@ public actor DownloadManager {
 
     /// 删除下载 (可选删除文件)
     public func deleteDownload(gid: Int64, deleteFiles: Bool = false) {
+        // 先获取 title 用于定位目录 (必须在 removeAll 之前)
+        let title = downloadQueue.first(where: { $0.gallery.gid == gid })?.gallery.bestTitle
+
         if activeTask?.gallery.gid == gid {
             if let spider = activeTask?.spider {
                 Task { await spider.cancelAll() }
@@ -143,8 +146,20 @@ public actor DownloadManager {
         try? EhDatabase.shared.deleteDownload(gid: gid)
 
         if deleteFiles {
-            let dir = galleryDirectory(gid: gid, title: "")
-            try? FileManager.default.removeItem(at: dir)
+            if let title = title, !title.isEmpty {
+                // 精确匹配: 使用实际标题
+                let dir = galleryDirectory(gid: gid, title: title)
+                try? FileManager.default.removeItem(at: dir)
+            } else {
+                // 回退: 枚举下载目录中匹配 "gid-*" 前缀的目录
+                let prefix = "\(gid)-"
+                if let contents = try? FileManager.default.contentsOfDirectory(
+                    at: downloadDirectory, includingPropertiesForKeys: nil) {
+                    for item in contents where item.lastPathComponent.hasPrefix(prefix) {
+                        try? FileManager.default.removeItem(at: item)
+                    }
+                }
+            }
         }
 
         processQueue()

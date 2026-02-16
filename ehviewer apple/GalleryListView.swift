@@ -10,6 +10,7 @@ import EhModels
 import EhAPI
 import EhSettings
 import EhDatabase
+import EhDownload
 #if os(macOS)
 import AppKit
 #else
@@ -33,6 +34,7 @@ struct GalleryListView: View {
     @State private var advancedSearch = AdvancedSearchState()
     @State private var selectedQuickSearch: QuickSearchRecord?
     @State private var selectedGallery: GalleryInfo?
+    @FocusState private var isSearchFocused: Bool
 
     /// 标签导航路径 — iPad 双栏布局中支持标签推入左侧
     @State private var sidebarPath = NavigationPath()
@@ -54,13 +56,8 @@ struct GalleryListView: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    /// 是否使用宽屏双栏布局 (考虑用户设置: wideScreenListMode)
-    /// iPhone 手机端始终使用单栏布局，仅 iPad 在 regular 宽度时才启用双栏
-    private var isRegularWidth: Bool {
-        // 在 iPhone 上始终为 false (避免大屏 iPhone 横屏时误触发双栏)
-        guard UIDevice.current.userInterfaceIdiom == .pad else { return false }
-        return horizontalSizeClass == .regular && AppSettings.shared.wideScreenListMode == 0
-    }
+    /// iPad 侧边栏由 MainTabView 统一管理，GalleryListView 不再创建自己的 SplitView
+    private var isRegularWidth: Bool { false }
     #else
     /// macOS 也支持全宽单列表模式
     private var isRegularWidth: Bool { AppSettings.shared.wideScreenListMode == 0 }
@@ -97,9 +94,14 @@ struct GalleryListView: View {
         self.favSearchKeyword = searchKeyword
     }
 
-    /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式 (对齐 Android: 搜索后跳页/翻页保持在搜索结果中)
+    /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
+    /// 但收藏夹模式下搜索应保持在收藏夹内 (对齐 Android: 收藏夹搜索只搜收藏内容)
     private var effectiveMode: ListMode {
         if !viewModel.searchText.isEmpty {
+            if case .favorites = mode {
+                // 收藏夹下搜索保持在收藏夹模式，搜索关键词通过 searchText 传递给 API
+                return mode
+            }
             return .search(keyword: viewModel.searchText)
         }
         return mode
@@ -154,6 +156,7 @@ struct GalleryListView: View {
         .onAppear {
             // 同步收藏搜索关键字到 ViewModel
             viewModel.favSearchKeyword = favSearchKeyword
+            viewModel.loadSearchHistory()
             // 标签搜索: 将标签关键字放入搜索框 (对齐 Android: mSearchBar.setText(keyword))
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
@@ -178,23 +181,16 @@ struct GalleryListView: View {
                 } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                     errorView
                 } else {
-                    galleryList
+                    galleryGrid
                 }
             }
             .navigationTitle(navigationTitle)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     HStack(spacing: 8) {
-                        // 高级搜索 (对齐 Android AddDeleteDrawable: + icon)
-                        Button {
-                            showAdvancedSearch = true
-                        } label: {
-                            Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                        }
-
                         Button {
                             showQuickSearch = true
                         } label: {
@@ -203,7 +199,11 @@ struct GalleryListView: View {
 
                         // 跳页按钮 (对齐 Android FAB position 1: Go to)
                         Button {
-                            viewModel.showGoToDialog = true
+                            if viewModel.isFavoritesMode {
+                                viewModel.showFavJumpDialog = true
+                            } else {
+                                viewModel.showGoToDialog = true
+                            }
                         } label: {
                             Image(systemName: "arrow.up.and.down.text.horizontal")
                         }
@@ -211,23 +211,12 @@ struct GalleryListView: View {
                     }
                 }
             }
-            .searchable(text: $viewModel.searchText, prompt: "搜索画廊...")
-            .searchSuggestions {
-                // 高级搜索快捷入口 (对齐 Android: 搜索框输入内容后右侧显示 + 按钮)
-                Button {
-                    showAdvancedSearch = true
-                } label: {
-                    Label("高级搜索筛选", systemImage: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                }
-                if !viewModel.suggestions.isEmpty {
-                    searchSuggestionsContent
-                }
+            // 自定义搜索栏: 始终显示高级搜索按钮 (对齐 Android 搜索框右侧 + 按钮)
+            .safeAreaInset(edge: .top) {
+                customSearchBar
             }
             .onChange(of: viewModel.searchText) { _, _ in
                 viewModel.updateSuggestions()
-            }
-            .onSubmit(of: .search) {
-                viewModel.searchWithAdvanced(advancedSearch)
             }
             .rightDrawer(isOpen: $showQuickSearch) {
                 QuickSearchDrawerContent(
@@ -251,7 +240,7 @@ struct GalleryListView: View {
                 viewModel.loadGalleries(mode: mode)
             }
         }
-        // 跳页对话框 (对齐 Android showPageJumpDialog)
+        // 跳页对话框 - 普通模式 (对齐 Android showPageJumpDialog)
         .alert("跳页", isPresented: $viewModel.showGoToDialog) {
             TextField("页码", text: $viewModel.goToPageInput)
                 #if os(iOS)
@@ -270,6 +259,10 @@ struct GalleryListView: View {
         } message: {
             Text(viewModel.totalPages > 1 ? "输入页码 (1-\(viewModel.totalPages))" : "输入目标页码")
         }
+        // 跳页对话框 - 收藏模式 (对齐 Android: 使用日期选择器跳转 seek=YYYY-MM-DD)
+        .sheet(isPresented: $viewModel.showFavJumpDialog) {
+            favoritesJumpSheet
+        }
     }
 
     /// 被推入导航栈时的内容 — 不包装 NavigationStack，避免嵌套
@@ -281,12 +274,12 @@ struct GalleryListView: View {
             } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                 errorView
             } else {
-                galleryList
+                galleryGrid
             }
         }
         .navigationTitle(navigationTitle)
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -381,17 +374,17 @@ struct GalleryListView: View {
         }
     }
 
-    private var galleryList: some View {
+    /// 自适应宫格列 — iPhone 2列, iPad 3-4列, Mac 5-6列
+    private static let gridColumns = [GridItem(.adaptive(minimum: 150, maximum: 200))]
+
+    private var galleryGrid: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVGrid(columns: Self.gridColumns, spacing: 12) {
                 ForEach(viewModel.galleries, id: \.gid) { gallery in
                     NavigationLink(value: gallery) {
-                        GalleryRow(gallery: gallery)
+                        GalleryCard(gallery: gallery)
                     }
                     .buttonStyle(.plain)
-
-                    Divider()
-                        .padding(.leading, 88)
                 }
 
                 // 加载更多
@@ -404,9 +397,11 @@ struct GalleryListView: View {
                         }
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
         }
         .refreshable {
-            viewModel.refresh(mode: effectiveMode)
+            await viewModel.refreshAsync(mode: effectiveMode)
         }
         .navigationDestination(for: GalleryInfo.self) { gallery in
             GalleryDetailView(gallery: gallery)
@@ -433,24 +428,29 @@ struct GalleryListView: View {
             } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                 errorView
             } else {
-                List(selection: selectionBinding) {
-                    ForEach(viewModel.galleries, id: \.gid) { gallery in
-                        GalleryRow(gallery: gallery)
-                            .tag(gallery)
-                    }
+                ScrollView {
+                    LazyVGrid(columns: Self.gridColumns, spacing: 12) {
+                        ForEach(viewModel.galleries, id: \.gid) { gallery in
+                            GalleryCard(gallery: gallery, isSelected: selectionBinding.wrappedValue?.gid == gallery.gid)
+                                .onTapGesture {
+                                    selectionBinding.wrappedValue = gallery
+                                }
+                        }
 
-                    if viewModel.hasMore {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .task {
-                                await viewModel.loadMore(mode: effectiveMode)
-                            }
+                        if viewModel.hasMore {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .task {
+                                    await viewModel.loadMore(mode: effectiveMode)
+                                }
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
                 }
-                .listStyle(.sidebar)
                 .refreshable {
-                    viewModel.refresh(mode: effectiveMode)
+                    await viewModel.refreshAsync(mode: effectiveMode)
                 }
             }
         }
@@ -471,7 +471,11 @@ struct GalleryListView: View {
 
                     // 跳页按钮 (对齐 Android FAB position 1: Go to)
                     Button {
-                        viewModel.showGoToDialog = true
+                        if viewModel.isFavoritesMode {
+                            viewModel.showFavJumpDialog = true
+                        } else {
+                            viewModel.showGoToDialog = true
+                        }
                     } label: {
                         Image(systemName: "arrow.up.and.down.text.horizontal")
                     }
@@ -531,6 +535,198 @@ struct GalleryListView: View {
         } message: {
             Text(viewModel.totalPages > 1 ? "输入页码 (1-\(viewModel.totalPages))" : "输入目标页码")
         }
+        .sheet(isPresented: $viewModel.showFavJumpDialog) {
+            favoritesJumpSheet
+        }
+    }
+
+    // MARK: - 自定义搜索栏 (对齐 Android 搜索框右侧始终显示 + 按钮)
+
+    private var customSearchBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                // 搜索输入框
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 15))
+                    TextField("搜索画廊...", text: $viewModel.searchText)
+                        .textFieldStyle(.plain)
+                        .submitLabel(.search)
+                        .focused($isSearchFocused)
+                        .onSubmit {
+                            isSearchFocused = false
+                            viewModel.searchWithAdvanced(advancedSearch)
+                        }
+                    if !viewModel.searchText.isEmpty {
+                        Button {
+                            viewModel.searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 15))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(.tertiarySystemFill))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // 高级搜索按钮 — 始终可见 (对齐 Android 搜索框右侧 + 按钮)
+                Button {
+                    showAdvancedSearch = true
+                } label: {
+                    Image(systemName: advancedSearch.isEnabled ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(advancedSearch.isEnabled ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.bar)
+
+            // 搜索历史 (搜索框为空时显示)
+            if isSearchFocused && viewModel.searchText.isEmpty && !viewModel.searchHistory.isEmpty {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("搜索历史")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("清除") {
+                            viewModel.clearSearchHistory()
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+
+                    ForEach(viewModel.searchHistory, id: \.self) { term in
+                        Button {
+                            viewModel.searchText = term
+                            isSearchFocused = false
+                            viewModel.searchWithAdvanced(advancedSearch)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "clock")
+                                    .foregroundStyle(.tertiary)
+                                    .font(.subheadline)
+                                Text(term)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Spacer()
+                                Button {
+                                    viewModel.removeSearchHistory(term)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.plain)
+                        Divider().padding(.leading, 44)
+                    }
+                }
+                .background(.regularMaterial)
+            }
+
+            // 搜索建议下拉列表
+            if isSearchFocused && !viewModel.suggestions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
+                        Button {
+                            viewModel.applySuggestion(suggestion.english)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(suggestion.chinese)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                Text(suggestion.english)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.plain)
+                        Divider().padding(.leading, 16)
+                    }
+                }
+                .background(.regularMaterial)
+            }
+        }
+    }
+
+    // MARK: - 收藏跳页 Sheet (对齐 Android: GoToDialog 日期模式)
+
+    private var favoritesJumpSheet: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("选择日期跳转到对应时间的收藏")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+
+                DatePicker(
+                    "跳转日期",
+                    selection: $viewModel.favJumpDate,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .padding(.horizontal)
+
+                // 前/后页快捷按钮
+                HStack(spacing: 16) {
+                    if let prevHref = viewModel.prevHref {
+                        Button {
+                            viewModel.showFavJumpDialog = false
+                            viewModel.goToFavoritesHref(prevHref, mode: effectiveMode)
+                        } label: {
+                            Label("上一页", systemImage: "chevron.left")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    if let nextHref = viewModel.nextHref {
+                        Button {
+                            viewModel.showFavJumpDialog = false
+                            viewModel.goToFavoritesHref(nextHref, mode: effectiveMode)
+                        } label: {
+                            Label("下一页", systemImage: "chevron.right")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                Spacer()
+            }
+            .navigationTitle("跳页")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { viewModel.showFavJumpDialog = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("跳转") {
+                        viewModel.showFavJumpDialog = false
+                        viewModel.goToFavoritesDate(viewModel.favJumpDate, mode: effectiveMode)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - 搜索建议内容 (对齐 Android SearchBar.updateSuggestions)
@@ -750,6 +946,121 @@ struct GalleryRow: View {
     }
 }
 
+// MARK: - 宫格卡片视图 (自适应网格)
+
+struct GalleryCard: View {
+    let gallery: GalleryInfo
+    var isSelected: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // 封面 + 分类标签
+            ZStack(alignment: .bottomLeading) {
+                CachedAsyncImage(url: URL(string: gallery.thumb ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.quaternary)
+                        .overlay {
+                            Image(systemName: "photo")
+                                .font(.title2)
+                                .foregroundStyle(.tertiary)
+                        }
+                }
+                .frame(maxWidth: .infinity)
+                .aspectRatio(2/3, contentMode: .fill)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // 分类标签
+                Text(gallery.category.name)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(gallery.category.color)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(6)
+            }
+
+            // 标题
+            Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
+                .font(.caption)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(.primary)
+
+            // 底部信息: 评分 + 收藏 + 页数
+            HStack(spacing: 2) {
+                SimpleRatingView(rating: gallery.rating)
+                Spacer()
+                if gallery.favoriteSlot >= 0 {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.red)
+                }
+                Text("\(gallery.pages)P")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(6)
+        .background {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            // 下载
+            Button {
+                Task {
+                    await DownloadManager.shared.startDownload(gallery: gallery)
+                }
+            } label: {
+                Label("下载", systemImage: "arrow.down.circle")
+            }
+
+            // 收藏
+            Button {
+                let slot = max(0, min(9, AppSettings.shared.defaultFavSlot))
+                Task {
+                    try? await EhAPI.shared.addFavorites(gid: gallery.gid, token: gallery.token, dstCat: slot)
+                }
+            } label: {
+                Label("收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.fill" : "heart")
+            }
+
+            Divider()
+
+            // 复制链接
+            Button {
+                let url = "https://e-hentai.org/g/\(gallery.gid)/\(gallery.token)/"
+                #if os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url, forType: .string)
+                #else
+                UIPasteboard.general.string = url
+                #endif
+            } label: {
+                Label("复制链接", systemImage: "doc.on.doc")
+            }
+
+            // 分享 (仅 iOS)
+            #if os(iOS)
+            ShareLink(item: URL(string: "https://e-hentai.org/g/\(gallery.gid)/\(gallery.token)/")!) {
+                Label("分享", systemImage: "square.and.arrow.up")
+            }
+            #endif
+        }
+    }
+}
+
 // MARK: - ViewModel
 
 @Observable
@@ -762,9 +1073,54 @@ class GalleryListViewModel {
     var totalPages = 0 // 总页数 (对齐 Android mHelper.mPages)
     var showGoToDialog = false // 跳页对话框
     var goToPageInput: String = "" // 跳页输入
+    var showFavJumpDialog = false // 收藏跳页对话框 (日期模式)
+    var favJumpDate = Date() // 收藏跳页日期
+
+    /// 收藏夹分页导航链接 (searchnav 模式: prev/next)
+    var prevHref: String?
+    var nextHref: String?
+    /// 是否为收藏模式 (使用 seek 跳页而非整数页码)
+    var isFavoritesMode: Bool {
+        if case .favorites = currentMode { return true }
+        return false
+    }
 
     /// 收藏夹搜索关键字 (由 FavoritesView 传入)
     var favSearchKeyword: String?
+
+    // MARK: - 搜索历史 (对齐 Android SearchBar 搜索历史)
+    var searchHistory: [String] = []
+
+    private static let searchHistoryKey = "ehSearchHistory"
+    private static let maxHistoryCount = 50
+
+    func loadSearchHistory() {
+        searchHistory = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
+    }
+
+    func addSearchToHistory(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        var history = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
+        history.removeAll { $0 == text }
+        history.insert(text, at: 0)
+        if history.count > Self.maxHistoryCount {
+            history = Array(history.prefix(Self.maxHistoryCount))
+        }
+        UserDefaults.standard.set(history, forKey: Self.searchHistoryKey)
+        searchHistory = history
+    }
+
+    func removeSearchHistory(_ text: String) {
+        var history = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
+        history.removeAll { $0 == text }
+        UserDefaults.standard.set(history, forKey: Self.searchHistoryKey)
+        searchHistory = history
+    }
+
+    func clearSearchHistory() {
+        UserDefaults.standard.removeObject(forKey: Self.searchHistoryKey)
+        searchHistory = []
+    }
 
     // MARK: - 搜索建议 (对齐 Android SearchBar.updateSuggestions)
     var suggestions: [(chinese: String, english: String)] = []
@@ -840,8 +1196,24 @@ class GalleryListViewModel {
         loadGalleries(mode: mode)
     }
 
+    /// 异步刷新 — 用于 .refreshable ，等待网络请求完成后才结束下拉动画
+    func refreshAsync(mode: GalleryListView.ListMode) async {
+        if let key = currentCacheKey {
+            GalleryCache.shared.removeListResult(forKey: key)
+        }
+        galleries = []
+        currentMode = mode
+        isLoading = true
+        errorMessage = nil
+        currentPage = 0
+        let cacheKey = Self.cacheKey(for: mode, page: 0)
+        currentCacheKey = cacheKey
+        await fetchPage(mode: mode, page: 0)
+    }
+
     func search() {
         guard !searchText.isEmpty else { return }
+        addSearchToHistory(searchText)
         galleries = []
         isLoading = true
         errorMessage = nil
@@ -861,6 +1233,7 @@ class GalleryListViewModel {
 
     /// 带高级搜索参数的搜索 (对齐 Android AdvanceSearchTable → ListUrlBuilder)
     func searchWithAdvanced(_ state: AdvancedSearchState) {
+        if !searchText.isEmpty { addSearchToHistory(searchText) }
         currentAdvanceSearch = state.advanceSearchValue
         currentMinRating = state.minRatingValue
         currentPageFrom = state.pageFromValue
@@ -997,6 +1370,29 @@ class GalleryListViewModel {
 
     func loadMore(mode: GalleryListView.ListMode) async {
         guard !isLoading, hasMore else { return }
+        
+        // 收藏夹模式: 使用 nextHref 翻页 (不是整数页码)
+        if case .favorites = mode, let nextHref = nextHref {
+            isLoading = true
+            do {
+                let result = try await EhAPI.shared.getGalleryList(url: nextHref)
+                await MainActor.run {
+                    self.galleries.append(contentsOf: result.galleries)
+                    self.hasMore = result.nextHref != nil
+                    self.prevHref = result.prevHref
+                    self.nextHref = result.nextHref
+                    self.totalPages = result.pages
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = EhError.localizedMessage(for: error)
+                    self.isLoading = false
+                }
+            }
+            return
+        }
+        
         isLoading = true
         currentPage += 1
         await fetchPage(mode: mode, page: currentPage)
@@ -1014,6 +1410,85 @@ class GalleryListViewModel {
         
         Task {
             await fetchPage(mode: mode, page: page)
+        }
+    }
+
+    /// 收藏跳转到指定日期 (对齐 Android FavoritesScene: ?seek=YYYY-MM-DD)
+    func goToFavoritesDate(_ date: Date, mode: GalleryListView.ListMode) {
+        guard case .favorites(let slot) = mode else { return }
+        
+        galleries = []
+        isLoading = true
+        errorMessage = nil
+        currentPage = 0
+        currentMode = mode
+        
+        Task {
+            await fetchFavoritesSeek(slot: slot, date: date)
+        }
+    }
+
+    /// 收藏通过 URL 导航 (prev/next 链接)
+    func goToFavoritesHref(_ href: String, mode: GalleryListView.ListMode) {
+        galleries = []
+        isLoading = true
+        errorMessage = nil
+        currentMode = mode
+        
+        Task {
+            do {
+                let result = try await EhAPI.shared.getGalleryList(url: href)
+                await MainActor.run {
+                    self.galleries = result.galleries
+                    self.hasMore = result.nextHref != nil
+                    self.prevHref = result.prevHref
+                    self.nextHref = result.nextHref
+                    self.totalPages = result.pages
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = EhError.localizedMessage(for: error)
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    /// 按日期跳转收藏 (对齐 Android: ?seek=YYYY-MM-DD)
+    private func fetchFavoritesSeek(slot: Int, date: Date) async {
+        let site = AppSettings.shared.gallerySite
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dateStr = formatter.string(from: date)
+        
+        var favUrl: String
+        if slot < 0 {
+            favUrl = "\(EhURL.favoritesUrl(for: site))?seek=\(dateStr)"
+        } else {
+            favUrl = "\(EhURL.favoritesUrl(for: site))?favcat=\(slot)&seek=\(dateStr)"
+        }
+        
+        if let keyword = favSearchKeyword, !keyword.isEmpty {
+            let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
+            favUrl += "&f_search=\(encoded)"
+        }
+        
+        do {
+            let result = try await EhAPI.shared.getGalleryList(url: favUrl)
+            await MainActor.run {
+                self.galleries = result.galleries
+                self.hasMore = result.nextHref != nil
+                self.prevHref = result.prevHref
+                self.nextHref = result.nextHref
+                self.totalPages = result.pages
+                self.isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = EhError.localizedMessage(for: error)
+                self.isLoading = false
+            }
         }
     }
 
@@ -1074,7 +1549,9 @@ class GalleryListViewModel {
                 } else {
                     self.galleries.append(contentsOf: result.galleries)
                 }
-                self.hasMore = result.nextPage != nil
+                self.hasMore = result.nextPage != nil || result.nextHref != nil
+                self.prevHref = result.prevHref
+                self.nextHref = result.nextHref
                 // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
                 self.totalPages = result.pages
                 self.isLoading = false
@@ -1129,50 +1606,110 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
     @ViewBuilder let drawerContent: () -> DrawerContent
 
     private let drawerWidth: CGFloat = 280
+    /// 实时拖拽偏移 (正值 = 向右拖, 负值 = 向左拖)
+    @State private var dragOffset: CGFloat = 0
+    /// 边缘拖拽进度 (0 = 关闭, 1 = 完全打开)
+    @State private var edgeDragProgress: CGFloat = 0
+    private let edgeSwipeWidth: CGFloat = 30
+
+    /// 抽屉实际偏移量 (0 = 完全打开, drawerWidth = 完全关闭)
+    private var currentOffset: CGFloat {
+        if isOpen {
+            // 打开状态: 向右拖拽关闭
+            return max(0, dragOffset)
+        } else {
+            // 关闭状态: 边缘拖拽打开
+            return drawerWidth * (1 - edgeDragProgress)
+        }
+    }
+
+    /// 遮罩透明度
+    private var overlayOpacity: Double {
+        let progress = 1 - (currentOffset / drawerWidth)
+        return Double(max(0, min(0.3, progress * 0.3)))
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             // 半透明遮罩
             Color.black
-                .opacity(isOpen ? 0.3 : 0)
+                .opacity(overlayOpacity)
                 .ignoresSafeArea()
                 .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                         isOpen = false
                     }
                 }
-                .allowsHitTesting(isOpen)
+                .allowsHitTesting(isOpen || edgeDragProgress > 0)
 
-            // 右侧边缘滑动感应区 (关闭时: 从右向左滑动打开抽屉)
-            if !isOpen {
-                HStack {
-                    Spacer()
-                    Color.clear
-                        .frame(width: 20)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 10)
-                                .onEnded { value in
-                                    if value.translation.width < -50 {
-                                        withAnimation(.easeInOut(duration: 0.25)) {
-                                            isOpen = true
-                                        }
-                                    }
-                                }
-                        )
-                }
-            }
-
-            // 抽屉面板
+            // 抽屉面板 (含拖拽手势)
             drawerContent()
                 .frame(width: drawerWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .background(.regularMaterial)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12))
-                .shadow(color: .black.opacity(isOpen ? 0.15 : 0), radius: 8, x: -3)
-                .offset(x: isOpen ? 0 : drawerWidth)
+                .shadow(color: .black.opacity(overlayOpacity > 0.05 ? 0.15 : 0), radius: 8, x: -3)
+                .offset(x: currentOffset)
+                .gesture(
+                    // 打开状态: 向右拖拽关闭
+                    isOpen ?
+                    DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                        .onChanged { value in
+                            let translation = value.translation.width
+                            if translation > 0 {
+                                dragOffset = translation
+                            }
+                        }
+                        .onEnded { value in
+                            let velocity = value.predictedEndTranslation.width
+                            if dragOffset > drawerWidth * 0.3 || velocity > 200 {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    isOpen = false
+                                }
+                            } else {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    dragOffset = 0
+                                }
+                            }
+                            dragOffset = 0
+                        }
+                    : nil
+                )
+
+            // 右侧边缘滑动感应区 (关闭时: 从右向左滑动打开)
+            if !isOpen {
+                HStack {
+                    Spacer()
+                    Color.clear
+                        .frame(width: edgeSwipeWidth)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 5, coordinateSpace: .global)
+                                .onChanged { value in
+                                    let translation = -value.translation.width  // 向左为正
+                                    if translation > 0 {
+                                        edgeDragProgress = min(1, translation / drawerWidth)
+                                    }
+                                }
+                                .onEnded { value in
+                                    let velocity = -value.predictedEndTranslation.width
+                                    if edgeDragProgress > 0.3 || velocity > 200 {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                            isOpen = true
+                                        }
+                                    }
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                        edgeDragProgress = 0
+                                    }
+                                }
+                        )
+                }
+            }
         }
-        .animation(.easeInOut(duration: 0.25), value: isOpen)
+        .onChange(of: isOpen) { _, newValue in
+            dragOffset = 0
+            edgeDragProgress = 0
+        }
     }
 }
 

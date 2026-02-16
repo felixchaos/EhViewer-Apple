@@ -4,8 +4,8 @@ import EhModels
 // MARK: - EhConfig (对应 Android EhConfig.java)
 // 服务端用户配置，序列化为 uconfig cookie 值
 
-@Observable
-public final class EhConfig: @unchecked Sendable {
+@Observable @MainActor
+public final class EhConfig: Sendable {
     public static let shared = EhConfig()
 
     // MARK: - Cookie Key

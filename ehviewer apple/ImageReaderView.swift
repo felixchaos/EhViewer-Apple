@@ -99,6 +99,8 @@ struct ImageReaderView: View {
     @State private var showOverlay = true
     @State private var showSettings = false
     @State private var hasAppliedInitialPage = false  // TabView 初始页修正标志
+    @State private var isZoomed = false  // 当前页面是否处于放大状态 (防止缩放时手势泄漏到 TabView)
+    @State private var showTutorial = false  // 新手教程
 
     // 从设置读取
     @State private var readingDirection: ReadingDirection = .rightToLeft
@@ -175,14 +177,15 @@ struct ImageReaderView: View {
                 } else if readingDirection == .topToBottom {
                     verticalScrollReader(geometry: geometry)
                 } else {
+                    #if os(macOS)
+                    macOSPageReader
+                    #else
                     horizontalPageReader
+                    #endif
                 }
 
-                // 点击区域 — 仅在翻页模式生效
-                if readingDirection != .topToBottom {
-                    tapZones(geometry: geometry)
-                        .allowsHitTesting(!vm.errorPages.contains(vm.currentPage))
-                }
+                // 点击区域 — 已移至 ZoomableImageView 内部统一处理
+                // 对齐 Android GalleryView: 单击/双击互斥，由 UIKit 手势识别器管理
 
                 // 覆盖层
                 if showOverlay {
@@ -193,6 +196,11 @@ struct ImageReaderView: View {
                 if !showOverlay {
                     hudOverlay(geometry: geometry)
                 }
+
+                // 新手教程 (首次使用阅读器时显示)
+                if showTutorial {
+                    readerTutorialOverlay(geometry: geometry)
+                }
             }
         }
         #if os(iOS)
@@ -202,6 +210,8 @@ struct ImageReaderView: View {
         .ignoresSafeArea()
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
+        #else
+        .toolbar(.hidden)
         #endif
         .onAppear(perform: setupReader)
         .onDisappear(perform: cleanupReader)
@@ -233,6 +243,34 @@ struct ImageReaderView: View {
             dismiss()
             return .handled
         }
+        .onKeyPress(.upArrow) {
+            if readingDirection == .topToBottom { return .ignored }  // 上下滚动模式由 ScrollView 处理
+            goToPreviousPage()
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            if readingDirection == .topToBottom { return .ignored }
+            goToNextPage()
+            return .handled
+        }
+        #if os(macOS)
+        .onKeyPress(.pageUp) {
+            goToPreviousPage()
+            return .handled
+        }
+        .onKeyPress(.pageDown) {
+            goToNextPage()
+            return .handled
+        }
+        .onKeyPress(.home) {
+            goToPage(0)
+            return .handled
+        }
+        .onKeyPress(.end) {
+            goToPage(vm.totalPages - 1)
+            return .handled
+        }
+        #endif
     }
 
     // MARK: - Setup
@@ -272,6 +310,16 @@ struct ImageReaderView: View {
                 }
             }
             hasAppliedInitialPage = true
+        }
+
+        // 新手教程: 首次使用阅读器时显示 (对齐 Android GalleryActivity 首次提示)
+        let tutorialKey = "reader_tutorial_shown"
+        if !UserDefaults.standard.bool(forKey: tutorialKey) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showTutorial = true
+                }
+            }
         }
     }
 
@@ -401,6 +449,27 @@ struct ImageReaderView: View {
         }
     }
 
+    #if os(macOS)
+    /// macOS 翻页阅读器 — 单页显示，键盘/鼠标滚轮翻页 (桌面图片查看器模式)
+    /// TabView.page 样式仅 iOS 可用，macOS 使用单页切换方式
+    private var macOSPageReader: some View {
+        ZStack {
+            pageImage(index: vm.currentPage)
+
+            // 鼠标滚轮翻页 (透明层拦截滚轮事件)
+            ScrollWheelPageNavigator(
+                onNext: { goToNextPage() },
+                onPrevious: { goToPreviousPage() },
+                isZoomed: isZoomed
+            )
+        }
+        .onChange(of: vm.currentPage) { _, newPage in
+            saveReadingProgress()
+            Task { await vm.onPageChange(newPage) }
+        }
+    }
+    #endif
+
     private func verticalScrollReader(geometry: GeometryProxy) -> some View {
         let contentWidth = geometry.size.width * verticalZoomScale
 
@@ -422,6 +491,7 @@ struct ImageReaderView: View {
                     }
                 }
             }
+            .scrollBounceBehavior(.basedOnSize)
             .contentShape(Rectangle())
             .simultaneousGesture(
                 TapGesture().onEnded {
@@ -588,16 +658,21 @@ struct ImageReaderView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let cachedImage = vm.cachedImages[index] {
                 // 使用 ZoomableImageView 实现每页独立缩放 (对齐 Android GalleryView 缩放逻辑)
+                // 所有点击操作统一在 ZoomableImageView 内部处理:
+                //   - 双击: 放大/复原 (由 UIKit 双击手势处理)
+                //   - 单击: 区域判断 (左=翻页/右=翻页/中=工具栏，由 onSingleTap 回调处理)
+                // 对齐 Android GalleryView.onSingleTapConfirmed + onDoubleTap
                 ZoomableImageView(
                     image: cachedImage,
                     scaleMode: scaleMode,
                     startPosition: startPosition,
                     allowsHorizontalScrollAtMinZoom: readingDirection == .topToBottom,
-                    onSingleTap: readingDirection == .topToBottom ? {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showOverlay.toggle()
-                        }
-                    } : nil  // 翻页模式由 tapZones 统一处理点击，避免边缘误触
+                    onSingleTap: { location, viewSize in
+                        handleTapZone(location: location, viewSize: viewSize)
+                    },
+                    onZoomChanged: { zoomed in
+                        isZoomed = zoomed
+                    }
                 )
             } else if vm.imageURLs[index] != nil {
                 // URL 已获取，正在下载图片数据 — 显示下载百分比进度
@@ -651,66 +726,181 @@ struct ImageReaderView: View {
         }
     }
 
-    // MARK: - Tap Zones (对齐 Android GalleryView 手势区域: 2D 网格布局)
+    // MARK: - Tap Zone Detection (对齐 Android GalleryView 手势区域: 2D 网格布局)
     // 上下边缘 15% 为死区，左右 25% 为翻页区域，中心区域为菜单切换区域
+    // 所有点击统一由 ZoomableImageView 的 UIKit 手势识别器处理，
+    // 确保单击和双击互斥 (require(toFail:))
 
-    private func tapZones(geometry: GeometryProxy) -> some View {
+    private func handleTapZone(location: CGPoint, viewSize: CGSize) {
+        guard viewSize.width > 0 && viewSize.height > 0 else { return }
+
+        let relX = location.x / viewSize.width
+        let relY = location.y / viewSize.height
+
+        // 上下 15% 为死区 — 不响应任何点击 (对齐 Android 手势区域)
+        guard relY > tapZoneVerticalDeadZone && relY < (1 - tapZoneVerticalDeadZone) else {
+            return
+        }
+
+        if relX < tapZoneRatio {
+            // 左侧 25% 区域 — 翻页
+            if readingDirection == .rightToLeft {
+                goToNextPage()
+            } else if readingDirection == .leftToRight {
+                goToPreviousPage()
+            } else {
+                // topToBottom 模式: 中间点击 → 切换工具栏
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showOverlay.toggle()
+                }
+            }
+        } else if relX > (1 - tapZoneRatio) {
+            // 右侧 25% 区域 — 翻页
+            if readingDirection == .rightToLeft {
+                goToPreviousPage()
+            } else if readingDirection == .leftToRight {
+                goToNextPage()
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showOverlay.toggle()
+                }
+            }
+        } else {
+            // 中央区域 — 切换工具栏 (对齐 Android: 仅中心单击触发工具栏)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showOverlay.toggle()
+            }
+        }
+    }
+
+    // MARK: - Reader Tutorial Overlay (新手教程)
+    // 对齐 Android: 首次使用阅读器时显示手势操作提示
+
+    private func readerTutorialOverlay(geometry: GeometryProxy) -> some View {
         let w = geometry.size.width
         let h = geometry.size.height
-        let deadH = h * tapZoneVerticalDeadZone
         let sideW = w * tapZoneRatio
-        let centerW = w - sideW * 2
-        let centerH = h - deadH * 2
+        let deadH = h * tapZoneVerticalDeadZone
 
         return ZStack {
-            // 上边缘死区 — 不响应点击
-            Color.clear
-                .frame(width: w, height: deadH)
+            // 半透明背景
+            Color.black.opacity(0.75)
+                .ignoresSafeArea()
+
+            // 左侧区域标注
+            VStack(spacing: 4) {
+                Image(systemName: readingDirection == .rightToLeft ? "arrow.right" : "arrow.left")
+                    .font(.title2)
+                Text(readingDirection == .rightToLeft ? "下一页" : "上一页")
+                    .font(.caption.bold())
+            }
+            .foregroundStyle(.white)
+            .position(x: sideW / 2, y: h / 2)
+
+            // 中央区域标注
+            VStack(spacing: 8) {
+                Image(systemName: "hand.tap")
+                    .font(.title)
+                Text("单击: 显示/隐藏工具栏")
+                    .font(.caption.bold())
+                Divider()
+                    .frame(width: 80)
+                    .overlay(Color.white.opacity(0.5))
+                Image(systemName: "hand.tap")
+                    .font(.title)
+                    .overlay(
+                        Image(systemName: "hand.tap")
+                            .font(.title)
+                            .offset(x: 2, y: 2)
+                            .opacity(0.5)
+                    )
+                Text("双击: 放大/复原")
+                    .font(.caption.bold())
+            }
+            .foregroundStyle(.white)
+            .position(x: w / 2, y: h / 2)
+
+            // 右侧区域标注
+            VStack(spacing: 4) {
+                Image(systemName: readingDirection == .rightToLeft ? "arrow.left" : "arrow.right")
+                    .font(.title2)
+                Text(readingDirection == .rightToLeft ? "上一页" : "下一页")
+                    .font(.caption.bold())
+            }
+            .foregroundStyle(.white)
+            .position(x: w - sideW / 2, y: h / 2)
+
+            // 上方死区标注
+            Text("死区 (不响应)")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
                 .position(x: w / 2, y: deadH / 2)
 
-            // 下边缘死区 — 不响应点击
-            Color.clear
-                .frame(width: w, height: deadH)
+            // 下方死区标注
+            Text("死区 (不响应)")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
                 .position(x: w / 2, y: h - deadH / 2)
 
-            // 左侧翻页区域 (中间高度区域)
-            Color.clear
-                .frame(width: sideW, height: centerH)
-                .contentShape(Rectangle())
-                .position(x: sideW / 2, y: h / 2)
-                .onTapGesture {
-                    if readingDirection == .rightToLeft {
-                        goToNextPage()
-                    } else {
-                        goToPreviousPage()
-                    }
-                }
+            // 左右滑动翻页提示
+            VStack(spacing: 4) {
+                Image(systemName: "hand.draw")
+                    .font(.title3)
+                Text("左右滑动也可以翻页")
+                    .font(.caption)
+            }
+            .foregroundStyle(.white.opacity(0.8))
+            .position(x: w / 2, y: h - deadH - 40)
 
-            // 中央菜单区域
-            Color.clear
-                .frame(width: centerW, height: centerH)
-                .contentShape(Rectangle())
-                .position(x: w / 2, y: h / 2)
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showOverlay.toggle()
+            // 关闭按钮
+            VStack {
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showTutorial = false
                     }
+                    UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
+                } label: {
+                    Text("我知道了")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.2), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
                 }
+                .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
+            }
 
-            // 右侧翻页区域 (中间高度区域)
-            Color.clear
-                .frame(width: sideW, height: centerH)
-                .contentShape(Rectangle())
-                .position(x: w - sideW / 2, y: h / 2)
-                .onTapGesture {
-                    if readingDirection == .rightToLeft {
-                        goToPreviousPage()
-                    } else {
-                        goToNextPage()
-                    }
-                }
+            // 区域分界线 (视觉参考)
+            // 左侧分界
+            Rectangle()
+                .fill(.white.opacity(0.2))
+                .frame(width: 1, height: h - deadH * 2)
+                .position(x: sideW, y: h / 2)
+            // 右侧分界
+            Rectangle()
+                .fill(.white.opacity(0.2))
+                .frame(width: 1, height: h - deadH * 2)
+                .position(x: w - sideW, y: h / 2)
+            // 上死区分界
+            Rectangle()
+                .fill(.white.opacity(0.15))
+                .frame(width: w, height: 1)
+                .position(x: w / 2, y: deadH)
+            // 下死区分界
+            Rectangle()
+                .fill(.white.opacity(0.15))
+                .frame(width: w, height: 1)
+                .position(x: w / 2, y: h - deadH)
         }
-        .frame(width: w, height: h)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                showTutorial = false
+            }
+            UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
+        }
     }
 
     // MARK: - Overlay
@@ -1076,7 +1266,7 @@ class ImageReaderViewModel {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
         config.waitsForConnectivity = true
-        config.httpMaximumConnectionsPerHost = 4
+        config.httpMaximumConnectionsPerHost = 6  // 增加并发连接数，改善快速滚动时的加载
         return URLSession(configuration: config)
     }()
 
@@ -1212,11 +1402,17 @@ class ImageReaderViewModel {
                 }
             } catch is CancellationError {
                 return
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                // URLSession 取消 (Task 被外部取消时) — 不标记错误
+                return
             } catch {
+                // 检查 Task 是否已取消 (快速滚动导致视图回收)
+                if Task.isCancelled { return }
                 print("[ImageReader] Image download error for page \(index) (attempt \(attempt + 1)): \(error.localizedDescription)")
                 if attempt < 2 {
                     // 指数退避重试: 1s, 2s
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
+                    if Task.isCancelled { return }
                     continue
                 }
                 await MainActor.run {
@@ -1232,19 +1428,34 @@ class ImageReaderViewModel {
     func loadPageWithRetry(_ index: Int) async {
         let maxRetries = 5
         for attempt in 0..<maxRetries {
+            // 检查 Task 是否被取消 (快速滚动时 LazyVStack 回收会取消 .task)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 self.retryingPages[index] = attempt
             }
             await loadPage(index)
             // 成功 → 退出
-            if imageURLs[index] != nil { return }
+            if imageURLs[index] != nil {
+                await MainActor.run {
+                    _ = self.retryingPages.removeValue(forKey: index)
+                }
+                return
+            }
             // 已标记错误 → 退出（不再自动重试，用户可手动）
             if errorPages.contains(index) { return }
+            // 取消检查
+            guard !Task.isCancelled else { return }
             // 等待后重试 (指数退避: 1s, 2s, 4s, 8s, 16s)
             let delay = UInt64(pow(2.0, Double(attempt))) * 1_000_000_000
-            try? await Task.sleep(nanoseconds: delay)
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                // Task.sleep 抛出 CancellationError → 直接退出，不标记为错误
+                return
+            }
         }
-        // 所有重试失败
+        // 所有重试失败 — 仅在未取消时标记错误
+        guard !Task.isCancelled else { return }
         await MainActor.run {
             self.errorPages.insert(index)
             self.errorMessages[index] = "加载超时，请点击重试"
@@ -1314,7 +1525,7 @@ class ImageReaderViewModel {
                 // 无法从页面 HTML 中提取图片 URL → 标记为失败
                 print("[ImageReader] Failed to extract image URL from page HTML for page \(index)")
                 await MainActor.run {
-                    self.errorPages.insert(index)
+                    _ = self.errorPages.insert(index)
                 }
                 return
             }
@@ -1327,10 +1538,15 @@ class ImageReaderViewModel {
         } catch is CancellationError {
             // 任务取消 → 不标记错误，让重试逻辑处理
             return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // URLSession 取消 → 同上
+            return
         } catch {
             // 网络错误 → 不立即标记为错误，由 loadPageWithRetry 决定是否重试
             // 仅在单独调用 loadPage (非 WithRetry) 时标记错误
-            print("[ImageReader] Page \(index) load error: \(error.localizedDescription)")
+            if !Task.isCancelled {
+                print("[ImageReader] Page \(index) load error: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1425,6 +1641,79 @@ class ImageReaderViewModel {
         }
     }
 }
+
+// MARK: - macOS Scroll Wheel Page Navigator
+
+#if os(macOS)
+/// macOS 滚轮翻页 — 捕获 NSScrollView 之外的滚轮事件，累积 deltaY 超过阈值翻页
+/// 当图片缩放(isZoomed=true)时不拦截，让 NSScrollView 自行处理平移
+struct ScrollWheelPageNavigator: NSViewRepresentable {
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+    let isZoomed: Bool
+
+    func makeNSView(context: Context) -> ScrollWheelCaptureView {
+        let view = ScrollWheelCaptureView()
+        view.onNext = onNext
+        view.onPrevious = onPrevious
+        view.isZoomed = isZoomed
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollWheelCaptureView, context: Context) {
+        nsView.onNext = onNext
+        nsView.onPrevious = onPrevious
+        nsView.isZoomed = isZoomed
+    }
+
+    /// 透明 NSView，拦截 scrollWheel 事件用于翻页
+    class ScrollWheelCaptureView: NSView {
+        var onNext: (() -> Void)?
+        var onPrevious: (() -> Void)?
+        var isZoomed: Bool = false
+        private var accumulatedDelta: CGFloat = 0
+        private let threshold: CGFloat = 40 // 滚轮翻页灵敏度
+        private var lastScrollTime: Date = .distantPast
+
+        override func scrollWheel(with event: NSEvent) {
+            // 缩放状态下不拦截 → 让底层 ZoomableImageView 的 NSScrollView 处理
+            guard !isZoomed else {
+                super.scrollWheel(with: event)
+                return
+            }
+
+            // 精确触控板 (phase-based) 或普通鼠标滚轮
+            let delta = event.scrollingDeltaY
+
+            // 超过 0.5s 没有滚动 → 重置累积
+            let now = Date()
+            if now.timeIntervalSince(lastScrollTime) > 0.5 {
+                accumulatedDelta = 0
+            }
+            lastScrollTime = now
+
+            accumulatedDelta += delta
+
+            if accumulatedDelta > threshold {
+                accumulatedDelta = 0
+                onPrevious?()
+            } else if accumulatedDelta < -threshold {
+                accumulatedDelta = 0
+                onNext?()
+            }
+        }
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            // 缩放时让底层视图处理事件
+            if isZoomed { return nil }
+            // 非缩放状态拦截滚轮事件
+            return frame.contains(point) ? self : nil
+        }
+    }
+}
+#endif
 
 // MARK: - Helper Functions
 

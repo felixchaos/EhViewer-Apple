@@ -54,7 +54,7 @@ struct HistoryView: View {
             }
             .navigationTitle("历史")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             #endif
             .searchable(text: $searchText, prompt: "搜索历史")
             .toolbar {
@@ -86,65 +86,90 @@ struct HistoryView: View {
     }
 
     private var historyList: some View {
-        List {
-            ForEach(filteredRecords, id: \.gid) { record in
-                NavigationLink(value: record.toGalleryInfo()) {
-                    HStack(spacing: 12) {
-                        CachedAsyncImage(url: URL(string: record.thumb ?? "")) { img in
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        } placeholder: {
-                            Color(.tertiarySystemFill)
-                        }
-                        .frame(width: 52, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200))], spacing: 12) {
+                ForEach(filteredRecords, id: \.gid) { record in
+                    let gallery = record.toGalleryInfo()
+                    NavigationLink(value: gallery) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(record.titleJpn ?? record.title)
-                                .font(.subheadline)
-                                .lineLimit(2)
+                            // 封面 + 分类标签
+                            ZStack(alignment: .bottomLeading) {
+                                CachedAsyncImage(url: URL(string: record.thumb ?? "")) { img in
+                                    img.resizable().aspectRatio(contentMode: .fill)
+                                } placeholder: {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(.quaternary)
+                                        .overlay {
+                                            Image(systemName: "photo")
+                                                .font(.title2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .aspectRatio(2/3, contentMode: .fill)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                            Text(formattedTime(record.date))
+                                Text(EhCategory(rawValue: record.category).name)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(EhCategory(rawValue: record.category).color)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .padding(6)
+                            }
+
+                            // 标题
+                            Text(record.titleJpn ?? record.title)
                                 .font(.caption)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .foregroundStyle(.primary)
+
+                            // 时间
+                            Text(formattedTime(record.date))
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(6)
+                        .contentShape(Rectangle())
                     }
-                }
-                .contextMenu {
-                    // 对齐 Android HistoryScene 长按菜单
-                    Button {
-                        Task {
-                            await DownloadManager.shared.startDownload(gallery: record.toGalleryInfo())
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            Task {
+                                await DownloadManager.shared.startDownload(gallery: gallery)
+                            }
+                        } label: {
+                            Label("下载", systemImage: "arrow.down.circle")
                         }
-                    } label: {
-                        Label("下载", systemImage: "arrow.down.circle")
-                    }
 
-                    Button {
-                        let defaultSlot = AppSettings.shared.defaultFavSlot
-                        let slot = (defaultSlot >= 0 && defaultSlot <= 9) ? defaultSlot : 0
-                        Task {
-                            try? await EhAPI.shared.addFavorites(
-                                gid: record.gid, token: record.token, dstCat: slot
-                            )
+                        Button {
+                            let defaultSlot = AppSettings.shared.defaultFavSlot
+                            let slot = (defaultSlot >= 0 && defaultSlot <= 9) ? defaultSlot : 0
+                            Task {
+                                try? await EhAPI.shared.addFavorites(
+                                    gid: record.gid, token: record.token, dstCat: slot
+                                )
+                            }
+                        } label: {
+                            Label("收藏", systemImage: "heart")
                         }
-                    } label: {
-                        Label("收藏", systemImage: "heart")
-                    }
 
-                    Divider()
+                        Divider()
 
-                    Button(role: .destructive) {
-                        vm.deleteByGid(record.gid)
-                    } label: {
-                        Label("删除", systemImage: "trash")
+                        Button(role: .destructive) {
+                            vm.deleteByGid(record.gid)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
                     }
                 }
             }
-            .onDelete { indexSet in
-                vm.delete(at: indexSet)
-            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
         }
-        .listStyle(.plain)
         .navigationDestination(for: GalleryInfo.self) { gallery in
             GalleryDetailView(gallery: gallery)
         }

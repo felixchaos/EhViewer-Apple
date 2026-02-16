@@ -28,7 +28,7 @@ struct MoreTabView: View {
             }
             .navigationTitle("更多")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             #endif
             .navigationDestination(for: MainTabView.Tab.self) { tab in
                 morePageContent(tab)

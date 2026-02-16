@@ -22,11 +22,14 @@ struct ZoomableImageView: UIViewRepresentable {
     let startPosition: StartPosition
     /// 是否允许在 1x 缩放时拦截水平滑动 (翻页模式需要 false 以允许 TabView 翻页)
     var allowsHorizontalScrollAtMinZoom: Bool = false
-    /// 单击回调 (用于切换 overlay)
-    var onSingleTap: (() -> Void)?
+    /// 单击回调 — 传入点击位置(相对于视口)和视口尺寸，由调用方判断触发区域
+    /// 对齐 Android GalleryView: 单击和双击互斥，双击优先 (require(toFail:))
+    var onSingleTap: ((CGPoint, CGSize) -> Void)?
+    /// 缩放状态变化回调 — 通知外层当前是否处于放大状态
+    var onZoomChanged: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSingleTap: onSingleTap)
+        Coordinator(onSingleTap: onSingleTap, onZoomChanged: onZoomChanged)
     }
 
     func makeUIView(context: Context) -> ZoomableScrollView {
@@ -58,13 +61,11 @@ struct ZoomableImageView: UIViewRepresentable {
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
 
-        // 单击手势 — 仅在有回调时启用 (翻页模式由 tapZones 处理，避免边缘误触)
-        if onSingleTap != nil {
-            let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
-            singleTap.numberOfTapsRequired = 1
-            singleTap.require(toFail: doubleTap)
-            scrollView.addGestureRecognizer(singleTap)
-        }
+        // 单击手势 — 始终添加 (对齐 Android: 单击/双击互斥，由调用方根据位置判断区域动作)
+        let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
+        singleTap.numberOfTapsRequired = 1
+        singleTap.require(toFail: doubleTap)  // 双击优先: 必须等双击失败后才触发单击
+        scrollView.addGestureRecognizer(singleTap)
 
         return scrollView
     }
@@ -98,7 +99,12 @@ struct ZoomableImageView: UIViewRepresentable {
 
         context.coordinator.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
         context.coordinator.onSingleTap = onSingleTap
-        scrollView.setNeedsLayout()
+        context.coordinator.onZoomChanged = onZoomChanged
+
+        // 仅在需要重新布局时才调用 setNeedsLayout，避免不必要的重绘
+        if imageChanged || scaleModeChanged || startPositionChanged {
+            scrollView.setNeedsLayout()
+        }
     }
 
     // MARK: - Coordinator
@@ -106,11 +112,14 @@ struct ZoomableImageView: UIViewRepresentable {
     class Coordinator: NSObject, UIScrollViewDelegate {
         weak var imageView: UIImageView?
         weak var scrollView: ZoomableScrollView?
-        var onSingleTap: (() -> Void)?
+        var onSingleTap: ((CGPoint, CGSize) -> Void)?
+        var onZoomChanged: ((Bool) -> Void)?
         var allowsHorizontalScrollAtMinZoom: Bool = false
+        private var lastIsZoomed: Bool = false
 
-        init(onSingleTap: (() -> Void)?) {
+        init(onSingleTap: ((CGPoint, CGSize) -> Void)?, onZoomChanged: ((Bool) -> Void)?) {
             self.onSingleTap = onSingleTap
+            self.onZoomChanged = onZoomChanged
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -157,24 +166,37 @@ struct ZoomableImageView: UIViewRepresentable {
 
             imageView.frame = frameToCenter
 
-            // 缩放过程中也钳制水平偏移，防止缩放时横向漂移
             if let zoomScrollView = scrollView as? ZoomableScrollView {
                 zoomScrollView.clampHorizontalOffset()
 
-                // 在 1x 缩放时: 根据内容是否溢出决定是否启用滚动
                 let isZoomed = scrollView.zoomScale > scrollView.minimumZoomScale + 0.01
                 let contentOverflows = scrollView.contentSize.width > boundsSize.width + 1 ||
                                         scrollView.contentSize.height > boundsSize.height + 1
+
+                // 放大时: 启用滚动 + 禁止弹跳 (防止手势泄漏到 TabView 导致意外翻页)
+                // 1x 时: 根据内容是否溢出决定是否启用滚动
                 zoomScrollView.isScrollEnabled = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
+                zoomScrollView.bounces = !isZoomed
+
+                // 通知外层缩放状态变化
+                if isZoomed != lastIsZoomed {
+                    lastIsZoomed = isZoomed
+                    onZoomChanged?(isZoomed)
+                }
             }
         }
 
         func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-            if scale <= scrollView.minimumZoomScale + 0.01 {
-                if let zoomScrollView = scrollView as? ZoomableScrollView {
-                    let contentOverflows = scrollView.contentSize.width > scrollView.bounds.width + 1 ||
-                                            scrollView.contentSize.height > scrollView.bounds.height + 1
-                    zoomScrollView.isScrollEnabled = contentOverflows || allowsHorizontalScrollAtMinZoom
+            let isZoomed = scale > scrollView.minimumZoomScale + 0.01
+            if let zoomScrollView = scrollView as? ZoomableScrollView {
+                let contentOverflows = scrollView.contentSize.width > scrollView.bounds.width + 1 ||
+                                        scrollView.contentSize.height > scrollView.bounds.height + 1
+                zoomScrollView.isScrollEnabled = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
+                zoomScrollView.bounces = !isZoomed
+
+                if isZoomed != lastIsZoomed {
+                    lastIsZoomed = isZoomed
+                    onZoomChanged?(isZoomed)
                 }
             }
         }
@@ -202,7 +224,12 @@ struct ZoomableImageView: UIViewRepresentable {
         }
 
         @objc func handleSingleTap(_ gesture: UITapGestureRecognizer) {
-            onSingleTap?()
+            guard let scrollView else { return }
+            // 传入点击位置(相对于 scrollView 视口)和视口尺寸
+            // 对齐 Android GalleryView.onSingleTapConfirmed: 由外层根据坐标判断区域
+            let location = gesture.location(in: scrollView)
+            let size = scrollView.bounds.size
+            onSingleTap?(location, size)
         }
 
     }
@@ -326,22 +353,39 @@ class ZoomableScrollView: UIScrollView {
     }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if let panGesture = gestureRecognizer as? UIPanGestureRecognizer,
-           zoomScale <= minimumZoomScale + 0.01 {
+        if let panGesture = gestureRecognizer as? UIPanGestureRecognizer {
             let velocity = panGesture.velocity(in: self)
 
-            // 允许从屏幕左边缘开始的右滑手势 (返回导航)
-            if let window = self.window {
-                let locationInWindow = panGesture.location(in: window)
-                if locationInWindow.x < 30 && velocity.x > 0 && abs(velocity.x) > abs(velocity.y) {
+            if zoomScale <= minimumZoomScale + 0.01 {
+                // 1x 缩放时:
+                // 允许从屏幕左边缘开始的右滑手势 (返回导航)
+                if let window = self.window {
+                    let locationInWindow = panGesture.location(in: window)
+                    if locationInWindow.x < 30 && velocity.x > 0 && abs(velocity.x) > abs(velocity.y) {
+                        return false
+                    }
+                }
+
+                // 只在 fit/fitWidth 模式下拦截水平手势 (这些模式下图片宽度 ≤ 屏幕宽度，无需水平滚动)
+                // 拦截后 → 手势传给 TabView → 实现翻页
+                if abs(velocity.x) > abs(velocity.y) && (scaleMode == .fit || scaleMode == .fitWidth) {
                     return false
                 }
-            }
+            } else {
+                // 放大时: 图片已到达边缘且继续向外拖动 → 不拦截，让 TabView 翻页
+                // 对齐 Android GalleryView: 放大时到达边缘可以翻页
+                let isHorizontalPan = abs(velocity.x) > abs(velocity.y)
+                if isHorizontalPan {
+                    let atLeftEdge = contentOffset.x <= 0
+                    let atRightEdge = contentOffset.x >= contentSize.width - bounds.width - 1
+                    let panningLeft = velocity.x > 0   // 手指向右划 = 内容向左
+                    let panningRight = velocity.x < 0  // 手指向左划 = 内容向右
 
-            // 只在 fit/fitWidth 模式下拦截水平手势 (这些模式下图片宽度 ≤ 屏幕宽度，无需水平滚动)
-            // fitHeight/origin 模式可能需要水平滚动，不拦截
-            if abs(velocity.x) > abs(velocity.y) && (scaleMode == .fit || scaleMode == .fitWidth) {
-                return false
+                    // 在左边缘且向右划 → 上一页；在右边缘且向左划 → 下一页
+                    if (atLeftEdge && panningLeft) || (atRightEdge && panningRight) {
+                        return false
+                    }
+                }
             }
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
@@ -357,10 +401,11 @@ struct ZoomableImageView: NSViewRepresentable {
     let scaleMode: ScaleMode
     let startPosition: StartPosition
     var allowsHorizontalScrollAtMinZoom: Bool = false
-    var onSingleTap: (() -> Void)?
+    var onSingleTap: ((CGPoint, CGSize) -> Void)?
+    var onZoomChanged: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSingleTap: onSingleTap)
+        Coordinator(onSingleTap: onSingleTap, onZoomChanged: onZoomChanged)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -390,6 +435,23 @@ struct ZoomableImageView: NSViewRepresentable {
         singleTap.delaysPrimaryMouseButtonEvents = true
         scrollView.addGestureRecognizer(doubleTap)
 
+        // 监听窗口 resize → 重新布局图片
+        scrollView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.frameDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: scrollView
+        )
+
+        // 监听缩放变化 → 同步 isZoomed 状态
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.magnificationDidChange(_:)),
+            name: NSScrollView.didEndLiveMagnifyNotification,
+            object: scrollView
+        )
+
         return scrollView
     }
 
@@ -402,13 +464,15 @@ struct ZoomableImageView: NSViewRepresentable {
         }
         context.coordinator.scaleMode = scaleMode
         context.coordinator.onSingleTap = onSingleTap
+        context.coordinator.onZoomChanged = onZoomChanged
         if needsLayout {
-            layoutImage(in: scrollView, imageView: imageView)
+            Self.layoutImageStatic(in: scrollView, imageView: imageView, scaleMode: scaleMode)
+            context.coordinator.lastViewSize = scrollView.bounds.size
         }
     }
 
     /// 对齐 Android ImageView.setScaleOffset 的缩放布局
-    private func layoutImage(in scrollView: NSScrollView, imageView: NSImageView) {
+    static func layoutImageStatic(in scrollView: NSScrollView, imageView: NSImageView, scaleMode: ScaleMode) {
         guard let image = imageView.image else { return }
         let imgSize = image.size
         let viewSize = scrollView.bounds.size
@@ -438,11 +502,36 @@ struct ZoomableImageView: NSViewRepresentable {
     class Coordinator: NSObject {
         weak var imageView: NSImageView?
         weak var scrollView: NSScrollView?
-        var onSingleTap: (() -> Void)?
+        var onSingleTap: ((CGPoint, CGSize) -> Void)?
+        var onZoomChanged: ((Bool) -> Void)?
         var scaleMode: ScaleMode = .fit
+        var lastViewSize: CGSize = .zero
 
-        init(onSingleTap: (() -> Void)?) {
+        init(onSingleTap: ((CGPoint, CGSize) -> Void)?, onZoomChanged: ((Bool) -> Void)?) {
             self.onSingleTap = onSingleTap
+            self.onZoomChanged = onZoomChanged
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        /// 窗口尺寸变化时重新布局图片
+        @objc func frameDidChange(_ notification: Notification) {
+            guard let scrollView, let imageView else { return }
+            let newSize = scrollView.bounds.size
+            guard newSize != lastViewSize, newSize.width > 0, newSize.height > 0 else { return }
+            lastViewSize = newSize
+            // 重新布局 (reset magnification 以适应新窗口尺寸)
+            scrollView.magnification = 1.0
+            ZoomableImageView.layoutImageStatic(in: scrollView, imageView: imageView, scaleMode: scaleMode)
+            onZoomChanged?(false)
+        }
+
+        /// 缩放结束时同步 isZoomed 状态
+        @objc func magnificationDidChange(_ notification: Notification) {
+            guard let scrollView else { return }
+            onZoomChanged?(scrollView.magnification > 1.1)
         }
 
         @objc func handleDoubleTap(_ gesture: NSClickGestureRecognizer) {
@@ -452,17 +541,24 @@ struct ZoomableImageView: NSViewRepresentable {
                     ctx.duration = 0.3
                     scrollView.animator().magnification = 1.0
                 }
+                onZoomChanged?(false)
             } else {
                 let point = gesture.location(in: scrollView.documentView)
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = 0.3
                     scrollView.animator().setMagnification(2.5, centeredAt: point)
                 }
+                onZoomChanged?(true)
             }
         }
 
         @objc func handleSingleTap(_ gesture: NSClickGestureRecognizer) {
-            onSingleTap?()
+            guard let scrollView else { return }
+            let location = gesture.location(in: scrollView)
+            let size = scrollView.bounds.size
+            // macOS 坐标原点在左下角，翻转 Y 轴以匹配 iOS (左上角原点)
+            let flippedLocation = CGPoint(x: location.x, y: size.height - location.y)
+            onSingleTap?(flippedLocation, size)
         }
     }
 }

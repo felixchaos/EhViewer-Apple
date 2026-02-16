@@ -48,6 +48,11 @@ public enum ParserUtils {
 
     // MARK: - HTML 实体解码
 
+    /// 数字实体正则 &#xxxx; (预编译，避免每次调用 unescapeXml 重新创建)
+    private static let numericEntityRegex = try! NSRegularExpression(pattern: #"&#(\d+);"#)
+    /// 十六进制实体正则 &#xHHHH;
+    private static let hexEntityRegex = try! NSRegularExpression(pattern: #"&#x([0-9a-fA-F]+);"#)
+
     /// 解码 HTML/XML 实体 (对应 Android StringUtils.unescapeXml)
     public static func unescapeXml(_ str: String) -> String {
         var result = str
@@ -58,9 +63,8 @@ public enum ParserUtils {
         result = result.replacingOccurrences(of: "&apos;", with: "'")
         result = result.replacingOccurrences(of: "&#039;", with: "'")
         // 数字实体 &#xxxx;
-        let numericRegex = try! NSRegularExpression(pattern: #"&#(\d+);"#)
         let nsResult = result as NSString
-        let matches = numericRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+        let matches = numericEntityRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
         for match in matches.reversed() {
             if let range = Range(match.range, in: result),
                let codeRange = Range(match.range(at: 1), in: result),
@@ -70,9 +74,8 @@ public enum ParserUtils {
             }
         }
         // 十六进制 &#xHHHH;
-        let hexRegex = try! NSRegularExpression(pattern: #"&#x([0-9a-fA-F]+);"#)
         let nsResult2 = result as NSString
-        let hexMatches = hexRegex.matches(in: result, range: NSRange(location: 0, length: nsResult2.length))
+        let hexMatches = hexEntityRegex.matches(in: result, range: NSRange(location: 0, length: nsResult2.length))
         for match in hexMatches.reversed() {
             if let range = Range(match.range, in: result),
                let codeRange = Range(match.range(at: 1), in: result),

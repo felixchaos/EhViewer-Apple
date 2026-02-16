@@ -32,6 +32,15 @@ public actor SpiderQueen {
     private var activeTasks: [Int: Task<Void, Never>] = [:]
     private let maxConcurrent = 3       // 同时下载的最大数量
 
+    /// 共享 URLSession，避免每次请求创建新的 session 导致内存泄漏
+    private let sharedSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpCookieStorage = .shared
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 60
+        return URLSession(configuration: config)
+    }()
+
     /// 图片存储管理器 (对应 Android SpiderDen)
     private let spiderDen: SpiderDen
 
@@ -273,12 +282,7 @@ public actor SpiderQueen {
         // 使用带 cookies 的 session 下载图片
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = .shared
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 60
-        let session = URLSession(configuration: config)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await sharedSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -355,9 +359,7 @@ public actor SpiderQueen {
         request.setValue(EhURL.referer(for: site), forHTTPHeaderField: "Referer")
         request.timeoutInterval = 15
 
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = .shared
-        let (data, _) = try await URLSession(configuration: config).data(for: request)
+        let (data, _) = try await sharedSession.data(for: request)
         let html = String(data: data, encoding: .utf8) ?? ""
 
         // 从预览链接中提取 pTokens: /s/PTOKEN/GID-PAGE
@@ -395,10 +397,7 @@ public actor SpiderQueen {
         request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
 
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = .shared
-        let session = URLSession(configuration: config)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await sharedSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -443,10 +442,7 @@ public actor SpiderQueen {
         request.httpBody = jsonData
         request.timeoutInterval = 15
 
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = .shared
-        let session = URLSession(configuration: config)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await sharedSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {

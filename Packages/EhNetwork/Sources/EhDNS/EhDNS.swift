@@ -54,6 +54,8 @@ public final class EhDNS: @unchecked Sendable {
 
     /// 用户自定义 Hosts (优先于内置)
     private var userHosts: [String: [String]] = [:]
+    /// 用于保护 userHosts 的并发访问
+    private let lock = NSLock()
 
     /// DNS-over-HTTPS 提供商 URL
     public enum DoHProvider: String, CaseIterable, Sendable {
@@ -77,7 +79,10 @@ public final class EhDNS: @unchecked Sendable {
     /// 用于: VPN 代理 503 回退时，绕过 HTTP 代理同时使用真实 IP (非 fake-ip)
     public func forceResolve(host: String) -> [String] {
         // 用户自定义优先
-        if let ips = userHosts[host], !ips.isEmpty {
+        lock.lock()
+        let userIps = userHosts[host]
+        lock.unlock()
+        if let ips = userIps, !ips.isEmpty {
             return ips.shuffled()  // 对齐 Android: Collections.shuffle()
         }
         // 回退到内置
@@ -118,15 +123,21 @@ public final class EhDNS: @unchecked Sendable {
     // MARK: - 用户自定义
 
     public func setUserHost(_ host: String, ips: [String]) {
+        lock.lock()
         userHosts[host] = ips
+        lock.unlock()
     }
 
     public func removeUserHost(_ host: String) {
+        lock.lock()
         userHosts.removeValue(forKey: host)
+        lock.unlock()
     }
 
     public func clearUserHosts() {
+        lock.lock()
         userHosts.removeAll()
+        lock.unlock()
     }
 
     // MARK: - URLSession 集成 (Domain Fronting)

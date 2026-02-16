@@ -51,6 +51,9 @@ struct DownloadsView: View {
     @State private var showDeleteLabelConfirm = false
     @State private var deletingLabel: DownloadLabelRecord?
 
+    // MARK: - 阅读器 (fullScreenCover 呈现，隐藏导航栏)
+    @State private var readerGallery: GalleryInfo?
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -71,7 +74,7 @@ struct DownloadsView: View {
             }
             .navigationTitle("下载")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             #endif
             .searchable(text: $searchText, prompt: "搜索下载")
             .toolbar {
@@ -405,29 +408,40 @@ struct DownloadsView: View {
                                 vm.pauseTask(gid: task.gallery.gid)
                             } onResume: {
                                 vm.resumeTask(gid: task.gallery.gid)
-                            } onDelete: {
-                                vm.deleteTask(gid: task.gallery.gid)
+                            } onDelete: { withFiles in
+                                vm.deleteTask(gid: task.gallery.gid, withFiles: withFiles)
                             }
                         }
                     }
                     .buttonStyle(.plain)
                 } else {
-                    NavigationLink(value: task.gallery) {
+                    // 点击打开阅读器 (使用 fullScreenCover 避免导航栏残留)
+                    Button {
+                        readerGallery = task.gallery
+                    } label: {
                         DownloadTaskRow(task: task) {
                             vm.pauseTask(gid: task.gallery.gid)
                         } onResume: {
                             vm.resumeTask(gid: task.gallery.gid)
-                        } onDelete: {
-                            vm.deleteTask(gid: task.gallery.gid)
+                        } onDelete: { withFiles in
+                            vm.deleteTask(gid: task.gallery.gid, withFiles: withFiles)
                         }
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
         .listStyle(.plain)
-        .navigationDestination(for: GalleryInfo.self) { gallery in
+        #if os(iOS)
+        .fullScreenCover(item: $readerGallery) { gallery in
             ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages, isDownloaded: true)
         }
+        #else
+        .sheet(item: $readerGallery) { gallery in
+            ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages, isDownloaded: true)
+                .frame(minWidth: 800, minHeight: 600)
+        }
+        #endif
     }
 
     // MARK: - 批量移动标签 Sheet
@@ -576,7 +590,7 @@ struct DownloadTaskRow: View {
     let task: DownloadTask
     let onPause: () -> Void
     let onResume: () -> Void
-    let onDelete: () -> Void
+    let onDelete: (_ withFiles: Bool) -> Void
 
     @State private var showDeleteConfirm = false
 
@@ -694,11 +708,10 @@ struct DownloadTaskRow: View {
         }
         .confirmationDialog("确认删除下载？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("仅删除记录", role: .destructive) {
-                onDelete()
+                onDelete(false)
             }
             Button("删除记录和文件", role: .destructive) {
-                // TODO: deleteWithFiles
-                onDelete()
+                onDelete(true)
             }
         }
     }
@@ -796,9 +809,9 @@ class DownloadsViewModel {
         }
     }
 
-    func deleteTask(gid: Int64) {
+    func deleteTask(gid: Int64, withFiles: Bool = false) {
         Task {
-            await DownloadManager.shared.deleteDownload(gid: gid, deleteFiles: false)
+            await DownloadManager.shared.deleteDownload(gid: gid, deleteFiles: withFiles)
             await loadTasks()
         }
     }

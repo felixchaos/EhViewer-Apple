@@ -49,14 +49,18 @@ struct FavoritesView: View {
                 Divider()
                 if selectedSlot == -2 {
                     localFavoritesContent
+                } else if selectedSlot == -1 {
+                    // "全部": 合并本地收藏 + 在线收藏 (对齐 Android: 全部包含所有来源)
+                    allFavoritesContent(embedded: true)
                 } else {
                     GalleryListView(mode: .favorites(slot: selectedSlot), selection: externalSelection!, searchKeyword: searchText.isEmpty ? nil : searchText)
+                        .id(selectedSlot)
                 }
             }
             .navigationTitle("收藏")
             .searchable(text: $searchText, prompt: selectedSlot == -2 ? "搜索本地收藏" : "搜索收藏")
             .onChange(of: searchText) { _, _ in
-                if selectedSlot == -2 { loadLocalFavorites() }
+                if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
             }
         } else {
             NavigationStack {
@@ -65,21 +69,25 @@ struct FavoritesView: View {
                     Divider()
                     if selectedSlot == -2 {
                         localFavoritesContent
+                    } else if selectedSlot == -1 {
+                        // "全部": 合并本地收藏 + 在线收藏
+                        allFavoritesContent(embedded: false)
                     } else {
                         GalleryListView(mode: .favorites(slot: selectedSlot), searchKeyword: searchText.isEmpty ? nil : searchText)
+                            .id(selectedSlot)
                     }
                 }
                 .navigationTitle("收藏")
                 #if os(iOS)
-                .navigationBarTitleDisplayMode(.large)
+                .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .searchable(text: $searchText, prompt: selectedSlot == -2 ? "搜索本地收藏" : "搜索收藏")
                 .onChange(of: searchText) { _, _ in
-                    if selectedSlot == -2 { loadLocalFavorites() }
+                    if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
                 }
                 .toolbar {
                     // 本地收藏批量操作工具栏 (对齐 Android FavoritesScene FAB)
-                    if selectedSlot == -2 && !localFavorites.isEmpty {
+                    if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
                         ToolbarItem(placement: .automatic) {
                             localBatchToolbar
                         }
@@ -215,7 +223,7 @@ struct FavoritesView: View {
         }
         .onAppear { loadLocalFavorites() }
         .onChange(of: selectedSlot) { _, newSlot in
-            if newSlot == -2 { loadLocalFavorites() }
+            if newSlot == -2 || newSlot == -1 { loadLocalFavorites() }
             isSelectMode = false
             selectedGids.removeAll()
         }
@@ -231,6 +239,65 @@ struct FavoritesView: View {
                     }
             }
         }
+    }
+
+    // MARK: - 全部收藏 (本地 + 在线合并)
+
+    @ViewBuilder
+    private func allFavoritesContent(embedded: Bool) -> some View {
+        VStack(spacing: 0) {
+            // 本地收藏区块 (折叠式, 对齐 Android: 全部分类下显示所有来源)
+            if !localFavorites.isEmpty {
+                VStack(spacing: 0) {
+                    HStack {
+                        Image(systemName: "heart.fill")
+                            .font(.caption)
+                            .foregroundStyle(.pink)
+                        Text("本地收藏 (\(localFavorites.count))")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+
+                    ForEach(localFavorites.prefix(5), id: \.gid) { record in
+                        NavigationLink {
+                            GalleryDetailView(gallery: record.toGalleryInfo())
+                        } label: {
+                            localFavoriteRow(record)
+                                .padding(.horizontal, 16)
+                        }
+                        .buttonStyle(.plain)
+                        Divider().padding(.leading, 104)
+                    }
+
+                    if localFavorites.count > 5 {
+                        Button {
+                            selectedSlot = -2  // 切换到本地收藏查看全部
+                        } label: {
+                            Text("查看全部 \(localFavorites.count) 个本地收藏")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.accentColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Divider()
+                }
+            }
+
+            // 在线收藏
+            if embedded, let sel = externalSelection {
+                GalleryListView(mode: .favorites(slot: -1), selection: sel, searchKeyword: searchText.isEmpty ? nil : searchText)
+            } else {
+                GalleryListView(mode: .favorites(slot: -1), searchKeyword: searchText.isEmpty ? nil : searchText)
+            }
+        }
+        .onAppear { loadLocalFavorites() }
     }
 
     private func localFavoriteRow(_ record: LocalFavoriteRecord) -> some View {
@@ -358,6 +425,18 @@ struct FavoritesView: View {
     private var slotPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                // "全部" 标签 (对齐 Android FavoritesActivity: favCatArray[0] = "All Favorites")
+                Button(action: { selectedSlot = -1 }) {
+                    Text("全部")
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(selectedSlot == -1 ? Color.accentColor : Color(.tertiarySystemFill))
+                        .foregroundStyle(selectedSlot == -1 ? .white : .primary)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
                 // "本地收藏" 标签 (对齐 Android FAV_CAT_LOCAL)
                 Button(action: { selectedSlot = -2 }) {
                     HStack(spacing: 4) {
@@ -371,18 +450,6 @@ struct FavoritesView: View {
                     .background(selectedSlot == -2 ? Color.accentColor : Color(.tertiarySystemFill))
                     .foregroundStyle(selectedSlot == -2 ? .white : .primary)
                     .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-
-                // "全部" 标签 (对齐 Android FavoritesActivity: favCatArray[0] = "All Favorites")
-                Button(action: { selectedSlot = -1 }) {
-                    Text("全部")
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(selectedSlot == -1 ? Color.accentColor : Color(.tertiarySystemFill))
-                        .foregroundStyle(selectedSlot == -1 ? .white : .primary)
-                        .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
 
