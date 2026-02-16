@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import EhAPI
+import EhSettings
 #if os(macOS)
 import AppKit
 #else
@@ -24,6 +26,10 @@ private enum ImageSessionProvider {
         // 使用全局 URLCache (与 App init 中配置的 320MB 磁盘缓存一致)
         config.urlCache = URLCache.shared
         config.requestCachePolicy = .useProtocolCachePolicy
+        // 设置 User-Agent (对齐 Android: 所有请求携带浏览器 UA，避免 CDN 拒绝)
+        config.httpAdditionalHeaders = [
+            "User-Agent": EhRequestBuilder.userAgent
+        ]
         return URLSession(configuration: config)
     }()
 }
@@ -140,7 +146,11 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
         // 3. 网络下载 — 使用 data(for:) 一次性下载 (比 bytes 逐字节更快更可靠)
         do {
-            let request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy)
+            var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy)
+            // 设置 Referer 头 (对齐 Android: 缩略图 CDN 要求合法 Referer 才返回图片)
+            let siteHost = AppSettings.shared.gallerySite == .exHentai
+                ? "https://exhentai.org/" : "https://e-hentai.org/"
+            request.setValue(siteHost, forHTTPHeaderField: "Referer")
             let (data, response) = try await ImageSessionProvider.shared.data(for: request)
 
             // 缓存响应

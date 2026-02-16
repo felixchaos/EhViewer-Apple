@@ -375,11 +375,11 @@ struct GalleryListView: View {
             }
         }
         .listStyle(.plain)
+        #if os(iOS)
+        .scrollDismissesKeyboard(.immediately)
+        #endif
         .refreshable {
             await viewModel.refreshAsync(mode: effectiveMode)
-        }
-        .onTapGesture {
-            isSearchFocused = false
         }
         .navigationDestination(for: GalleryInfo.self) { gallery in
             GalleryDetailView(gallery: gallery)
