@@ -7,10 +7,11 @@
 
 import SwiftUI
 import EhModels
+import EhSettings
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = .home
+    @State private var selectedTab: Tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
@@ -45,11 +46,28 @@ struct MainTabView: View {
             }
         }
 
-        /// iOS 底部默认显示的标签页 (对齐 Android: 首页/收藏/下载/更多)
-        static var defaultBottomTabs: [Tab] { [.home, .favorites, .downloads, .more] }
+        /// iOS 底部默认显示的标签页 (对齐 Android: 首页/收藏/下载/设置/更多)
+        static var defaultBottomTabs: [Tab] { [.home, .favorites, .downloads, .settings, .more] }
 
         /// "更多"菜单中的标签页
-        static var moreTabs: [Tab] { [.popular, .toplist, .history, .settings] }
+        static var moreTabs: [Tab] { [.popular, .toplist, .history] }
+
+        /// 启动页面设置映射
+        static func fromLaunchPage(_ page: Int) -> Tab {
+            switch page {
+            case 1: return .popular
+            case 2: return .toplist
+            case 3: return .favorites
+            case 4: return .downloads
+            case 5: return .history
+            default: return .home
+            }
+        }
+
+        /// iPhone 底部导航可达性检查 — 不在底部栏的 tab 降级为 .home
+        static func bottomTabSafe(_ tab: Tab) -> Tab {
+            defaultBottomTabs.contains(tab) ? tab : .home
+        }
     }
 
     var body: some View {
@@ -144,6 +162,10 @@ struct MainTabView: View {
                             .tag(tab)
                     }
                 }
+                .onAppear {
+                    // 启动页面在底部导航不存在时降级
+                    selectedTab = Tab.bottomTabSafe(selectedTab)
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
@@ -164,8 +186,8 @@ struct MainTabView: View {
         }
         .onChange(of: horizontalSizeClass) { _, newSizeClass in
             // iPad 旋转切换时确保选中标签有效
-            if newSizeClass == .compact && !Tab.defaultBottomTabs.contains(selectedTab) {
-                selectedTab = .home
+            if newSizeClass == .compact {
+                selectedTab = Tab.bottomTabSafe(selectedTab)
             }
         }
         #endif

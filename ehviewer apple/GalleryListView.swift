@@ -33,7 +33,6 @@ struct GalleryListView: View {
     @State private var advancedSearch = AdvancedSearchState()
     @State private var selectedQuickSearch: QuickSearchRecord?
     @State private var selectedGallery: GalleryInfo?
-    @FocusState private var isSearchFocused: Bool
 
     /// 标签导航路径 — iPad 双栏布局中支持标签推入左侧
     @State private var sidebarPath = NavigationPath()
@@ -170,7 +169,7 @@ struct GalleryListView: View {
         }
     }
 
-    // iPhone 布局（原有实现）
+    // iPhone 布局
     private var compactContent: some View {
         NavigationStack {
             Group {
@@ -187,35 +186,14 @@ struct GalleryListView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    HStack(spacing: 8) {
-                        Button {
-                            showQuickSearch = true
-                        } label: {
-                            Image(systemName: "bookmark")
-                        }
-
-                        // 跳页按钮 (对齐 Android FAB position 1: Go to)
-                        Button {
-                            if viewModel.isFavoritesMode {
-                                viewModel.showFavJumpDialog = true
-                            } else {
-                                viewModel.showGoToDialog = true
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up.and.down.text.horizontal")
-                        }
-                        .disabled(viewModel.galleries.isEmpty)
-                    }
-                }
-            }
-            // 自定义搜索栏: 始终显示高级搜索按钮 (对齐 Android 搜索框右侧 + 按钮)
-            .safeAreaInset(edge: .top) {
-                customSearchBar
-            }
+            .toolbar { galleryToolbar }
+            .searchable(text: $viewModel.searchText, prompt: "搜索画廊...")
+            .searchSuggestions { searchSuggestionsBlock }
             .onChange(of: viewModel.searchText) { _, _ in
                 viewModel.updateSuggestions()
+            }
+            .onSubmit(of: .search) {
+                viewModel.searchWithAdvanced(advancedSearch)
             }
             .rightDrawer(isOpen: $showQuickSearch) {
                 QuickSearchDrawerContent(
@@ -280,42 +258,9 @@ struct GalleryListView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                HStack(spacing: 8) {
-                    Button {
-                        showAdvancedSearch = true
-                    } label: {
-                        Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                    }
-
-                    Button {
-                        showQuickSearch = true
-                    } label: {
-                        Image(systemName: "bookmark")
-                    }
-
-                    Button {
-                        viewModel.showGoToDialog = true
-                    } label: {
-                        Image(systemName: "arrow.up.and.down.text.horizontal")
-                    }
-                    .disabled(viewModel.galleries.isEmpty)
-                }
-            }
-        }
+        .toolbar { galleryToolbar }
         .searchable(text: $viewModel.searchText, prompt: "搜索画廊...")
-        .searchSuggestions {
-            // 高级搜索快捷入口 (对齐 Android: 搜索框输入内容后右侧显示 + 按钮)
-            Button {
-                showAdvancedSearch = true
-            } label: {
-                Label("高级搜索筛选", systemImage: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-            }
-            if !viewModel.suggestions.isEmpty {
-                searchSuggestionsContent
-            }
-        }
+        .searchSuggestions { searchSuggestionsBlock }
         .onChange(of: viewModel.searchText) { _, _ in
             viewModel.updateSuggestions()
         }
@@ -446,47 +391,9 @@ struct GalleryListView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                HStack(spacing: 8) {
-                    Button {
-                        showAdvancedSearch = true
-                    } label: {
-                        Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                    }
-
-                    Button {
-                        showQuickSearch = true
-                    } label: {
-                        Image(systemName: "bookmark")
-                    }
-
-                    // 跳页按钮 (对齐 Android FAB position 1: Go to)
-                    Button {
-                        if viewModel.isFavoritesMode {
-                            viewModel.showFavJumpDialog = true
-                        } else {
-                            viewModel.showGoToDialog = true
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.and.down.text.horizontal")
-                    }
-                    .disabled(viewModel.galleries.isEmpty)
-                }
-            }
-        }
+        .toolbar { galleryToolbar }
         .searchable(text: $viewModel.searchText, prompt: "搜索画廊...")
-        .searchSuggestions {
-            // 高级搜索快捷入口 (对齐 Android: 搜索框输入内容后右侧显示 + 按钮)
-            Button {
-                showAdvancedSearch = true
-            } label: {
-                Label("高级搜索筛选", systemImage: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-            }
-            if !viewModel.suggestions.isEmpty {
-                searchSuggestionsContent
-            }
-        }
+        .searchSuggestions { searchSuggestionsBlock }
         .onChange(of: viewModel.searchText) { _, _ in
             viewModel.updateSuggestions()
         }
@@ -532,130 +439,65 @@ struct GalleryListView: View {
         }
     }
 
-    // MARK: - 自定义搜索栏 (对齐 Android 搜索框右侧始终显示 + 按钮)
+    // MARK: - 统一工具栏 (所有画廊列表页共享)
 
-    private var customSearchBar: some View {
-        VStack(spacing: 0) {
+    @ToolbarContentBuilder
+    private var galleryToolbar: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
             HStack(spacing: 8) {
-                // 搜索输入框
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 15))
-                    TextField("搜索画廊...", text: $viewModel.searchText)
-                        .textFieldStyle(.plain)
-                        .submitLabel(.search)
-                        .focused($isSearchFocused)
-                        .onSubmit {
-                            isSearchFocused = false
-                            viewModel.searchWithAdvanced(advancedSearch)
-                        }
-                    if !viewModel.searchText.isEmpty {
-                        Button {
-                            viewModel.searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                                .font(.system(size: 15))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color(.tertiarySystemFill))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                // 高级搜索按钮 — 始终可见 (对齐 Android 搜索框右侧 + 按钮)
                 Button {
                     showAdvancedSearch = true
                 } label: {
-                    Image(systemName: advancedSearch.isEnabled ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 22))
-                        .foregroundStyle(advancedSearch.isEnabled ? Color.accentColor : .secondary)
+                    Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
                 }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-            .background(.bar)
 
-            // 搜索历史 (搜索框为空时显示)
-            if isSearchFocused && viewModel.searchText.isEmpty && !viewModel.searchHistory.isEmpty {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("搜索历史")
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清除") {
-                            viewModel.clearSearchHistory()
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                Button {
+                    showQuickSearch = true
+                } label: {
+                    Image(systemName: "bookmark")
+                }
+
+                Button {
+                    if viewModel.isFavoritesMode {
+                        viewModel.showFavJumpDialog = true
+                    } else {
+                        viewModel.showGoToDialog = true
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                } label: {
+                    Image(systemName: "arrow.up.and.down.text.horizontal")
+                }
+                .disabled(viewModel.galleries.isEmpty)
+            }
+        }
+    }
 
-                    ForEach(viewModel.searchHistory, id: \.self) { term in
-                        Button {
-                            viewModel.searchText = term
-                            isSearchFocused = false
-                            viewModel.searchWithAdvanced(advancedSearch)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "clock")
-                                    .foregroundStyle(.tertiary)
-                                    .font(.subheadline)
-                                Text(term)
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Spacer()
-                                Button {
-                                    viewModel.removeSearchHistory(term)
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        }
-                        .buttonStyle(.plain)
-                        Divider().padding(.leading, 44)
+    // MARK: - 统一搜索建议 (搜索历史 + 标签建议)
+
+    @ViewBuilder
+    private var searchSuggestionsBlock: some View {
+        // 搜索历史 (搜索框为空时显示)
+        if viewModel.searchText.isEmpty && !viewModel.searchHistory.isEmpty {
+            Section {
+                ForEach(viewModel.searchHistory, id: \.self) { term in
+                    Button {
+                        viewModel.searchText = term
+                        viewModel.searchWithAdvanced(advancedSearch)
+                    } label: {
+                        Label(term, systemImage: "clock")
                     }
                 }
-                .background(.regularMaterial)
-            }
-
-            // 搜索建议下拉列表
-            if isSearchFocused && !viewModel.suggestions.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
-                        Button {
-                            viewModel.applySuggestion(suggestion.english)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(suggestion.chinese)
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                                Text(suggestion.english)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        }
-                        .buttonStyle(.plain)
-                        Divider().padding(.leading, 16)
-                    }
+                Button(role: .destructive) {
+                    viewModel.clearSearchHistory()
+                } label: {
+                    Label("清除搜索历史", systemImage: "trash")
                 }
-                .background(.regularMaterial)
+            } header: {
+                Text("搜索历史")
             }
+        }
+        // 标签建议
+        if !viewModel.suggestions.isEmpty {
+            searchSuggestionsContent
         }
     }
 
