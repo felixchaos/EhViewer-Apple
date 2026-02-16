@@ -588,6 +588,7 @@ struct GalleryDetailView: View {
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
 class GalleryDetailViewModel {
     var isLoading = false

@@ -32,6 +32,9 @@ struct RootView: View {
 
     /// ExHentai 切换提示
     @State private var showExHAlert = false
+
+    /// Sad Panda / igneous 失效警告 (V-15)
+    @State private var showSadPandaAlert = false
     enum OnboardingStep {
         case checking      // 检查状态中
         case warning       // 18+ 警告
@@ -97,6 +100,7 @@ struct RootView: View {
                     .environment(appState)
             }
         }
+        .withGlobalErrorBoundary()
         .animation(.easeInOut, value: flowStep)
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             if isSignedIn {
@@ -114,6 +118,22 @@ struct RootView: View {
             Button("保持 E-Hentai", role: .cancel) {}
         } message: {
             Text("检测到你的账号拥有 ExHentai 访问权限，是否切换到 ExHentai？")
+        }
+        // Sad Panda / igneous 失效警告 (V-15)
+        .onReceive(NotificationCenter.default.publisher(for: .ehSadPandaDetected)) { _ in
+            showSadPandaAlert = true
+        }
+        .alert("ExHentai 访问失效", isPresented: $showSadPandaAlert) {
+            Button("重新登录") {
+                AppSettings.shared.gallerySite = .eHentai
+                appState.isSignedIn = false
+                flowStep = .login
+            }
+            Button("切换到 E-Hentai", role: .cancel) {
+                AppSettings.shared.gallerySite = .eHentai
+            }
+        } message: {
+            Text("igneous Cookie 已失效 (Sad Panda)，已自动清除。\n请重新登录以恢复 ExHentai 访问权限，或切换到 E-Hentai。")
         }
         // 对齐 Android: 深色模式支持 (Settings.KEY_THEME)
         // 0=跟随系统, 1=浅色, 2=深色
@@ -320,6 +340,7 @@ struct RootView: View {
 
 // MARK: - 全局应用状态
 
+@MainActor
 @Observable
 final class AppState {
     var isSignedIn = false

@@ -998,6 +998,7 @@ struct GalleryRow: View {
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
 class GalleryListViewModel {
     var galleries: [GalleryInfo] = []

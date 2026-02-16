@@ -46,6 +46,20 @@ public actor SpiderQueen {
         return URLSession(configuration: config)
     }()
 
+    /// 在全局速率限制下发起网络请求 — 防止跨实例并发失控 (V-09)
+    /// 所有 SpiderQueen 实例共享同一个 EhRateLimiter，全局最多 5 个并发图片请求
+    private func rateLimitedData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await EhRateLimiter.shared.acquireImageSlot()
+        do {
+            let result = try await sharedSession.data(for: request)
+            await EhRateLimiter.shared.releaseImageSlot()
+            return result
+        } catch {
+            await EhRateLimiter.shared.releaseImageSlot()
+            throw error
+        }
+    }
+
     /// 图片存储管理器 (对应 Android SpiderDen)
     private let spiderDen: SpiderDen
 
@@ -223,11 +237,13 @@ public actor SpiderQueen {
                     imageUrl = result.imageUrl
                     originImageUrl = result.originImageUrl
                 } else {
+                    // showKey is guaranteed non-nil here
+                    let currentShowKey = showKey ?? ""
                     let result = try await fetchPageApi(
                         gid: galleryInfo.gid,
                         index: index,
                         pToken: pToken,
-                        showKey: showKey!
+                        showKey: currentShowKey
                     )
                     if let newShowKey = result.showKey {
                         showKey = newShowKey
@@ -301,7 +317,7 @@ public actor SpiderQueen {
         // 使用带 cookies 的 session 下载图片
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        let (data, response) = try await sharedSession.data(for: request)
+        let (data, response) = try await rateLimitedData(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -378,7 +394,7 @@ public actor SpiderQueen {
         request.setValue(EhURL.referer(for: site), forHTTPHeaderField: "Referer")
         request.timeoutInterval = 15
 
-        let (data, _) = try await sharedSession.data(for: request)
+        let (data, _) = try await rateLimitedData(for: request)
         let html = String(data: data, encoding: .utf8) ?? ""
 
         // 从预览链接中提取 pTokens: /s/PTOKEN/GID-PAGE
@@ -416,7 +432,7 @@ public actor SpiderQueen {
         request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
 
-        let (data, response) = try await sharedSession.data(for: request)
+        let (data, response) = try await rateLimitedData(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -461,7 +477,7 @@ public actor SpiderQueen {
         request.httpBody = jsonData
         request.timeoutInterval = 15
 
-        let (data, response) = try await sharedSession.data(for: request)
+        let (data, response) = try await rateLimitedData(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {

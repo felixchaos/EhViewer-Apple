@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 本 App 不进行追踪 -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <!-- 本 App 不使用追踪域名 -->
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- 本 App 不收集用户数据 -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <!-- Required Reason API 声明 (iOS 17+) -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!--
+            1. UserDefaults API
+            用途: 存储用户偏好设置 (画廊站点、阅读方向、缓存大小等)
+            Reason: CA92.1 — 访问 App 自身 UserDefaults
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!--
+            2. File Timestamp API
+            用途: SpiderDen LRU 缓存通过 modificationDate 排序淘汰旧文件;
+                  EhTagDatabase 检查标签数据库更新时间
+            Reason: C617.1 — 访问 App 容器内文件的时间戳
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+        <!--
+            3. Disk Space API
+            用途: 缓存管理 — 计算缓存占用、判断可用空间是否足够下载
+            Reason: E174.1 — 检查可用磁盘空间以避免写入失败
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

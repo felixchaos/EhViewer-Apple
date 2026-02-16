@@ -30,6 +30,13 @@ public final class EhDatabase: Sendable {
             .first!.appendingPathComponent("eh.sqlite").path
 
         var config = Configuration()
+
+        // 启用 WAL 模式: 更好的写入性能 + 崩溃恢复能力
+        // GRDB DatabaseQueue 默认使用 DELETE journal mode, 需要显式启用 WAL
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode=WAL")
+        }
+
         #if DEBUG
         config.prepareDatabase { db in
             db.trace { print("SQL: \($0)") }
@@ -544,19 +551,79 @@ public final class EhDatabase: Sendable {
 
     public func importDatabase(from url: URL) throws {
         let srcQueue = try DatabaseQueue(path: url.path)
-        // Read all data from source and write to current DB
-        let downloads: [DownloadRecord] = try srcQueue.read { db in try DownloadRecord.fetchAll(db) }
-        let history: [HistoryRecord] = try srcQueue.read { db in try HistoryRecord.fetchAll(db) }
-        let favorites: [LocalFavoriteRecord] = try srcQueue.read { db in try LocalFavoriteRecord.fetchAll(db) }
-        let quickSearches: [QuickSearchRecord] = try srcQueue.read { db in try QuickSearchRecord.fetchAll(db) }
-        let filters: [FilterRecord] = try srcQueue.read { db in try FilterRecord.fetchAll(db) }
+        let batchSize = 500
 
-        try dbQueue.write { db in
-            for record in downloads { try record.save(db) }
-            for record in history { try record.save(db) }
-            for record in favorites { try record.save(db) }
-            for var record in quickSearches { try record.insert(db) }
-            for var record in filters { try record.insert(db) }
+        // 分批导入各表, 避免一次性加载全部记录导致 OOM (V-06 修复)
+        try batchSave(DownloadRecord.self, from: srcQueue, batchSize: batchSize)
+        try batchSave(HistoryRecord.self, from: srcQueue, batchSize: batchSize)
+        try batchSave(LocalFavoriteRecord.self, from: srcQueue, batchSize: batchSize)
+        // QuickSearch/Filter 使用 insert (生成新 autoincrement ID)
+        try batchInsert(QuickSearchRecord.self, from: srcQueue, batchSize: batchSize)
+        try batchInsert(FilterRecord.self, from: srcQueue, batchSize: batchSize)
+    }
+
+    /// 分批导入 (save = INSERT OR REPLACE)
+    private func batchSave<T: FetchableRecord & PersistableRecord>(
+        _ type: T.Type, from source: DatabaseQueue, batchSize: Int
+    ) throws {
+        var offset = 0
+        while true {
+            let batch: [T] = try source.read { db in
+                try T.limit(batchSize, offset: offset).fetchAll(db)
+            }
+            guard !batch.isEmpty else { break }
+            try dbQueue.write { db in
+                for record in batch {
+                    try record.save(db)
+                }
+            }
+            if batch.count < batchSize { break }
+            offset += batchSize
+        }
+    }
+
+    /// 分批导入 (insert = 新建记录, 用于 autoincrement 表)
+    private func batchInsert<T: FetchableRecord & PersistableRecord>(
+        _ type: T.Type, from source: DatabaseQueue, batchSize: Int
+    ) throws {
+        var offset = 0
+        while true {
+            let batch: [T] = try source.read { db in
+                try T.limit(batchSize, offset: offset).fetchAll(db)
+            }
+            guard !batch.isEmpty else { break }
+            try dbQueue.write { db in
+                for var record in batch {
+                    try record.insert(db)
+                }
+            }
+            if batch.count < batchSize { break }
+            offset += batchSize
+        }
+    }
+
+    // MARK: - 数据库维护 (V-05 修复: 定期 VACUUM)
+
+    /// 执行数据库维护 (VACUUM + WAL checkpoint)
+    /// 调用时机: 每 7 天一次, 由 App 启动时检查
+    public func performMaintenanceIfNeeded() {
+        let key = "eh_lastDatabaseMaintenance"
+        let lastDate = UserDefaults.standard.object(forKey: key) as? Date ?? .distantPast
+        let interval: TimeInterval = 7 * 24 * 3600 // 7 天
+        guard Date().timeIntervalSince(lastDate) > interval else { return }
+
+        do {
+            // VACUUM 必须在事务外执行
+            try dbQueue.writeWithoutTransaction { db in
+                // 先 checkpoint WAL 文件, 减少 VACUUM 耗时
+                try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+                // VACUUM: 重建数据库文件, 回收碎片空间
+                try db.execute(sql: "VACUUM")
+            }
+            UserDefaults.standard.set(Date(), forKey: key)
+            print("[EhDatabase] ✅ Maintenance completed: VACUUM + WAL checkpoint")
+        } catch {
+            print("[EhDatabase] ⚠️ Maintenance failed: \(error)")
         }
     }
 }

@@ -784,6 +784,14 @@ struct SettingsView: View {
                 Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                     .foregroundStyle(.secondary)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                vm.versionTapCount += 1
+                if vm.versionTapCount >= 5 {
+                    vm.versionTapCount = 0
+                    vm.showLogExport = true
+                }
+            }
 
             Button("源代码") {
                 openURL(URL(string: "https://github.com/felixchaos/EhViewer-Apple")!)
@@ -792,6 +800,9 @@ struct SettingsView: View {
             NavigationLink("开源协议") {
                 licensesView
             }
+        }
+        .sheet(isPresented: $vm.showLogExport) {
+            LogExportView()
         }
     }
 
@@ -1170,6 +1181,7 @@ SOFTWARE.
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
 class SettingsViewModel {
     var isLoggedIn = false
@@ -1254,6 +1266,10 @@ class SettingsViewModel {
     var historyInfoSize: Int = 100 {
         didSet { AppSettings.shared.historyInfoSize = historyInfoSize }
     }
+
+    // 日志导出 (连点 5 次版本号触发)
+    var versionTapCount = 0
+    var showLogExport = false
 
     // 网络诊断状态
     var isDiagnosing = false

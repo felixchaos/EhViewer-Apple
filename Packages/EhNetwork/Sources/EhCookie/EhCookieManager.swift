@@ -44,11 +44,17 @@ public final class EhCookieManager: @unchecked Sendable {
     }
 
     /// 是否拥有 ExHentai 访问权限
+    /// 校验 igneous 值有效性 — 排除 "mystery", "0", "", "yay" 等已知失效值 (V-14)
     public var hasExhentaiAccess: Bool {
         let cookies = getCookies(for: Self.domainExhentai)
-        return cookies[Self.keyIPBMemberId] != nil
-            && cookies[Self.keyIPBPassHash] != nil
-            && cookies[Self.keyIgneous] != nil
+        guard let _ = cookies[Self.keyIPBMemberId],
+              let _ = cookies[Self.keyIPBPassHash],
+              let igneous = cookies[Self.keyIgneous] else {
+            return false
+        }
+        // igneous 为空、"mystery"、"0"、"yay" 均表示权限已失效
+        let invalidValues: Set<String> = ["mystery", "0", "", "yay"]
+        return !invalidValues.contains(igneous.lowercased())
     }
 
     // MARK: - 读取 Cookie
@@ -155,6 +161,16 @@ public final class EhCookieManager: @unchecked Sendable {
         clearCookies(for: Self.domainEhentai)
         clearCookies(for: Self.domainExhentai)
         clearCookies(for: Self.domainForums)
+    }
+
+    /// 清除 igneous Cookie — Sad Panda 检测后自动调用 (V-15)
+    /// 清除后 hasExhentaiAccess 将返回 false，提示用户重新登录
+    public func clearIgneous() {
+        guard let url = URL(string: "https://exhentai.org") else { return }
+        let cookies = storage.cookies(for: url) ?? []
+        for cookie in cookies where cookie.name == Self.keyIgneous {
+            storage.deleteCookie(cookie)
+        }
     }
 
     /// 清除指定域名的所有 Cookie

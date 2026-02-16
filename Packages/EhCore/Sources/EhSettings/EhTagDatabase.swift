@@ -47,16 +47,32 @@ public final class EhTagDatabase: @unchecked Sendable {
         "r:": "reclass"
     ]
 
-    // MARK: - 属性
+    // MARK: - 线程安全存储 (V-01 fix)
 
-    /// 标签翻译字典 (英文 -> 中文)
-    private var translations: [String: String] = [:]
+    /// 并发读 + barrier 写保护队列 — 所有对 _translations 的访问必须通过此队列
+    private let queue = DispatchQueue(label: "com.ehviewer.tags", attributes: .concurrent)
 
-    /// 数据库是否已加载
-    public private(set) var isLoaded = false
+    /// 标签翻译字典 — 仅在 barrier 块中写入
+    private var _translations: [String: String] = [:]
 
-    /// 数据库版本
-    public private(set) var version: String?
+    /// 预排序键数组 — 用于二分查找前缀匹配 (已 lowercased)
+    private var _sortedKeys: [String] = []
+    /// 对应 _sortedKeys 同索引的翻译值 (原始大小写)
+    private var _sortedValues: [String] = []
+    /// 对应 _sortedKeys 同索引的翻译值 (已 lowercased，用于中文子串匹配)
+    private var _sortedLcValues: [String] = []
+
+    /// 数据库是否已加载 — 通过 queue.sync 读取
+    private var _isLoaded = false
+
+    /// 数据库版本 — 通过 queue.sync 读取
+    private var _version: String?
+
+    /// 线程安全读取 isLoaded
+    public var isLoaded: Bool { queue.sync { _isLoaded } }
+
+    /// 线程安全读取 version
+    public var version: String? { queue.sync { _version } }
 
     /// 数据库文件路径
     private var databasePath: URL {
@@ -65,44 +81,46 @@ public final class EhTagDatabase: @unchecked Sendable {
     }
 
     private init() {
-        // 异步加载数据库，如果不存在则尝试下载
-        Task {
-            await loadDatabase()
-            // 如果数据库未加载且设置了显示标签翻译，则自动下载
-            if !isLoaded {
+        // 在后台 barrier 块中加载 — 不阻塞主线程
+        queue.async(flags: .barrier) { [self] in
+            _loadDatabaseSync()
+            if !_isLoaded {
                 print("[EhTagDatabase] Database not found, attempting download...")
-                try? await updateDatabase(forceUpdate: false)
+                Task { try? await self.updateDatabase(forceUpdate: false) }
             }
         }
     }
 
-    // MARK: - 公开接口
+    // MARK: - 公开接口 (线程安全读)
 
-    /// 获取标签翻译
+    /// 获取标签翻译 — 线程安全
     /// - Parameter tag: 英文标签 (格式: "namespace:tag" 或 "tag")
     /// - Returns: 中文翻译，如果没有则返回 nil
     public func getTranslation(_ tag: String) -> String? {
-        guard isLoaded else { return nil }
-
-        // 标准化标签格式
-        let normalizedTag = tag.lowercased()
-        return translations[normalizedTag]
-    }
-
-    /// 翻译标签数组
-    /// - Parameter tags: 英文标签数组
-    /// - Returns: 翻译结果数组 (保留原始标签如果没有翻译)
-    public func translateTags(_ tags: [String]) -> [String] {
-        tags.map { tag in
-            getTranslation(tag) ?? tag
+        queue.sync {
+            guard _isLoaded else { return nil }
+            return _translations[tag.lowercased()]
         }
     }
 
-    /// 获取带翻译的标签 (英文 + 中文)
+    /// 翻译标签数组 — 线程安全，单次锁定
+    /// - Parameter tags: 英文标签数组
+    /// - Returns: 翻译结果数组 (保留原始标签如果没有翻译)
+    public func translateTags(_ tags: [String]) -> [String] {
+        queue.sync {
+            guard _isLoaded else { return tags }
+            return tags.map { _translations[$0.lowercased()] ?? $0 }
+        }
+    }
+
+    /// 获取带翻译的标签 (英文 + 中文) — 线程安全
     /// - Parameter tag: 英文标签
     /// - Returns: (英文, 中文?) 元组
     public func getTagWithTranslation(_ tag: String) -> (english: String, chinese: String?) {
-        (tag, getTranslation(tag))
+        queue.sync {
+            guard _isLoaded else { return (tag, nil) }
+            return (tag, _translations[tag.lowercased()])
+        }
     }
 
     /// namespace 转前缀
@@ -123,38 +141,46 @@ public final class EhTagDatabase: @unchecked Sendable {
         prefixToNamespace[prefix]
     }
 
-    /// 搜索标签建议 (对齐 Android EhTagDatabase.suggest)
+    /// 搜索标签建议 — 优化版 (V-03 fix, 对齐 Android EhTagDatabase.suggest)
+    /// Phase 1: 二分查找前缀匹配 → O(log N + K)
+    /// Phase 2: 线性扫描子串 + 中文匹配 (预 lowercased 数据，无运行时转换)
     /// - Parameters:
     ///   - keyword: 搜索关键词 (可以是 "namespace:tag" 格式或纯标签)
     ///   - limit: 返回结果数量上限，默认 40
     /// - Returns: 匹配的标签列表 [(chinese, english)]
     public func suggest(_ keyword: String, limit: Int = 40) -> [(chinese: String, english: String)] {
-        guard isLoaded, !keyword.isEmpty else { return [] }
+        queue.sync {
+            guard _isLoaded, !keyword.isEmpty else { return [] }
 
-        let lowered = keyword.lowercased()
-        var results: [(chinese: String, english: String)] = []
-        // 避免重复
-        var seen = Set<String>()
+            let lowered = keyword.lowercased()
+            var results: [(chinese: String, english: String)] = []
+            var seen = Set<String>()
 
-        for (tag, chinese) in translations {
-            // 匹配英文标签 (key) 或中文翻译 (value)
-            if tag.contains(lowered) || chinese.lowercased().contains(lowered) {
-                guard !seen.contains(tag) else { continue }
-                seen.insert(tag)
-                results.append((chinese: chinese, english: tag))
-                if results.count >= limit { break }
+            // Phase 1: 二分查找前缀匹配 (最常见: 用户输入 "a:big" 匹配 "a:big breasts")
+            let startIdx = _lowerBound(for: lowered)
+            for i in startIdx..<_sortedKeys.count {
+                guard results.count < limit else { break }
+                let key = _sortedKeys[i]
+                guard key.hasPrefix(lowered) else { break } // 前缀区间结束
+                seen.insert(key)
+                results.append((chinese: _sortedValues[i], english: key))
             }
-        }
 
-        // 优先把精确前缀匹配排在前面
-        results.sort { a, b in
-            let aStarts = a.english.hasPrefix(lowered) || a.chinese.lowercased().hasPrefix(lowered)
-            let bStarts = b.english.hasPrefix(lowered) || b.chinese.lowercased().hasPrefix(lowered)
-            if aStarts != bStarts { return aStarts }
-            return a.english < b.english
-        }
+            // Phase 2: 子串匹配 + 中文匹配 (补充不足的结果)
+            if results.count < limit {
+                for i in 0..<_sortedKeys.count {
+                    guard results.count < limit else { break }
+                    let key = _sortedKeys[i]
+                    guard !seen.contains(key) else { continue }
+                    if key.contains(lowered) || _sortedLcValues[i].contains(lowered) {
+                        seen.insert(key)
+                        results.append((chinese: _sortedValues[i], english: key))
+                    }
+                }
+            }
 
-        return results
+            return results
+        }
     }
 
     /// 将 "namespace:tag" 格式的标签转为搜索关键词格式
@@ -299,26 +325,36 @@ public final class EhTagDatabase: @unchecked Sendable {
 
     // MARK: - 私有方法
 
-    /// 加载数据库
+    /// 异步加载 — 在 barrier 块中执行 JSON 解析 (更新数据库后调用)
     private func loadDatabase() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            queue.async(flags: .barrier) { [self] in
+                _loadDatabaseSync()
+                cont.resume()
+            }
+        }
+    }
+
+    /// 同步加载 — 必须在 barrier 块中调用
+    private func _loadDatabaseSync() {
         guard FileManager.default.fileExists(atPath: databasePath.path) else {
-            isLoaded = false
+            _isLoaded = false
             return
         }
 
         do {
             let data = try Data(contentsOf: databasePath)
-            try parseDatabase(data)
-            isLoaded = true
+            try _parseDatabaseSync(data)
+            _isLoaded = true
         } catch {
             print("[EhTagDatabase] Failed to load database: \(error)")
-            isLoaded = false
+            _isLoaded = false
         }
     }
 
-    /// 解析数据库 JSON
+    /// 解析数据库 JSON 并构建排序索引 — 必须在 barrier 块中调用 (V-02 fix)
     /// 格式: { "head": {...}, "data": [ { "namespace": "...", "data": { "tag": { "name": "中文名" } } } ] }
-    private func parseDatabase(_ data: Data) throws {
+    private func _parseDatabaseSync(_ data: Data) throws {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw TagDatabaseError.invalidFormat
         }
@@ -327,7 +363,7 @@ public final class EhTagDatabase: @unchecked Sendable {
         if let head = json["head"] as? [String: Any],
            let version = head["committer"] as? [String: Any],
            let when = version["when"] as? String {
-            self.version = when
+            _version = when
         }
 
         // 解析标签数据
@@ -351,7 +387,6 @@ public final class EhTagDatabase: @unchecked Sendable {
                     continue
                 }
 
-                // 构建完整的标签键 (namespace:tag 或 prefix:tag)
                 let fullTag: String
                 if prefix.isEmpty {
                     fullTag = tagName.lowercased()
@@ -361,7 +396,6 @@ public final class EhTagDatabase: @unchecked Sendable {
 
                 newTranslations[fullTag] = chineseName
 
-                // 也存储简化格式 (用于搜索)
                 if !prefix.isEmpty {
                     let shortTag = "\(prefix)\(tagName)".lowercased()
                     newTranslations[shortTag] = chineseName
@@ -369,8 +403,29 @@ public final class EhTagDatabase: @unchecked Sendable {
             }
         }
 
-        translations = newTranslations
-        print("[EhTagDatabase] Loaded \(translations.count) tag translations")
+        _translations = newTranslations
+
+        // 构建预排序索引 (用于二分查找前缀匹配, V-03)
+        let sorted = newTranslations.sorted { $0.key < $1.key }
+        _sortedKeys = sorted.map { $0.key }
+        _sortedValues = sorted.map { $0.value }
+        _sortedLcValues = sorted.map { $0.value.lowercased() }
+
+        print("[EhTagDatabase] Loaded \(newTranslations.count) translations, sorted index built")
+    }
+
+    /// 二分查找 — 定位第一个 >= prefix 的索引 (queue 内部调用)
+    private func _lowerBound(for prefix: String) -> Int {
+        var lo = 0, hi = _sortedKeys.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if _sortedKeys[mid] < prefix {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        return lo
     }
 }
 

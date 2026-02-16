@@ -7,6 +7,7 @@
 
 import Foundation
 import BackgroundTasks
+import EhDownload
 
 /// 后台下载管理器
 /// 负责在 App 进入后台或被挂起时继续下载
@@ -47,15 +48,17 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: downloadTaskIdentifier,
             using: nil
-        ) { task in
-            self.handleBackgroundDownload(task: task as! BGProcessingTask)
+        ) { [weak self] task in
+            guard let processingTask = task as? BGProcessingTask else { return }
+            self?.handleBackgroundDownload(task: processingTask)
         }
 
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: refreshTaskIdentifier,
             using: nil
-        ) { task in
-            self.handleBackgroundRefresh(task: task as! BGAppRefreshTask)
+        ) { [weak self] task in
+            guard let refreshTask = task as? BGAppRefreshTask else { return }
+            self?.handleBackgroundRefresh(task: refreshTask)
         }
         #endif
     }
@@ -94,16 +97,22 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
 
     #if os(iOS) && !targetEnvironment(simulator)
     private func handleBackgroundDownload(task: BGProcessingTask) {
-        scheduleBackgroundDownload() // 重新调度
+        scheduleBackgroundDownload() // 重新调度下次
 
         task.expirationHandler = {
-            // 任务过期时暂停下载
-            self.pauseAllDownloads()
+            // BGProcessingTask 过期时, 暂停活跃下载 (保留 stateWait 以便恢复)
+            Task {
+                await DownloadManager.shared.pauseActiveIfNeeded()
+            }
+            task.setTaskCompleted(success: false)
         }
 
-        // 继续下载队列
+        // 恢复下载队列中等待的任务
         Task {
-            // 这里会调用 DownloadManager 继续下载
+            await DownloadManager.shared.resumeAllWaiting()
+            // 等待当前任务完成或被系统打断
+            // BGProcessingTask 最多有几分钟的执行时间
+            try? await Task.sleep(for: .seconds(2))
             task.setTaskCompleted(success: true)
         }
     }
@@ -176,9 +185,9 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         // 后台下载完成，通知系统
-        DispatchQueue.main.async {
-            self.backgroundCompletionHandler?()
-            self.backgroundCompletionHandler = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.backgroundCompletionHandler?()
+            self?.backgroundCompletionHandler = nil
         }
     }
 }

@@ -2,6 +2,9 @@ import Foundation
 import EhModels
 import EhDatabase
 import EhSpider
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - DownloadManager (对应 Android DownloadManager.java)
 // 下载队列管理 Actor
@@ -135,8 +138,10 @@ public actor DownloadManager {
 
     /// 删除下载 (可选删除文件)
     public func deleteDownload(gid: Int64, deleteFiles: Bool = false) {
-        // 先获取 title 用于定位目录 (必须在 removeAll 之前)
-        let title = downloadQueue.first(where: { $0.gallery.gid == gid })?.gallery.bestTitle
+        // 先获取 gallery 信息 (必须在 removeAll 之前)
+        let task = downloadQueue.first(where: { $0.gallery.gid == gid })
+        let title = task?.gallery.bestTitle
+        let pages = task?.gallery.pages ?? 0
 
         if activeTask?.gallery.gid == gid {
             if let spider = activeTask?.spider {
@@ -149,6 +154,11 @@ public actor DownloadManager {
         try? EhDatabase.shared.deleteDownload(gid: gid)
 
         if deleteFiles {
+            // 清除 SpiderDen 阅读缓存
+            if pages > 0 {
+                SpiderDen.clearCache(forGid: gid, pages: pages)
+            }
+
             if let title = title, !title.isEmpty {
                 // 精确匹配: 使用实际标题
                 let dir = galleryDirectory(gid: gid, title: title)
@@ -207,6 +217,30 @@ public actor DownloadManager {
         self.listener = listener
     }
 
+    // MARK: - 后台任务支持
+
+    /// 暂停当前活跃下载 (用于后台任务过期时, 保留 stateWait 以便恢复)
+    public func pauseActiveIfNeeded() {
+        guard let task = activeTask else { return }
+        if let spider = task.spider {
+            Task { await spider.cancelAll() }
+        }
+        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == task.gallery.gid }) {
+            downloadQueue[index].state = Self.stateWait
+            try? EhDatabase.shared.updateDownloadState(gid: task.gallery.gid, state: Self.stateWait)
+        }
+        activeTask = nil
+        isRunning = false
+    }
+
+    /// 恢复队列处理 (用于 BGProcessingTask 唤醒时)
+    public func resumeAllWaiting() {
+        guard !isRunning else { return }
+        if downloadQueue.contains(where: { $0.state == Self.stateWait }) {
+            processQueue()
+        }
+    }
+
     // MARK: - 队列处理
 
     private func processQueue() {
@@ -229,6 +263,15 @@ public actor DownloadManager {
 
     private func executeDownload(index: Int) async {
         guard index < downloadQueue.count else { return }
+
+        // iOS: 申请后台执行时间, 防止进入后台后 ~30 秒被系统杀死
+        #if canImport(UIKit)
+        let bgTaskId = await MainActor.run {
+            UIApplication.shared.beginBackgroundTask(withName: "EhGalleryDownload") {
+                Task { await DownloadManager.shared.pauseActiveIfNeeded() }
+            }
+        }
+        #endif
 
         let gallery = downloadQueue[index].gallery
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
@@ -292,6 +335,13 @@ public actor DownloadManager {
 
         // 通知监听器下载完成
         await listener?.onDownloadFinish(gid: gallery.gid, title: gallery.bestTitle, success: success)
+
+        // iOS: 释放后台执行时间
+        #if canImport(UIKit)
+        await MainActor.run {
+            UIApplication.shared.endBackgroundTask(bgTaskId)
+        }
+        #endif
 
         activeTask = nil
         processQueue()

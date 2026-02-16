@@ -52,6 +52,14 @@ public actor SpiderDen {
         readCache = SimpleDiskCache(directory: cacheDir, maxSize: cacheSize)
     }
 
+    /// 清除指定画廊的所有缓存图片 (删除画廊时调用, 避免缓存泄漏)
+    public static func clearCache(forGid gid: Int64, pages: Int) {
+        guard let cache = readCache else { return }
+        for i in 0..<pages {
+            cache.remove(key: "image_\(gid)_\(i)")
+        }
+    }
+
     public init(galleryInfo: GalleryInfo) {
         self.gid = galleryInfo.gid
         self.downloadDir = Self.getGalleryDownloadDir(galleryInfo: galleryInfo)

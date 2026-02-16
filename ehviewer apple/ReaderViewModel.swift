@@ -99,6 +99,7 @@ struct PageSpread: Identifiable, Equatable {
 
 // MARK: - ReaderViewModel
 
+@MainActor
 @Observable
 class ReaderViewModel {
 
@@ -164,6 +165,16 @@ class ReaderViewModel {
 
     private static let pTokenUrlPattern = try! NSRegularExpression(
         pattern: #"/s/([0-9a-f]+)/(\d+)-(\d+)"#
+    )
+
+    private static let pagesPattern = try! NSRegularExpression(
+        pattern: #"(\d+)\s*pages?"#, options: .caseInsensitive
+    )
+    private static let imgSrcPattern = try! NSRegularExpression(
+        pattern: #"id="img"\s+src="([^"]+)""#
+    )
+    private static let showKeyPattern = try! NSRegularExpression(
+        pattern: #"var showkey\s*=\s*"([^"]+)""#
     )
 
     // MARK: - Double Page Logic
@@ -330,8 +341,8 @@ class ReaderViewModel {
     // MARK: - Setup
 
     func setupLocalGallery() {
-        guard isDownloaded else { return }
-        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        guard isDownloaded,
+              let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let ehviewerDir = documentsDir.appendingPathComponent("download", isDirectory: true)
         downloadDir = ehviewerDir.appendingPathComponent("\(gid)-\(token)", isDirectory: true)
     }
@@ -371,8 +382,7 @@ class ReaderViewModel {
             let (data, _) = try await Self.session.data(for: request)
             let html = String(data: data, encoding: .utf8) ?? ""
 
-            let pagesRx = try! NSRegularExpression(pattern: #"(\d+)\s*pages?"#, options: .caseInsensitive)
-            if let match = pagesRx.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+            if let match = Self.pagesPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                let range = Range(match.range(at: 1), in: html) {
                 let pages = Int(html[range]) ?? 0
                 await MainActor.run { self.totalPages = pages }
@@ -576,8 +586,7 @@ class ReaderViewModel {
             let (data, _) = try await Self.session.data(for: request)
             let html = String(data: data, encoding: .utf8) ?? ""
 
-            let imgRx = try! NSRegularExpression(pattern: #"id="img"\s+src="([^"]+)""#)
-            if let m = imgRx.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+            if let m = Self.imgSrcPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                let r = Range(m.range(at: 1), in: html) {
                 let imgUrl = String(html[r])
                 GalleryCache.shared.putImageURL(imgUrl, gid: gid, page: index)
@@ -591,8 +600,7 @@ class ReaderViewModel {
                 return
             }
 
-            let skRx = try! NSRegularExpression(pattern: #"var showkey\s*=\s*"([^"]+)""#)
-            if let m = skRx.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+            if let m = Self.showKeyPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                let r = Range(m.range(at: 1), in: html) {
                 showKeys[index] = String(html[r])
             }

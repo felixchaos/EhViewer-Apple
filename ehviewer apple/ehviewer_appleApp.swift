@@ -10,6 +10,7 @@ import UserNotifications
 import EhDownload
 import EhSpider
 import EhSettings
+import EhDatabase
 #if os(iOS)
 import UIKit
 #endif
@@ -34,6 +35,11 @@ struct EhViewerApp: App {
 
         // 初始化 SpiderDen 图片缓存
         SpiderDen.initialize()
+
+        // 数据库维护: 每 7 天自动 VACUUM + WAL checkpoint (V-05 修复)
+        Task.detached(priority: .background) {
+            EhDatabase.shared.performMaintenanceIfNeeded()
+        }
 
         // 注意: 后台任务注册由 AppDelegate.didFinishLaunchingWithOptions 负责
         // 不要在此处重复调用, BGTaskScheduler 对同一 identifier 注册两次会崩溃

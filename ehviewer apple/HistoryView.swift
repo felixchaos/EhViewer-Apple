@@ -163,6 +163,7 @@ extension HistoryRecord {
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
 class HistoryViewModel {
     var records: [HistoryRecord] = []

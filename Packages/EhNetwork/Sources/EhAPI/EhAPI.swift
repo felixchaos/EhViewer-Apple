@@ -102,6 +102,9 @@ public actor EhAPI {
             EhCookieManager.shared.sanitizeCookiesForRequest(url: url)
         }
 
+        // 全局 API 速率限制 — 防止 IP 封禁 (V-08)
+        await EhRateLimiter.shared.waitApiSlot()
+
         do {
             return try await executeWithRetry(maxRetries: Self.maxRetries) {
                 try await self.session.data(for: request)
@@ -117,6 +120,9 @@ public actor EhAPI {
         if let url = request.url {
             EhCookieManager.shared.sanitizeCookiesForRequest(url: url)
         }
+
+        // 全局 API 速率限制 — 防止 IP 封禁 (V-08)
+        await EhRateLimiter.shared.waitApiSlot()
 
         do {
             return try await executeWithRetry(maxRetries: Self.maxRetries) {
@@ -196,7 +202,7 @@ public actor EhAPI {
                 throw error  // 非可重试错误，直接抛出
             }
         }
-        throw lastError!  // 所有重试都失败
+        throw lastError ?? URLError(.unknown)  // 所有重试都失败
     }
 
     /// 判断 URLError 是否可重试
@@ -1088,6 +1094,9 @@ public actor EhAPI {
         if httpResponse.value(forHTTPHeaderField: "Content-Disposition") == Self.sadPandaDisposition,
            httpResponse.value(forHTTPHeaderField: "Content-Type") == Self.sadPandaType,
            httpResponse.value(forHTTPHeaderField: "Content-Length") == Self.sadPandaLength {
+            // 自动清除失效的 igneous Cookie 并通知 UI (V-15)
+            EhCookieManager.shared.clearIgneous()
+            NotificationCenter.default.post(name: .ehSadPandaDetected, object: nil)
             throw EhError.sadPanda
         }
 
@@ -1103,6 +1112,9 @@ public actor EhAPI {
            let url = requestUrl,
            (url == "https://exhentai.org/" || url == "https://exhentai.org"),
            body.isEmpty {
+            // 自动清除失效的 igneous Cookie (V-15)
+            EhCookieManager.shared.clearIgneous()
+            NotificationCenter.default.post(name: .ehSadPandaDetected, object: nil)
             throw EhError.igneousWrong
         }
 
@@ -1267,6 +1279,13 @@ public enum EhError: LocalizedError, Sendable {
         }
         return error.localizedDescription
     }
+}
+
+// MARK: - 通知
+
+public extension Notification.Name {
+    /// Sad Panda / igneous 失效检测通知 — UI 应观察并提示用户重新登录
+    static let ehSadPandaDetected = Notification.Name("ehSadPandaDetected")
 }
 
 // MARK: - API 返回类型 (GalleryListResult, GalleryPageResult, RateResult 定义在 EhModels)
