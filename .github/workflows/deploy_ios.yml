@@ -1,0 +1,303 @@
+# ────────────────────────────────────────────────────────────
+#  EhViewer Apple — Ad-Hoc 构建 & 部署流水线
+#  触发: main 分支 push / 手动 dispatch
+#  目标: RackNerd (Stellatrix.icu) → itms-services 安装
+# ────────────────────────────────────────────────────────────
+
+name: Build & Deploy iOS (Ad-Hoc)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_note:
+        description: "本次构建备注 (会追加到版本标题)"
+        required: false
+        default: ""
+
+# 同一分支只保留最新一次构建
+concurrency:
+  group: deploy-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: "ehviewer apple"
+  PROJECT: "ehviewer apple.xcodeproj"
+  BUNDLE_ID: "Stellatrix.ehviewer-apple"
+  TEAM_ID: "HWZEUNLCY6"
+  ARCHIVE_PATH: build/EhViewer.xcarchive
+  IPA_DIR: build/ipa
+  EXPORT_OPTIONS: build/ExportOptions.plist
+
+jobs:
+  build-and-deploy:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      # ─── 0. 检出代码 ───────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ─── 1. 环境准备: Xcode 版本 ──────────────────────────
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      # ─── 2. 证书 & 描述文件注入 ────────────────────────────
+      - name: Import certificate & provisioning profile
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # 解码证书和描述文件
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+
+          # 创建临时钥匙串
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # 导入证书
+          security import "$CERTIFICATE_PATH" \
+            -P "$P12_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          # 安装描述文件
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< \
+            "$(security cms -D -i "$PP_PATH")")
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PP_UUID.mobileprovision"
+
+          echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
+          echo "✅ Certificate imported, provisioning profile installed: $PP_UUID"
+
+      # ─── 3. 解析 SPM 依赖 ──────────────────────────────────
+      - name: Resolve Swift packages
+        run: |
+          cd "ehviewer apple"
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm_cache"
+
+      # ─── 4. 生成 ExportOptions.plist ────────────────────────
+      - name: Generate ExportOptions.plist
+        run: |
+          mkdir -p build
+          cat > "$EXPORT_OPTIONS" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>teamID</key>
+            <string>HWZEUNLCY6</string>
+            <key>compileBitcode</key>
+            <false/>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>thinning</key>
+            <string>&lt;none&gt;</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>Stellatrix.ehviewer-apple</key>
+              <string>${PP_UUID}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          # 替换 PP_UUID 占位符
+          sed -i '' "s/\${PP_UUID}/$PP_UUID/" "$EXPORT_OPTIONS"
+          echo "✅ ExportOptions.plist generated"
+          cat "$EXPORT_OPTIONS"
+
+      # ─── 5. Archive ─────────────────────────────────────────
+      - name: Archive
+        run: |
+          cd "ehviewer apple"
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "generic/platform=iOS" \
+            -archivePath "../$ARCHIVE_PATH" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm_cache" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            -allowProvisioningUpdates \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | xcpretty || true
+
+          echo "✅ Archive complete"
+          ls -la "../$ARCHIVE_PATH"
+
+      # ─── 6. Export IPA ──────────────────────────────────────
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS" \
+            -exportPath "$IPA_DIR" \
+            | xcpretty || true
+
+          # 重命名为固定文件名
+          IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" | head -1)
+          if [ -z "$IPA_FILE" ]; then
+            echo "❌ No IPA file found!"
+            exit 1
+          fi
+          mv "$IPA_FILE" "$IPA_DIR/EhViewer.ipa"
+
+          echo "✅ IPA exported"
+          ls -lh "$IPA_DIR/EhViewer.ipa"
+
+      # ─── 7. 生成版本信息 ────────────────────────────────────
+      - name: Extract version info
+        id: version
+        run: |
+          PLIST_PATH="$ARCHIVE_PATH/Products/Applications/ehviewer apple.app/Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            # fallback: 从项目读取
+            VERSION="1.0.0"
+            BUILD_NUM="1"
+          else
+            VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST_PATH")
+            BUILD_NUM=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST_PATH")
+          fi
+          DATE=$(date +%Y%m%d)
+          TITLE="EhViewer v${VERSION} (${BUILD_NUM}) - ${DATE}"
+          if [ -n "${{ github.event.inputs.build_note }}" ]; then
+            TITLE="${TITLE} - ${{ github.event.inputs.build_note }}"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD_NUM" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "📦 $TITLE"
+
+      # ─── 8. 生成 manifest.plist ─────────────────────────────
+      - name: Generate manifest.plist
+        run: |
+          cat > "$IPA_DIR/manifest.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>https://ios.stellatrix.icu/EhViewer.ipa</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key>
+                  <string>${{ env.BUNDLE_ID }}</string>
+                  <key>bundle-version</key>
+                  <string>${{ steps.version.outputs.version }}</string>
+                  <key>kind</key>
+                  <string>software</string>
+                  <key>title</key>
+                  <string>${{ steps.version.outputs.title }}</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+          echo "✅ manifest.plist generated"
+          cat "$IPA_DIR/manifest.plist"
+
+      # ─── 9. 部署到 Stellatrix 服务器 ────────────────────────
+      - name: Deploy to Stellatrix
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: "build/ipa/EhViewer.ipa,build/ipa/manifest.plist"
+          target: "/var/www/html/ios/"
+          strip_components: 2
+
+      # ─── 10. 服务器后处理 ───────────────────────────────────
+      - name: Post-deploy setup
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            cd /var/www/html/ios/
+            chmod 644 EhViewer.ipa manifest.plist
+            echo "$(date): Deployed ${{ steps.version.outputs.title }}" >> deploy.log
+            echo "✅ Files deployed and permissions set"
+            ls -lh EhViewer.ipa manifest.plist
+
+      # ─── 11. 清理钥匙串 ────────────────────────────────────
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+      # ─── 12. 构建摘要 ──────────────────────────────────────
+      - name: Build summary
+        if: success()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════"
+          echo "  ✅ 构建 & 部署成功"
+          echo "──────────────────────────────────────────────"
+          echo "  版本: ${{ steps.version.outputs.title }}"
+          echo "  提交: ${{ github.sha }}"
+          echo ""
+          echo "  📲 安装链接:"
+          echo "  https://ios.stellatrix.icu"
+          echo ""
+          echo "  📦 直接安装 (Safari 打开):"
+          echo "  itms-services://?action=download-manifest&url=https://ios.stellatrix.icu/manifest.plist"
+          echo "══════════════════════════════════════════════"
+
+          # GitHub Actions Job Summary
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ## 📱 EhViewer iOS 部署成功
+
+          | 项目 | 值 |
+          |------|-----|
+          | **版本** | ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }}) |
+          | **日期** | ${{ steps.version.outputs.date }} |
+          | **提交** | \`${{ github.sha }}\` |
+
+          ### 安装方式
+          Safari 打开: \`itms-services://?action=download-manifest&url=https://ios.stellatrix.icu/manifest.plist\`
+
+          或访问: [https://ios.stellatrix.icu](https://ios.stellatrix.icu)
+          EOF
