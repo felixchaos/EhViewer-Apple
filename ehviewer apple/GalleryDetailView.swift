@@ -253,8 +253,8 @@ struct GalleryDetailView: View {
                 showFavoritePicker = true
             })
             Divider().frame(height: 32)
-            actionButton(icon: vm.isDownloading ? "arrow.down.circle.fill" : "arrow.down.circle",
-                         title: vm.isDownloading ? "下载中" : "下载") {
+            actionButton(icon: vm.downloadIcon,
+                         title: vm.downloadTitle) {
                 Task { await vm.startDownload(gallery: gallery) }
             }
             Divider().frame(height: 32)
@@ -594,7 +594,7 @@ class GalleryDetailViewModel {
     var errorMessage: String?
     var detail: GalleryDetail?
     var isFavorited = false
-    var isDownloading = false
+    var downloadState: Int = -1 // DownloadManager.stateInvalid
     var startReading = false
     var readerInitialPage: Int? = nil  // 对齐 Android GalleryActivity.KEY_PAGE
     var displayRating: Float?
@@ -622,10 +622,13 @@ class GalleryDetailViewModel {
 
         // 1) 先查内存缓存 (对标 Android: EhApplication.getGalleryDetailCache().get(gid))
         if let cached = GalleryCache.shared.getDetail(gid: gid) {
+            // 查询下载状态 (对齐 Android: DownloadManager 状态查询)
+            let dlState = await DownloadManager.shared.getTaskState(gid: gid)
             await MainActor.run {
                 self.detail = cached
                 self.isFavorited = cached.isFavorited
                 self.displayRating = cached.info.rating
+                self.downloadState = dlState
                 self.isLoading = false
             }
             // DEBUG: Print cached data
@@ -650,10 +653,14 @@ class GalleryDetailViewModel {
             // 2) 存入缓存 (对标 Android: EhApplication.getGalleryDetailCache().put(result.gid, result))
             GalleryCache.shared.putDetail(result)
 
+            // 查询下载状态
+            let dlState = await DownloadManager.shared.getTaskState(gid: gid)
+
             await MainActor.run {
                 self.detail = result
                 self.isFavorited = result.isFavorited
                 self.displayRating = result.info.rating
+                self.downloadState = dlState
                 self.isLoading = false
             }
 
@@ -707,7 +714,38 @@ class GalleryDetailViewModel {
 
     func startDownload(gallery: GalleryInfo) async {
         await GalleryActionService.shared.startDownload(gallery: gallery)
-        await MainActor.run { self.isDownloading = true }
+        let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
+        await MainActor.run { self.downloadState = state }
+    }
+
+    /// 根据 downloadState 返回按钮图标 (对齐 Android 下载状态)
+    var downloadIcon: String {
+        switch downloadState {
+        case DownloadManager.stateDownload, DownloadManager.stateWait:
+            return "arrow.down.circle.fill"
+        case DownloadManager.stateFinish:
+            return "checkmark.circle.fill"
+        case DownloadManager.stateFailed:
+            return "exclamationmark.circle"
+        default:
+            return "arrow.down.circle"
+        }
+    }
+
+    /// 根据 downloadState 返回按钮标题
+    var downloadTitle: String {
+        switch downloadState {
+        case DownloadManager.stateDownload:
+            return "下载中"
+        case DownloadManager.stateWait:
+            return "等待中"
+        case DownloadManager.stateFinish:
+            return "已下载"
+        case DownloadManager.stateFailed:
+            return "失败"
+        default:
+            return "下载"
+        }
     }
 
     func rateGallery(gid: Int64, token: String, rating: Float) async {

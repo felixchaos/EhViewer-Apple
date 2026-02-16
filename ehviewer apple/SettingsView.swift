@@ -7,6 +7,9 @@
 
 import SwiftUI
 import EhSettings
+import EhDownload
+import EhDatabase
+import EhSpider
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
@@ -39,7 +42,9 @@ struct SettingsView: View {
         Form {
             accountSection
             siteSection
+            #if DEBUG
             filterSection
+            #endif
             displaySection
             favoritesSection
             networkSection
@@ -159,7 +164,8 @@ struct SettingsView: View {
                 Text("网格").tag(2)
             }
 
-            // 详情页大小 (对齐 Android Settings.KEY_DETAIL_SIZE)
+            // TODO: Connect to Logic — detailSize 未被 GalleryDetailView 读取
+            #if DEBUG
             Picker("详情页大小", selection: Binding(
                 get: { AppSettings.shared.detailSize },
                 set: { AppSettings.shared.detailSize = $0 }
@@ -167,6 +173,7 @@ struct SettingsView: View {
                 Text("常规").tag(0)
                 Text("大号").tag(1)
             }
+            #endif
 
             Toggle("显示日文标题", isOn: $vm.showJpnTitle)
 
@@ -224,34 +231,35 @@ struct SettingsView: View {
                 FilterView()
             }
 
-            // 移动网络警告 (对齐 Android: cellular_network_warning)
+            // TODO: Connect to Logic — cellularNetworkWarning 未被网络层检查
+            #if DEBUG
             Toggle("移动网络提醒", isOn: Binding(
                 get: { AppSettings.shared.cellularNetworkWarning },
                 set: { AppSettings.shared.cellularNetworkWarning = $0 }
             ))
+            #endif
         }
     }
 
     // MARK: - Filter / Search (对齐 Android: 默认分类/排除标签命名空间/排除语言)
-
+    // TODO: Connect to Logic — defaultCategories/excludedTagNamespaces/excludedLanguages 未作为 URL 参数发送
+    #if DEBUG
     private var filterSection: some View {
         Section("搜索过滤") {
-            // 默认搜索分类 (对齐 Android Settings.KEY_DEFAULT_CATEGORIES)
             NavigationLink("默认搜索分类") {
                 defaultCategoriesView
             }
 
-            // 排除的标签命名空间 (对齐 Android Settings.KEY_EXCLUDED_TAG_NAMESPACES)
             NavigationLink("排除的标签命名空间") {
                 excludedNamespacesView
             }
 
-            // 排除的语言 (对齐 Android Settings.KEY_EXCLUDED_LANGUAGES)
             NavigationLink("排除的语言") {
                 excludedLanguagesView
             }
         }
     }
+    #endif
 
     // MARK: - Network
 
@@ -263,11 +271,13 @@ struct SettingsView: View {
 
             Toggle("内置 Hosts", isOn: $vm.builtInHosts)
 
-            // 内置 ExH Hosts (对齐 Android: built_ex_hosts)
+            // TODO: Connect to Logic — builtExHosts 未被 EhDNS 读取
+            #if DEBUG
             Toggle("内置 ExH Hosts", isOn: Binding(
                 get: { AppSettings.shared.builtExHosts },
                 set: { AppSettings.shared.builtExHosts = $0 }
             ))
+            #endif
             
             // 网络诊断按钮
             Button {
@@ -322,27 +332,37 @@ struct SettingsView: View {
                 Text("历史").tag(5)
             }
 
+            // TODO: Connect to Logic — showGalleryPages 未被列表视图读取
+            #if DEBUG
             Toggle("显示画廊页数", isOn: Binding(
                 get: { AppSettings.shared.showGalleryPages },
                 set: { AppSettings.shared.showGalleryPages = $0 }
             ))
+            #endif
 
             Toggle("显示评论区", isOn: Binding(
                 get: { AppSettings.shared.showGalleryComment },
                 set: { AppSettings.shared.showGalleryComment = $0 }
             ))
 
+            // TODO: Connect to Logic — showGalleryRating 未被详情页读取(评分始终显示)
+            #if DEBUG
             Toggle("显示评分", isOn: Binding(
                 get: { AppSettings.shared.showGalleryRating },
                 set: { AppSettings.shared.showGalleryRating = $0 }
             ))
+            #endif
 
+            // TODO: Connect to Logic — showReadProgress 未被列表视图读取
+            #if DEBUG
             Toggle("显示阅读进度", isOn: Binding(
                 get: { AppSettings.shared.showReadProgress },
                 set: { AppSettings.shared.showReadProgress = $0 }
             ))
+            #endif
 
-            // 缩略图大小 (对齐 Android Settings.KEY_THUMB_SIZE)
+            // TODO: Connect to Logic — thumbSize 未被列表/图片视图读取
+            #if DEBUG
             Picker("缩略图大小", selection: Binding(
                 get: { AppSettings.shared.thumbSize },
                 set: { AppSettings.shared.thumbSize = $0 }
@@ -351,8 +371,10 @@ struct SettingsView: View {
                 Text("中").tag(1)
                 Text("大").tag(2)
             }
+            #endif
 
-            // 缩略图分辨率 (对齐 Android Settings.KEY_THUMB_RESOLUTION)
+            // TODO: Connect to Logic — thumbResolution 未被任何代码读取
+            #if DEBUG
             Picker("缩略图分辨率", selection: Binding(
                 get: { AppSettings.shared.thumbResolution },
                 set: { AppSettings.shared.thumbResolution = $0 }
@@ -360,12 +382,15 @@ struct SettingsView: View {
                 Text("普通").tag(0)
                 Text("高清").tag(1)
             }
+            #endif
 
-            // 修复缩略图 URL (对齐 Android Settings.KEY_FIX_THUMB_URL)
+            // TODO: Connect to Logic — fixThumbUrl 未被图片加载代码读取
+            #if DEBUG
             Toggle("修复缩略图链接", isOn: Binding(
                 get: { AppSettings.shared.fixThumbUrl },
                 set: { AppSettings.shared.fixThumbUrl = $0 }
             ))
+            #endif
 
             // 大屏幕列表布局 (对齐 Android: 全宽单列表布局选项)
             Picker("宽屏布局", selection: Binding(
@@ -502,14 +527,14 @@ struct SettingsView: View {
                 set: { AppSettings.shared.showPageInterval = $0 }
             ))
 
-            #if os(iOS)
+            // TODO: Connect to Logic — volumePage/reverseVolumePage 未被 ImageReaderView 读取
+            #if DEBUG && os(iOS)
             Toggle("音量键翻页", isOn: Binding(
                 get: { AppSettings.shared.volumePage },
                 set: { AppSettings.shared.volumePage = $0 }
             ))
 
             if AppSettings.shared.volumePage {
-                // 反转音量键 (对齐 Android Settings.KEY_READING_DIRECTION 反转)
                 Toggle("反转音量键方向", isOn: Binding(
                     get: { AppSettings.shared.reverseVolumePage },
                     set: { AppSettings.shared.reverseVolumePage = $0 }
@@ -535,10 +560,13 @@ struct SettingsView: View {
             // 自动翻页间隔 (对齐 Android Settings.KEY_AUTO_PAGE_INTERVAL)
             Stepper("自动翻页间隔: \(vm.autoPageInterval)s", value: $vm.autoPageInterval, in: 1...60)
 
+            // TODO: Connect to Logic — colorFilter/colorFilterColor 未被 ImageReaderView 读取
+            #if DEBUG
             Toggle("色彩滤镜 (护眼)", isOn: Binding(
                 get: { AppSettings.shared.colorFilter },
                 set: { AppSettings.shared.colorFilter = $0 }
             ))
+            #endif
         }
     }
 
@@ -569,7 +597,8 @@ struct SettingsView: View {
             // 下载延迟 (对齐 Android Settings.KEY_DOWNLOAD_DELAY)
             Stepper("下载延迟: \(vm.downloadDelay) ms", value: $vm.downloadDelay, in: 0...2000, step: 100)
 
-            // 图片分辨率设置 (对齐 Android Settings.KEY_IMAGE_RESOLUTION)
+            // TODO: Connect to Logic — imageResolution 未作为请求参数发送
+            #if DEBUG
             Picker("图片分辨率", selection: Binding(
                 get: { AppSettings.shared.imageResolution },
                 set: { AppSettings.shared.imageResolution = $0 }
@@ -578,6 +607,7 @@ struct SettingsView: View {
                     Text(resolution.displayName).tag(resolution)
                 }
             }
+            #endif
 
             // 下载原图 (对齐 Android Settings.KEY_DOWNLOAD_ORIGIN_IMAGE)
             Toggle("下载原始图片", isOn: Binding(
@@ -585,20 +615,66 @@ struct SettingsView: View {
                 set: { AppSettings.shared.downloadOriginImage = $0 }
             ))
 
-            // 媒体扫描 (对齐 Android: media_scan)
+            // TODO: Connect to Logic — mediaScan 是 Android 概念，iOS 无意义
+            #if DEBUG
             Toggle("媒体扫描", isOn: Binding(
                 get: { AppSettings.shared.mediaScan },
                 set: { AppSettings.shared.mediaScan = $0 }
             ))
+            #endif
 
             // 恢复下载项目 (对齐 Android: restore_download_items)
-            Button("恢复下载项目") {
+            Button {
                 vm.restoreDownloadItems()
+            } label: {
+                HStack {
+                    Text("恢复下载项目")
+                    Spacer()
+                    if vm.isRestoring {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    }
+                }
+            }
+            .disabled(vm.isRestoring)
+
+            if let msg = vm.restoreResultMessage {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             // 清除冗余数据 (对齐 Android: clean_redundancy)
-            Button("清除下载冗余数据") {
+            Button {
                 vm.cleanRedundancy()
+            } label: {
+                HStack {
+                    Text("清除下载冗余数据")
+                    Spacer()
+                    if vm.isCleaning {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    }
+                }
+            }
+            .disabled(vm.isCleaning)
+            .confirmationDialog(
+                "发现 \(vm.cleanOrphanCount) 个冗余目录 (\(vm.cleanOrphanSize))，确认删除？",
+                isPresented: $vm.showCleanConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) {
+                    vm.confirmCleanRedundancy()
+                }
+                Button("取消", role: .cancel) {
+                    vm.cancelClean()
+                }
+            }
+
+            if let msg = vm.cleanResultMessage {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -671,11 +747,13 @@ struct SettingsView: View {
             // 历史记录容量 (对齐 Android Settings.KEY_HISTORY_INFO_SIZE)
             Stepper("历史记录上限: \(vm.historyInfoSize)", value: $vm.historyInfoSize, in: 100...2000, step: 100)
 
-            // 保存解析错误 (对齐 Android Settings.KEY_SAVE_PARSE_ERROR_BODY)
+            // TODO: Connect to Logic — saveParseErrorBody 未被解析器读取
+            #if DEBUG
             Toggle("保存解析错误", isOn: Binding(
                 get: { AppSettings.shared.saveParseErrorBody },
                 set: { AppSettings.shared.saveParseErrorBody = $0 }
             ))
+            #endif
 
             // 导出数据 (对齐 Android: export_data)
             Button("导出数据") {
@@ -1375,16 +1453,228 @@ class SettingsViewModel {
 
     // MARK: - 下载管理 (对齐 Android)
 
+    // MARK: - 恢复/清理 状态
+    var isRestoring = false
+    var restoreResultMessage: String?
+    var isCleaning = false
+    var cleanResultMessage: String?
+    var showCleanConfirm = false
+    var cleanOrphanCount = 0
+    var cleanOrphanSize: String = ""
+
     /// 恢复下载项目 (对齐 Android: RestoreDownloadPreference)
+    /// 扫描下载目录中的 .ehviewer 文件，将不在数据库中的画廊重新加入下载记录
     func restoreDownloadItems() {
-        // TODO: 从下载目录扫描已有画廊并恢复下载记录
-        print("[SettingsVM] Restore download items - not yet implemented")
+        guard !isRestoring else { return }
+        isRestoring = true
+        restoreResultMessage = nil
+
+        Task {
+            let downloadDir = DownloadManager.shared.downloadDirectory
+            var restoredCount = 0
+            var errorCount = 0
+
+            let fm = FileManager.default
+            guard let contents = try? fm.contentsOfDirectory(
+                at: downloadDir, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                await MainActor.run {
+                    self.restoreResultMessage = "无法读取下载目录"
+                    self.isRestoring = false
+                }
+                return
+            }
+
+            // 获取数据库中已有的 gid 集合
+            let existingGids: Set<Int64>
+            do {
+                let records = try EhDatabase.shared.getAllDownloads()
+                existingGids = Set(records.map { $0.gid })
+            } catch {
+                await MainActor.run {
+                    self.restoreResultMessage = "数据库读取失败: \(error.localizedDescription)"
+                    self.isRestoring = false
+                }
+                return
+            }
+
+            for dir in contents where dir.hasDirectoryPath {
+                let ehviewerFile = dir.appendingPathComponent(".ehviewer")
+                guard fm.fileExists(atPath: ehviewerFile.path) else { continue }
+
+                // 读取 SpiderInfo 以获取 gid/token/pages
+                guard let spiderInfo = SpiderInfoFile.read(from: dir) else { continue }
+                guard spiderInfo.gid > 0, !spiderInfo.token.isEmpty else { continue }
+
+                // 跳过已在数据库中的
+                if existingGids.contains(spiderInfo.gid) { continue }
+
+                // 从目录名提取标题: 格式为 "gid-title"
+                let dirName = dir.lastPathComponent
+                let prefix = "\(spiderInfo.gid)-"
+                let title = dirName.hasPrefix(prefix) ? String(dirName.dropFirst(prefix.count)) : dirName
+
+                // 统计已下载页数
+                let imageFiles = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))
+                    .map { $0.filter { url in
+                        let ext = url.pathExtension.lowercased()
+                        return ["jpg", "jpeg", "png", "gif", "webp"].contains(ext)
+                    }.count } ?? 0
+
+                let record = DownloadRecord(
+                    gid: spiderInfo.gid,
+                    token: spiderInfo.token,
+                    title: title,
+                    pages: spiderInfo.pages,
+                    state: imageFiles >= spiderInfo.pages ? DownloadManager.stateFinish : DownloadManager.stateNone,
+                    date: Date()
+                )
+
+                do {
+                    try EhDatabase.shared.insertDownload(record)
+                    restoredCount += 1
+                } catch {
+                    errorCount += 1
+                }
+            }
+
+            await MainActor.run {
+                if restoredCount > 0 {
+                    self.restoreResultMessage = "成功恢复 \(restoredCount) 个下载项目" + (errorCount > 0 ? " (\(errorCount) 个失败)" : "")
+                } else {
+                    self.restoreResultMessage = "没有需要恢复的下载项目"
+                }
+                self.isRestoring = false
+            }
+        }
     }
 
     /// 清除冗余数据 (对齐 Android: CleanRedundancyPreference)
+    /// 扫描下载目录，找出不在数据库记录中的孤立文件夹，提示用户确认删除
     func cleanRedundancy() {
-        // TODO: 扫描下载目录并清除不在数据库中的文件
-        print("[SettingsVM] Clean redundancy - not yet implemented")
+        guard !isCleaning else { return }
+        isCleaning = true
+        cleanResultMessage = nil
+
+        Task {
+            let downloadDir = DownloadManager.shared.downloadDirectory
+            let fm = FileManager.default
+
+            guard let contents = try? fm.contentsOfDirectory(
+                at: downloadDir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                await MainActor.run {
+                    self.cleanResultMessage = "无法读取下载目录"
+                    self.isCleaning = false
+                }
+                return
+            }
+
+            // 获取数据库中所有 gid
+            let dbGids: Set<Int64>
+            do {
+                let records = try EhDatabase.shared.getAllDownloads()
+                dbGids = Set(records.map { $0.gid })
+            } catch {
+                await MainActor.run {
+                    self.cleanResultMessage = "数据库读取失败"
+                    self.isCleaning = false
+                }
+                return
+            }
+
+            // 找出孤立目录 (目录名以 gid- 开头，但 gid 不在数据库中)
+            var orphanDirs: [URL] = []
+            var totalSize: Int64 = 0
+            for dir in contents where dir.hasDirectoryPath {
+                let dirName = dir.lastPathComponent
+                // 尝试提取 gid (格式: "gid-title")
+                if let dashRange = dirName.firstIndex(of: "-"),
+                   let gid = Int64(dirName[dirName.startIndex..<dashRange]) {
+                    if !dbGids.contains(gid) {
+                        orphanDirs.append(dir)
+                        // 计算目录大小
+                        if let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
+                            for case let fileURL as URL in enumerator {
+                                let size = (try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0
+                                totalSize += Int64(size)
+                            }
+                        }
+                    }
+                }
+            }
+
+            let formatter = ByteCountFormatter()
+            formatter.allowedUnits = [.useMB, .useGB]
+            formatter.countStyle = .file
+            let sizeStr = formatter.string(fromByteCount: totalSize)
+
+            await MainActor.run {
+                if orphanDirs.isEmpty {
+                    self.cleanResultMessage = "没有冗余数据"
+                    self.isCleaning = false
+                } else {
+                    self.cleanOrphanCount = orphanDirs.count
+                    self.cleanOrphanSize = sizeStr
+                    self.showCleanConfirm = true
+                    // isCleaning 保持 true 直到用户确认或取消
+                }
+            }
+        }
+    }
+
+    /// 确认清除冗余数据 — 实际删除孤立目录
+    func confirmCleanRedundancy() {
+        Task {
+            let downloadDir = DownloadManager.shared.downloadDirectory
+            let fm = FileManager.default
+
+            guard let contents = try? fm.contentsOfDirectory(
+                at: downloadDir, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                await MainActor.run {
+                    self.cleanResultMessage = "清除失败"
+                    self.isCleaning = false
+                }
+                return
+            }
+
+            let dbGids: Set<Int64>
+            do {
+                let records = try EhDatabase.shared.getAllDownloads()
+                dbGids = Set(records.map { $0.gid })
+            } catch {
+                await MainActor.run {
+                    self.cleanResultMessage = "清除失败"
+                    self.isCleaning = false
+                }
+                return
+            }
+
+            var deletedCount = 0
+            for dir in contents where dir.hasDirectoryPath {
+                let dirName = dir.lastPathComponent
+                if let dashRange = dirName.firstIndex(of: "-"),
+                   let gid = Int64(dirName[dirName.startIndex..<dashRange]),
+                   !dbGids.contains(gid) {
+                    try? fm.removeItem(at: dir)
+                    deletedCount += 1
+                }
+            }
+
+            await MainActor.run {
+                self.cleanResultMessage = "已清除 \(deletedCount) 个冗余目录"
+                self.isCleaning = false
+            }
+        }
+    }
+
+    func cancelClean() {
+        isCleaning = false
+        cleanResultMessage = nil
     }
 
     /// 清除内存缓存
