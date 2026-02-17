@@ -11,6 +11,7 @@ import SwiftUI
 import EhModels
 import EhSpider
 import EhSettings
+import EhDatabase
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -31,7 +32,6 @@ struct ImageReaderView: View {
     let token: String
     let pages: Int
     let previewSet: PreviewSet?
-    let isDownloaded: Bool
     /// 初始页面 (0-based, 对齐 Android GalleryActivityEvent.page)
     let initialPage: Int?
 
@@ -61,6 +61,8 @@ struct ImageReaderView: View {
     @State private var lastScrollChangeTime: Date = .distantPast
     @State private var verticalZoomScale: CGFloat = 1.0
     @State private var verticalBaseScale: CGFloat = 1.0
+    /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
+    @State private var verticalPageInterval: Bool = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -69,36 +71,26 @@ struct ImageReaderView: View {
     /// 纵向边缘死区比例 (上下各 15%)
     private let tapZoneVerticalDeadZone: CGFloat = 0.15
 
-    /// 显式初始化器
+    /// 显式初始化器 (Fix D-2: 移除 isDownloaded 参数，由 ReaderViewModel 自行检查)
     init(
         gid: Int64,
         token: String,
         pages: Int,
         previewSet: PreviewSet? = nil,
-        isDownloaded: Bool = false,
         initialPage: Int? = nil
     ) {
         self.gid = gid
         self.token = token
         self.pages = pages
         self.previewSet = previewSet
-        self.isDownloaded = isDownloaded
         self.initialPage = initialPage
 
         let viewModel = ReaderViewModel()
         viewModel.gid = gid
         viewModel.token = token
-        viewModel.totalPages = pages
-        viewModel.isDownloaded = isDownloaded
-
-        if let initial = initialPage, initial >= 0 && initial < pages {
-            viewModel.currentPage = initial
-        } else {
-            let key = "reading_progress_\(gid)"
-            if let saved = UserDefaults.standard.object(forKey: key) as? Int, pages > 0 {
-                viewModel.currentPage = min(saved, max(0, pages - 1))
-            }
-        }
+        // Fix Race: 不在 init 中设置 totalPages — 延迟到 initializeReader()
+        // 中 setupLocalGallery() 完成后再设置，防止页面 .task 在 isDownloaded
+        // 确定前就触发 loadPage → 已下载画廊首页无意义走网络
 
         self._vm = State(initialValue: viewModel)
     }
@@ -131,18 +123,21 @@ struct ImageReaderView: View {
                     hudOverlay(geometry: geometry)
                 }
 
+                // 浮动导航按钮 (工具栏隐藏时显示，提供翻页+工具栏切换)
+                floatingNavigationOverlay(geometry: geometry)
+
                 // 新手教程
                 if showTutorial {
                     readerTutorialOverlay(geometry: geometry)
                 }
             }
             .onAppear {
-                // 检测宽屏 → 双页模式
-                vm.updateLayout(screenWidth: geometry.size.width)
+                // 检测宽屏+横屏 → 双页模式 (iPad 竖屏不触发)
+                vm.updateLayout(screenWidth: geometry.size.width, screenHeight: geometry.size.height)
                 vm.computeSpreads()
             }
-            .onChange(of: geometry.size.width) { _, newWidth in
-                vm.updateLayout(screenWidth: newWidth)
+            .onChange(of: geometry.size) { _, newSize in
+                vm.updateLayout(screenWidth: newSize.width, screenHeight: newSize.height)
             }
         }
         #if os(iOS)
@@ -159,6 +154,8 @@ struct ImageReaderView: View {
         .onDisappear(perform: cleanupReader)
         .task {
             await initializeReader()
+            // Fix F2-2: 只有真正打开阅读器才记录历史 (从详情页 loadDetail 迁移到这里)
+            recordReadingHistory()
         }
         .sheet(isPresented: $showSettings) {
             ReaderSettingsSheet(
@@ -225,15 +222,15 @@ struct ImageReaderView: View {
     // MARK: - Ambient Background (模糊氛围背景)
 
     /// 主色调氛围背景 — 使用当前页的 CIAreaAverage 提取色填充未覆盖区域
+    /// 修复: 翻页时如果新页颜色未就绪，保持上一页颜色而非闪黑
     @ViewBuilder
     private var ambientBackground: some View {
-        if let color = vm.dominantColors[vm.currentPage] {
-            color
-                .ignoresSafeArea()
-                .animation(.easeInOut(duration: 0.5), value: vm.currentPage)
-        } else {
-            Color.black.ignoresSafeArea()
-        }
+        let color = vm.dominantColors[vm.currentPage]
+            ?? vm.dominantColors.values.first
+            ?? Color.black
+        color
+            .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.4), value: vm.dominantColors[vm.currentPage] != nil)
     }
 
     // MARK: - Setup
@@ -242,6 +239,7 @@ struct ImageReaderView: View {
         readingDirection = ReadingDirection(rawValue: AppSettings.shared.readingDirection) ?? .rightToLeft
         scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
         startPosition = StartPosition(rawValue: AppSettings.shared.startPosition) ?? .topRight
+        verticalPageInterval = AppSettings.shared.showPageInterval
 
         #if os(iOS)
         if AppSettings.shared.keepScreenOn {
@@ -287,8 +285,62 @@ struct ImageReaderView: View {
         saveReadingProgress()
     }
 
+    /// Fix F2-2: 只有真正打开阅读器才计入历史 (从 GalleryDetailViewModel.loadDetail 迁移至此)
+    private func recordReadingHistory() {
+        // 从缓存中获取画廊信息
+        if let detail = GalleryCache.shared.getDetail(gid: gid) {
+            let info = detail.info
+            var record = HistoryRecord(
+                gid: info.gid, token: info.token,
+                title: info.bestTitle, category: info.category.rawValue,
+                pages: info.pages, mode: 0, date: Date()
+            )
+            record.titleJpn = info.titleJpn
+            record.thumb = info.thumb
+            record.posted = info.posted
+            record.uploader = info.uploader
+            record.rating = info.rating
+            do {
+                try EhDatabase.shared.insertHistory(record)
+                try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+            } catch {
+                debugLog("Failed to record reading history: \(error)")
+            }
+        } else {
+            // 没有缓存时使用最少的信息 (从下载列表直接打开的情况)
+            let record = HistoryRecord(
+                gid: gid, token: token,
+                title: "", category: 0,
+                pages: pages, mode: 0, date: Date()
+            )
+            do {
+                try EhDatabase.shared.insertHistory(record)
+                try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+            } catch {
+                debugLog("Failed to record reading history: \(error)")
+            }
+        }
+
+        // 记录最后阅读的画廊 GID (给"继续阅读"功能使用)
+        UserDefaults.standard.set(gid, forKey: "eh_last_reading_gid")
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "eh_last_reading_time")
+    }
+
     private func initializeReader() async {
-        vm.setupLocalGallery()
+        // 🛡️ 身份守卫: 将 View 持有的 gid 显式传给 ViewModel
+        // Context Switch → resetState() → UI 立即转 Loading
+        // Hit Cache → 跳过整个初始化流程
+        let needsLoad = vm.prepareForGallery(targetGid: gid, targetToken: token)
+        guard needsLoad else { return }
+
+        // Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，替代硬编码 isDownloaded
+        await vm.setupLocalGallery()
+
+        // Fix Race: setupLocalGallery 完成后再设置 totalPages
+        // 这样页面视图的 .task 不会在 isDownloaded 确定前触发 loadPage
+        if pages > 0 {
+            vm.totalPages = pages
+        }
 
         if let ps = previewSet {
             vm.extractPTokens(from: ps)
@@ -301,6 +353,7 @@ struct ImageReaderView: View {
         // 获取页数后重算 spreads
         vm.computeSpreads()
 
+        // Fix Race: 阅读进度恢复移到这里 (从 init 迁移)
         if let initial = initialPage, initial >= 0, initial < vm.totalPages {
             vm.currentPage = initial
         } else if initialPage == nil {
@@ -329,47 +382,38 @@ struct ImageReaderView: View {
     private func goToNextPage() {
         if vm.isDoublePageEnabled {
             // 双页模式: 按 spread 翻页
-            let nextSpread = vm.currentSpreadIndex + 1
+            let nextSpread = (vm.currentSpreadIndex ?? 0) + 1
             guard nextSpread < vm.spreads.count else { return }
             let nextPage = vm.pageForSpread(nextSpread)
-            withAnimation(.easeInOut(duration: 0.15)) {
-                vm.currentPage = nextPage
-                vm.currentSpreadIndex = nextSpread
-            }
+            // 不使用 withAnimation: TabView 自带翻页动画，额外动画会导致闪烁
+            vm.currentPage = nextPage
+            vm.currentSpreadIndex = nextSpread
             Task { await vm.onPageChange(nextPage) }
         } else {
             guard vm.currentPage < vm.totalPages - 1 else { return }
-            withAnimation(.easeInOut(duration: 0.15)) {
-                vm.currentPage += 1
-            }
+            vm.currentPage += 1
             Task { await vm.onPageChange(vm.currentPage) }
         }
     }
 
     private func goToPreviousPage() {
         if vm.isDoublePageEnabled {
-            let prevSpread = vm.currentSpreadIndex - 1
+            let prevSpread = (vm.currentSpreadIndex ?? 0) - 1
             guard prevSpread >= 0 else { return }
             let prevPage = vm.pageForSpread(prevSpread)
-            withAnimation(.easeInOut(duration: 0.15)) {
-                vm.currentPage = prevPage
-                vm.currentSpreadIndex = prevSpread
-            }
+            vm.currentPage = prevPage
+            vm.currentSpreadIndex = prevSpread
             Task { await vm.onPageChange(prevPage) }
         } else {
             guard vm.currentPage > 0 else { return }
-            withAnimation(.easeInOut(duration: 0.15)) {
-                vm.currentPage -= 1
-            }
+            vm.currentPage -= 1
             Task { await vm.onPageChange(vm.currentPage) }
         }
     }
 
     private func goToPage(_ page: Int) {
         let target = max(0, min(vm.totalPages - 1, page))
-        withAnimation(.easeInOut(duration: 0.15)) {
-            vm.currentPage = target
-        }
+        vm.currentPage = target
         if vm.isDoublePageEnabled {
             vm.syncSpreadIndex()
         }
@@ -402,23 +446,31 @@ struct ImageReaderView: View {
     }
 
     // MARK: - Horizontal Page Reader (iOS)
+    // Perf P0-1: 使用 ScrollView + LazyHStack + .scrollTargetBehavior(.paging) 替代 TabView
+    // TabView(.page) 是非懒加载的 — 会一次性实例化所有子 View
+    // LazyHStack 只创建可见区域内的 View，40 页画廊 → 仅 ~3 个 View
 
     private func horizontalPageReader(geometry: GeometryProxy) -> some View {
         Group {
             if vm.isDoublePageEnabled {
                 // 双页模式: 按 spread 遍历，每个 spread 显示合成图
-                TabView(selection: $vm.currentSpreadIndex) {
-                    ForEach(vm.spreads) { spread in
-                        spreadPageView(spread: spread)
-                            .tag(spread.id)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(vm.spreads) { spread in
+                            spreadPageView(spread: spread)
+                                .containerRelativeFrame(.horizontal)
+                                .id(spread.id)
+                        }
                     }
                 }
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $vm.currentSpreadIndex)
                 #if os(iOS)
-                .tabViewStyle(.page(indexDisplayMode: .never))
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
                 .onChange(of: vm.currentSpreadIndex) { _, newIdx in
-                    let page = vm.pageForSpread(newIdx)
+                    guard let idx = newIdx else { return }
+                    let page = vm.pageForSpread(idx)
                     if vm.currentPage != page {
                         vm.currentPage = page
                     }
@@ -427,19 +479,32 @@ struct ImageReaderView: View {
                 }
             } else {
                 // 单页模式
-                TabView(selection: $vm.currentPage) {
-                    ForEach(0..<vm.totalPages, id: \.self) { idx in
-                        pageImage(index: idx)
-                            .tag(idx)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(0..<vm.totalPages, id: \.self) { idx in
+                            pageImage(index: idx)
+                                .containerRelativeFrame(.horizontal)
+                                .id(idx)
+                        }
                     }
                 }
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $vm.lazyCurrentPage)
                 #if os(iOS)
-                .tabViewStyle(.page(indexDisplayMode: .never))
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
-                .onChange(of: vm.currentPage) { _, newPage in
+                .onChange(of: vm.lazyCurrentPage) { _, newPage in
+                    if let page = newPage, page != vm.currentPage {
+                        vm.currentPage = page
+                    }
                     saveReadingProgress()
-                    Task { await vm.onPageChange(newPage) }
+                    Task { await vm.onPageChange(vm.currentPage) }
+                }
+                .onChange(of: vm.currentPage) { _, newPage in
+                    // 外部翻页 (键盘/浮动按钮/slider) → 同步 scrollPosition
+                    if vm.lazyCurrentPage != newPage {
+                        vm.lazyCurrentPage = newPage
+                    }
                 }
             }
         }
@@ -451,8 +516,9 @@ struct ImageReaderView: View {
     private func macOSPageReader(geometry: GeometryProxy) -> some View {
         ZStack {
             if vm.isDoublePageEnabled {
-                let spread = vm.currentSpreadIndex < vm.spreads.count
-                    ? vm.spreads[vm.currentSpreadIndex]
+                let spreadIdx = vm.currentSpreadIndex ?? 0
+                let spread = spreadIdx < vm.spreads.count
+                    ? vm.spreads[spreadIdx]
                     : vm.spreads.last ?? PageSpread(id: 0, primaryPage: 0, secondaryPage: nil)
                 spreadPageView(spread: spread)
             } else {
@@ -562,38 +628,30 @@ struct ImageReaderView: View {
     }
 
     // MARK: - Vertical Scroll Reader
+    // Perf P0-2: 使用 .scrollPosition(id:) 替代 GeometryReader + PreferenceKey
+    // 原实现每个 page item 绑定 GeometryReader，滚动每帧触发 preference 级联
+    // .scrollPosition 是 SwiftUI 原生 API，内部由 runtime 高效追踪
 
     private func verticalScrollReader(geometry: GeometryProxy) -> some View {
         let contentWidth = geometry.size.width * verticalZoomScale
+        let showInterval = verticalPageInterval
 
         return ScrollViewReader { proxy in
             ScrollView([.vertical, .horizontal], showsIndicators: false) {
-                LazyVStack(spacing: AppSettings.shared.showPageInterval ? 8 : 0) {
+                LazyVStack(spacing: showInterval ? 8 : 0) {
                     ForEach(0..<vm.totalPages, id: \.self) { idx in
                         verticalPageImage(index: idx)
                             .frame(width: contentWidth)
                             .id(idx)
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: PageOffsetPreferenceKey.self,
-                                        value: [idx: geo.frame(in: .named("readerScroll")).minY]
-                                    )
-                                }
-                            )
                     }
                 }
             }
+            .scrollTargetLayout()
+            .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
             .contentShape(Rectangle())
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    if Date().timeIntervalSince(lastScrollChangeTime) < 0.3 { return }
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showOverlay.toggle()
-                    }
-                }
-            )
+            // 移除了 TapGesture: 防止滚动时疯狂误触工具栏
+            // 工具栏切换改由底部浮动导航栏的中央按钮触发
             #if os(iOS)
             .simultaneousGesture(
                 MagnifyGesture()
@@ -611,7 +669,6 @@ struct ImageReaderView: View {
                     }
             )
             #endif
-            .coordinateSpace(name: "readerScroll")
             .onAppear {
                 if vm.currentPage > 0 && !hasAppliedInitialScroll {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -620,30 +677,30 @@ struct ImageReaderView: View {
                         withTransaction(transaction) {
                             proxy.scrollTo(vm.currentPage, anchor: .top)
                         }
+                        vm.verticalScrollPage = vm.currentPage
                         hasAppliedInitialScroll = true
                     }
                 }
             }
-            .onChange(of: vm.currentPage) { _, newPage in
-                if !isUpdatingFromScroll {
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        proxy.scrollTo(newPage, anchor: .top)
-                    }
-                    saveReadingProgress()
-                }
-            }
-            .onPreferenceChange(PageOffsetPreferenceKey.self) { offsets in
-                guard !offsets.isEmpty else { return }
-                let nearest = offsets.min { abs($0.value) < abs($1.value) }
-                guard let current = nearest?.key, current != vm.currentPage else { return }
+            .onChange(of: vm.verticalScrollPage) { _, newPage in
+                // 滚动引起的页码变化 → 同步 currentPage
+                guard let page = newPage, page != vm.currentPage else { return }
                 isUpdatingFromScroll = true
-                vm.currentPage = current
+                vm.currentPage = page
                 lastScrollChangeTime = Date()
                 saveReadingProgress()
                 DispatchQueue.main.async {
                     self.isUpdatingFromScroll = false
+                }
+            }
+            .onChange(of: vm.currentPage) { _, newPage in
+                // 外部翻页 (键盘/slider/浮动按钮) → 滚动到目标页
+                if !isUpdatingFromScroll {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(newPage, anchor: .top)
+                    }
+                    vm.verticalScrollPage = newPage
+                    saveReadingProgress()
                 }
             }
         }
@@ -1000,8 +1057,8 @@ struct ImageReaderView: View {
 
             // 页码显示 (双页模式标注 spread)
             Group {
-                if vm.isDoublePageEnabled, vm.currentSpreadIndex < vm.spreads.count {
-                    let spread = vm.spreads[vm.currentSpreadIndex]
+                if vm.isDoublePageEnabled, (vm.currentSpreadIndex ?? 0) < vm.spreads.count {
+                    let spread = vm.spreads[vm.currentSpreadIndex ?? 0]
                     if let sec = spread.secondaryPage {
                         Text("\(spread.primaryPage + 1)-\(sec + 1) / \(vm.totalPages)")
                     } else {
@@ -1160,6 +1217,66 @@ struct ImageReaderView: View {
         }
     }
 
+    // MARK: - Floating Navigation Overlay (浮动导航)
+
+    /// 浮动导航栏 — 工具栏隐藏时始终可见，提供翻页和工具栏切换
+    /// 修复: 上下滚动模式无法翻页 + 没有上/下一页按钮
+    @ViewBuilder
+    private func floatingNavigationOverlay(geometry: GeometryProxy) -> some View {
+        if !showOverlay && vm.totalPages > 0 {
+            let isRTL = readingDirection == .rightToLeft
+            let isVertical = readingDirection == .topToBottom
+            let isFirstPage = vm.currentPage <= 0
+            let isLastPage = vm.currentPage >= vm.totalPages - 1
+
+            VStack {
+                Spacer()
+
+                HStack(spacing: 0) {
+                    // 左侧 / 上一页按钮
+                    Button {
+                        if isRTL { goToNextPage() } else { goToPreviousPage() }
+                    } label: {
+                        Image(systemName: isVertical ? "chevron.up" : "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 40)
+                    }
+                    .disabled(isRTL ? isLastPage : isFirstPage)
+                    .opacity((isRTL ? isLastPage : isFirstPage) ? 0.25 : 0.8)
+
+                    Divider().frame(height: 20).overlay(Color.white.opacity(0.2))
+
+                    // 中央: 页码 + 点击切换工具栏
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showOverlay.toggle() }
+                    } label: {
+                        Text("\(vm.currentPage + 1) / \(vm.totalPages)")
+                            .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(minWidth: 64, maxHeight: 40)
+                    }
+
+                    Divider().frame(height: 20).overlay(Color.white.opacity(0.2))
+
+                    // 右侧 / 下一页按钮
+                    Button {
+                        if isRTL { goToPreviousPage() } else { goToNextPage() }
+                    } label: {
+                        Image(systemName: isVertical ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 40)
+                    }
+                    .disabled(isRTL ? isFirstPage : isLastPage)
+                    .opacity((isRTL ? isFirstPage : isLastPage) ? 0.25 : 0.8)
+                }
+                .background(.black.opacity(0.35), in: Capsule())
+                .padding(.bottom, max(16, geometry.safeAreaInsets.bottom + 4))
+            }
+        }
+    }
+
     private var batteryView: some View {
         HStack(spacing: 2) {
             #if os(iOS)
@@ -1302,15 +1419,7 @@ struct ReaderSettingsSheet: View {
     }
 }
 
-// MARK: - Page Offset Preference Key
-
-private struct PageOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: [Int: CGFloat] = [:]
-
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { $1 })
-    }
-}
+// Perf P0-2: PageOffsetPreferenceKey 已移除 — 改用 .scrollPosition(id:) 追踪页码
 
 // MARK: - Edge Swipe Dismiss (iOS fullScreenCover 边缘侧滑返回)
 

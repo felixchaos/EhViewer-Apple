@@ -118,8 +118,17 @@ struct GalleryDetailView: View {
             )
         }
         #endif
-        .task {
+        .task(id: gallery.gid) {
+            // 画廊 ID 变更时重置 VM 状态并重新加载 (修复 SwiftUI 视图复用 bug)
+            vm.reset()
             await vm.loadDetail(gid: gallery.gid, token: gallery.token)
+        }
+        // Fix F3-2: 每次详情页出现时重新查询下载状态 (解决导航栈返回时状态不同步)
+        .onAppear {
+            Task {
+                let dlState = await DownloadManager.shared.getTaskState(gid: gallery.gid)
+                await MainActor.run { vm.downloadState = dlState }
+            }
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .downloadGallery)) { _ in
@@ -225,8 +234,9 @@ struct GalleryDetailView: View {
 
     private var actionBar: some View {
         HStack(spacing: 0) {
-            let readTitle = hasReadingProgress ? "继续阅读" : "阅读"
+            let readTitle = vm.hasReadingProgress ? "继续阅读" : "阅读"
             actionButton(icon: "book", title: readTitle) {
+                Haptics.tap()
                 // 对齐 Android: 阅读按钮不传 KEY_PAGE，让阅读器自行恢复进度
                 vm.readerInitialPage = nil
                 vm.startReading = true
@@ -235,6 +245,7 @@ struct GalleryDetailView: View {
             actionButton(icon: vm.isFavorited ? "heart.fill" : "heart",
                          title: vm.isFavorited ? "已收藏" : "收藏",
                          action: {
+                Haptics.impact()
                 if vm.isFavorited {
                     Task { await vm.removeFavorite(gid: gallery.gid, token: gallery.token) }
                 } else {
@@ -255,7 +266,15 @@ struct GalleryDetailView: View {
             Divider().frame(height: 32)
             actionButton(icon: vm.downloadIcon,
                          title: vm.downloadTitle) {
-                Task { await vm.startDownload(gallery: gallery) }
+                // Fix F1-4: 已下载状态 → 打开阅读器，不是重新下载
+                if vm.downloadState == DownloadManager.stateFinish {
+                    Haptics.tap()
+                    vm.readerInitialPage = nil
+                    vm.startReading = true
+                } else {
+                    Haptics.impact()
+                    Task { await vm.startDownload(gallery: gallery) }
+                }
             }
             Divider().frame(height: 32)
             actionButton(icon: "square.and.arrow.up", title: "分享") {
@@ -318,11 +337,6 @@ struct GalleryDetailView: View {
             LongPressGesture(minimumDuration: 0.5)
                 .onEnded { _ in longPressAction?() }
         )
-    }
-
-    private var hasReadingProgress: Bool {
-        let key = "reading_progress_\(gallery.gid)"
-        return UserDefaults.standard.object(forKey: key) != nil
     }
 
     // MARK: - Tags
@@ -491,8 +505,8 @@ struct GalleryDetailView: View {
 
     private var commentSection: some View {
         let maxShowCount = 2 // Android: maxShowCount = 2
-        let displayComments = Array(vm.comments.prefix(maxShowCount))
-        let hasMore = vm.comments.count > maxShowCount || vm.hasMoreComments
+        let displayComments = Array(vm.processedComments.prefix(maxShowCount))
+        let hasMore = vm.processedComments.count > maxShowCount || vm.hasMoreComments
         
         return VStack(alignment: .leading, spacing: 8) {
             Divider()
@@ -526,7 +540,7 @@ struct GalleryDetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
             } else {
-                ForEach(Array(displayComments.enumerated()), id: \.offset) { idx, comment in
+                ForEach(displayComments) { comment in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(comment.user)
@@ -541,17 +555,14 @@ struct GalleryDetailView: View {
                                     .foregroundStyle(comment.score > 0 ? .green : .red)
                             }
                         }
-                        // 评论内容是 HTML，简单显示纯文本，限制5行
-                        Text(comment.comment.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+                        // Perf P0-4: 使用预处理的纯文本，避免 body 内正则计算
+                        Text(comment.strippedBody)
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(5) // Android: setMaxLines(5)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 4)
-                    if idx < displayComments.count - 1 {
-                        Divider().padding(.leading)
-                    }
                 }
             }
         }
@@ -595,11 +606,42 @@ class GalleryDetailViewModel {
     var errorMessage: String?
     var detail: GalleryDetail?
     var isFavorited = false
-    var downloadState: Int = -1 // DownloadManager.stateInvalid
+    var downloadState: Int = DownloadManager.stateInvalid
     var startReading = false
     var readerInitialPage: Int? = nil  // 对齐 Android GalleryActivity.KEY_PAGE
     var displayRating: Float?
     var isLoadingComments = false
+    /// Perf P0-5: 一次性读取阅读进度，避免 body 中读 UserDefaults
+    var hasReadingProgress = false
+    /// Perf P0-4: 预处理后的评论 (HTML 已剥离，避免 body 中执行 regex)
+    var processedComments: [ProcessedComment] = []
+    /// Fix F3-4: 下载状态轮询任务
+    nonisolated(unsafe) var downloadPollingTask: Task<Void, Never>?
+
+    // MARK: - Processed Comment (Perf P0-4)
+
+    /// 预处理后的评论结构体 — 在 loadDetail 成功后后台计算
+    struct ProcessedComment: Identifiable {
+        let id: Int64
+        let user: String
+        let time: Date
+        let score: Int
+        let strippedBody: String  // HTML 已剥离的纯文本
+    }
+
+    /// 预编译正则 (避免每次调用都重新编译)
+    private static let htmlTagRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "<[^>]+>", options: [])
+    }()
+
+    /// 从 HTML 中剥离标签 — 使用预编译正则
+    private static func stripHTML(_ html: String) -> String {
+        guard let regex = htmlTagRegex else {
+            return html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        return regex.stringByReplacingMatches(in: html, options: [], range: range, withTemplate: "")
+    }
 
     // 从 GalleryDetail 导出的便捷属性
     var tags: [GalleryTagGroup] { detail?.tags ?? [] }
@@ -618,6 +660,27 @@ class GalleryDetailViewModel {
     var size: String? { detail?.size }
     var canRate: Bool { detail?.apiUid ?? -1 > 0 && !(detail?.apiKey.isEmpty ?? true) }
 
+    deinit {
+        downloadPollingTask?.cancel()
+    }
+
+    /// 重置所有状态，准备加载新画廊 (修复 SwiftUI 视图复用导致显示旧数据的问题)
+    func reset() {
+        downloadPollingTask?.cancel()
+        downloadPollingTask = nil
+        isLoading = false
+        errorMessage = nil
+        detail = nil
+        isFavorited = false
+        downloadState = DownloadManager.stateInvalid
+        startReading = false
+        readerInitialPage = nil
+        displayRating = nil
+        isLoadingComments = false
+        hasReadingProgress = false
+        processedComments = []
+    }
+
     func loadDetail(gid: Int64, token: String) async {
         guard !isLoading else { return }
 
@@ -632,9 +695,11 @@ class GalleryDetailViewModel {
                 self.downloadState = dlState
                 self.isLoading = false
             }
-            // DEBUG: Print cached data
-            print("[DEBUG] Loaded from cache - Comments: \(cached.comments.comments.count), HasMore: \(cached.comments.hasMore)")
-            print("[DEBUG] PreviewSet: \(String(describing: cached.previewSet))")
+            // Perf P0-4: 预处理评论 HTML
+            preprocessComments(cached.comments.comments)
+            // Perf P0-5: 一次性检查阅读进度
+            checkReadingProgress(gid: gid)
+            debugLog("Loaded from cache - Comments: \(cached.comments.comments.count), HasMore: \(cached.comments.hasMore)")
             return
         }
 
@@ -644,31 +709,34 @@ class GalleryDetailViewModel {
         do {
             let site = GalleryActionService.siteBaseURL
             let urlStr = "\(site)g/\(gid)/\(token)/"
-            print("[DEBUG] Fetching detail from: \(urlStr)")
+            debugLog("Fetching detail from: \(urlStr)")
             let result = try await EhAPI.shared.getGalleryDetail(url: urlStr)
-
-            // DEBUG: Print parsed data
-            print("[DEBUG] Parsed - Comments: \(result.comments.comments.count), HasMore: \(result.comments.hasMore)")
-            print("[DEBUG] PreviewSet: \(String(describing: result.previewSet))")
 
             // 2) 存入缓存 (对标 Android: EhApplication.getGalleryDetailCache().put(result.gid, result))
             GalleryCache.shared.putDetail(result)
 
             // 查询下载状态
             let dlState = await DownloadManager.shared.getTaskState(gid: gid)
+            // Fix B-2: 同时检查服务器收藏和本地收藏
+            let hasLocalFav = (try? EhDatabase.shared.containsLocalFavorite(gid: gid)) ?? false
 
             await MainActor.run {
                 self.detail = result
-                self.isFavorited = result.isFavorited
+                self.isFavorited = result.isFavorited || hasLocalFav
                 self.displayRating = result.info.rating
                 self.downloadState = dlState
                 self.isLoading = false
             }
 
-            // 3) 自动记录浏览历史 (对齐 Android GalleryDetailScene.onGetGalleryDetailSuccess)
-            recordHistory(info: result.info)
+            // Perf P0-4: 预处理评论 HTML
+            preprocessComments(result.comments.comments)
+            // Perf P0-5: 一次性检查阅读进度
+            checkReadingProgress(gid: gid)
+
+            // Fix F3-4: 如果当前正在下载，启动轮询任务监听状态变化
+            startDownloadPollingIfNeeded(gid: gid)
         } catch {
-            print("[DEBUG] Error loading detail: \(error)")
+            debugLog("Error loading detail: \(error)")
             await MainActor.run {
                 self.errorMessage = EhError.localizedMessage(for: error)
                 self.isLoading = false
@@ -676,9 +744,16 @@ class GalleryDetailViewModel {
         }
     }
 
+    /// Fix B-3: 乐观更新 + API 失败回滚
     func addFavorite(gid: Int64, token: String, slot: Int) async {
-        await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
-        await MainActor.run { self.isFavorited = true }
+        self.isFavorited = true  // 乐观更新
+        do {
+            try await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
+            Haptics.success()
+        } catch {
+            self.isFavorited = false  // 回滚
+            self.errorMessage = "收藏失败: \(error.localizedDescription)"
+        }
     }
 
     /// 添加到本地收藏 (对齐 Android FAV_CAT_LOCAL = -1, EhDB.putLocalFavorite)
@@ -687,9 +762,39 @@ class GalleryDetailViewModel {
         self.isFavorited = true
     }
 
+    /// Fix B-3: 乐观更新 + API 失败回滚
     func removeFavorite(gid: Int64, token: String) async {
-        await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
-        await MainActor.run { self.isFavorited = false }
+        self.isFavorited = false  // 乐观更新
+        do {
+            try await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
+            Haptics.impact()
+        } catch {
+            self.isFavorited = true  // 回滚
+            self.errorMessage = "取消收藏失败: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Perf P0-4: 预处理评论 HTML
+
+    /// 在 loadDetail 成功后调用 — 后台剥离 HTML 标签，View body 直接读取纯文本
+    func preprocessComments(_ rawComments: [GalleryComment]) {
+        processedComments = rawComments.map { comment in
+            ProcessedComment(
+                id: comment.id,
+                user: comment.user,
+                time: comment.time,
+                score: comment.score,
+                strippedBody: Self.stripHTML(comment.comment)
+            )
+        }
+    }
+
+    // MARK: - Perf P0-5: 一次性检查阅读进度
+
+    /// 在 loadDetail 成功后调用 — 避免 body 每次重算时读 UserDefaults
+    func checkReadingProgress(gid: Int64) {
+        let key = "reading_progress_\(gid)"
+        hasReadingProgress = UserDefaults.standard.object(forKey: key) != nil
     }
 
     /// 自动记录浏览历史 (对齐 Android EhDB.putHistoryInfo)
@@ -709,7 +814,7 @@ class GalleryDetailViewModel {
             // 限制历史记录数量 (对齐 Android Settings.getHistoryInfoSize())
             try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
         } catch {
-            print("Failed to record history: \(error)")
+            debugLog("Failed to record history: \(error)")
         }
     }
 
@@ -717,6 +822,34 @@ class GalleryDetailViewModel {
         await GalleryActionService.shared.startDownload(gallery: gallery)
         let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
         await MainActor.run { self.downloadState = state }
+        // Fix F3-4: 开始下载后启动轮询
+        startDownloadPollingIfNeeded(gid: gallery.gid)
+    }
+
+    /// Fix F3-4: 当下载状态为进行中/等待时，每 2 秒轮询状态更新
+    func startDownloadPollingIfNeeded(gid: Int64) {
+        // 只在下载中/等待中状态才轮询
+        guard downloadState == DownloadManager.stateDownload || downloadState == DownloadManager.stateWait else {
+            downloadPollingTask?.cancel()
+            downloadPollingTask = nil
+            return
+        }
+        // 避免重复启动
+        guard downloadPollingTask == nil else { return }
+
+        downloadPollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self = self else { break }
+                let newState = await DownloadManager.shared.getTaskState(gid: gid)
+                self.downloadState = newState
+                // 状态不再是“进行中”时停止轮询
+                if newState != DownloadManager.stateDownload && newState != DownloadManager.stateWait {
+                    break
+                }
+            }
+            self?.downloadPollingTask = nil
+        }
     }
 
     /// 根据 downloadState 返回按钮图标 (对齐 Android 下载状态)
@@ -765,7 +898,7 @@ class GalleryDetailViewModel {
                 self.displayRating = result.rating > 0 ? Float(result.rating) : rating
             }
         } catch {
-            print("Rate gallery failed: \(error)")
+            debugLog("Rate gallery failed: \(error)")
         }
     }
 
@@ -796,7 +929,7 @@ class GalleryDetailViewModel {
             await MainActor.run {
                 self.isLoadingComments = false
             }
-            print("Load all comments failed: \(error)")
+            debugLog("Load all comments failed: \(error)")
         }
     }
 
@@ -865,6 +998,7 @@ struct RatingSheet: View {
                         .foregroundStyle(.orange)
                         .onTapGesture {
                             selectedRating = Float(i) + 1.0
+                            Haptics.select()
                         }
                 }
             }
@@ -880,6 +1014,7 @@ struct RatingSheet: View {
                 .buttonStyle(.bordered)
 
                 Button("确定") {
+                    Haptics.success()
                     onRate(selectedRating)
                     dismiss()
                 }

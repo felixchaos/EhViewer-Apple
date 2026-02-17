@@ -160,7 +160,7 @@ final class DownloadLiveActivityManager {
         endActivity()
 
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("[LiveActivity] Live Activities 未启用")
+            debugLog("[LiveActivity] Live Activities 未启用")
             return
         }
 
@@ -180,9 +180,9 @@ final class DownloadLiveActivityManager {
                 pushType: nil
             )
             currentActivity = activity
-            print("[LiveActivity] 已启动: \(activity.id)")
+            debugLog("[LiveActivity] 已启动: \(activity.id)")
         } catch {
-            print("[LiveActivity] 启动失败: \(error)")
+            debugLog("[LiveActivity] 启动失败: \(error)")
         }
     }
 

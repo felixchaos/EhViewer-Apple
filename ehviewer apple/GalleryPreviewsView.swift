@@ -188,7 +188,7 @@ class GalleryPreviewsViewModel {
         do {
             let site = GalleryActionService.siteBaseURL
             let urlStr = "\(site)g/\(gid)/\(token)/?p=\(nextPage)"
-            print("[DEBUG] Loading preview page \(nextPage): \(urlStr)")
+            debugLog("Loading preview page \(nextPage): \(urlStr)")
             let (previewSet, _) = try await EhAPI.shared.getPreviewSet(url: urlStr)
             
             await MainActor.run {
@@ -197,10 +197,10 @@ class GalleryPreviewsViewModel {
                 self.currentPage = nextPage
                 self.isLoadingMore = false
                 self.isLoading = false
-                print("[DEBUG] Loaded preview page \(nextPage) with \(previewSet.count) items, total: \(allPreviews.count)")
+                debugLog("Loaded preview page \(nextPage) with \(previewSet.count) items, total: \(allPreviews.count)")
             }
         } catch {
-            print("[DEBUG] Failed to load preview page \(nextPage): \(error)")
+            debugLog("Failed to load preview page \(nextPage): \(error)")
             await MainActor.run {
                 self.isLoadingMore = false
                 self.isLoading = false

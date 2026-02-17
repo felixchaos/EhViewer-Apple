@@ -1,0 +1,21 @@
+Phase 2-4: 资源稳定性、日志/隐私、代码审查修复
+
+Phase 2 — 资源与稳定性:
+- EhDatabase: 添加 WAL 模式和定期 VACUUM 维护
+- DownloadManager/SpiderDen: 下载后台保护与缓存清理
+- EhRateLimiter: 新增令牌桶限流器 (actor)
+- EhCookieManager/EhTagDatabase: 安全性改进
+
+Phase 3 — 最终打磨:
+- LogManager: OSLog + 文件日志记录与日志轮转
+- LogExportView: 日志导出 UI (设置页5次点击彩蛋)
+- PrivacyInfo.xcprivacy: 隐私清单
+- AppErrorHandling: 全局错误边界 ViewModifier
+- RootView/SettingsView: 集成错误处理与日志导出
+
+Phase 4 — 对抗性代码审查修复:
+- @MainActor: 6个 ViewModel 添加主线程隔离
+- Force unwrap 消除: .first! -> guard let, lastError! -> ??
+- Retain cycle 修复: BGTaskScheduler 闭包添加 [weak self]
+- try! regex 提升为 static let 编译期常量
+- BackgroundDownloadManager: as! -> guard as? 安全转换

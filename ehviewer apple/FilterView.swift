@@ -245,7 +245,7 @@ class FilterViewModel {
         do {
             filters = try EhDatabase.shared.getAllFilters()
         } catch {
-            print("Failed to load filters: \(error)")
+            debugLog("Failed to load filters: \(error)")
         }
     }
 
@@ -255,7 +255,7 @@ class FilterViewModel {
             try EhDatabase.shared.insertFilter(record)
             loadFilters()
         } catch {
-            print("Failed to add filter: \(error)")
+            debugLog("Failed to add filter: \(error)")
         }
     }
 
@@ -270,7 +270,7 @@ class FilterViewModel {
             try EhDatabase.shared.insertFilter(newFilter)
             loadFilters()
         } catch {
-            print("Failed to toggle filter: \(error)")
+            debugLog("Failed to toggle filter: \(error)")
         }
     }
 
@@ -281,7 +281,7 @@ class FilterViewModel {
             do {
                 try EhDatabase.shared.deleteFilter(id: id)
             } catch {
-                print("Failed to delete filter: \(error)")
+                debugLog("Failed to delete filter: \(error)")
             }
         }
         loadFilters()
@@ -294,7 +294,7 @@ class FilterViewModel {
             do {
                 try EhDatabase.shared.deleteFilter(id: id)
             } catch {
-                print("Failed to delete filter: \(error)")
+                debugLog("Failed to delete filter: \(error)")
             }
         }
         loadFilters()

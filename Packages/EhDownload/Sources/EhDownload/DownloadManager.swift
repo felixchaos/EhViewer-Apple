@@ -82,10 +82,18 @@ public actor DownloadManager {
 
     // MARK: - 公共接口
 
-    /// 添加下载任务
+    /// 添加下载任务 (Fix A-1: 已有 failed/none 状态时自动恢复而非静默忽略)
     public func startDownload(gallery: GalleryInfo, label: String? = nil) async {
         // 检查是否已在队列中
-        if downloadQueue.contains(where: { $0.gallery.gid == gallery.gid }) {
+        if let existingIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }) {
+            let existingState = downloadQueue[existingIndex].state
+            if existingState == Self.stateNone || existingState == Self.stateFailed {
+                // 已暂停或已失败 → 重置为等待并恢复
+                downloadQueue[existingIndex].state = Self.stateWait
+                try? EhDatabase.shared.updateDownloadState(gid: gallery.gid, state: Self.stateWait)
+                if !isRunning { processQueue() }
+            }
+            // stateWait / stateDownload / stateFinish → 不重复操作
             return
         }
 
@@ -367,10 +375,26 @@ public actor DownloadManager {
 
     // MARK: - 文件管理
 
+    // MARK: - 路径统一 (Fix D-1, A-3: 全局唯一的目录命名算法)
+
+    /// 文件名清理 (移除非法字符) — 公开静态方法，保证所有组件使用同一逻辑
+    public nonisolated static func sanitizeFilename(_ name: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        let sanitized = name.components(separatedBy: illegal).joined(separator: "_")
+        let trimmed = sanitized.prefix(128)
+        return String(trimmed).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// 画廊目录名 — 唯一真相源 (所有路径引用必须通过此方法)
+    /// 格式: `{gid}-{sanitizeFilename(title).prefix(128)}`
+    public nonisolated static func galleryDirectoryName(gid: Int64, title: String) -> String {
+        let sanitized = sanitizeFilename(title)
+        return "\(gid)-\(sanitized)"
+    }
+
     /// 画廊下载目录 (对应 Android: gid-sanitized_title)
     public nonisolated func galleryDirectory(gid: Int64, title: String) -> URL {
-        let sanitized = sanitizeFilename(title)
-        let dirName = "\(gid)-\(sanitized)"
+        let dirName = Self.galleryDirectoryName(gid: gid, title: title)
         return downloadDirectory.appendingPathComponent(dirName)
     }
 
@@ -379,12 +403,20 @@ public actor DownloadManager {
         String(format: "%08d%@", index + 1, ext)
     }
 
-    /// 文件名清理 (移除非法字符)
-    private nonisolated func sanitizeFilename(_ name: String) -> String {
-        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|")
-        let sanitized = name.components(separatedBy: illegal).joined(separator: "_")
-        let trimmed = sanitized.prefix(128)
-        return String(trimmed).trimmingCharacters(in: .whitespaces)
+    // MARK: - 下载状态真实检查 (Fix D-2, B-1)
+
+    /// 检查画廊是否已完整下载 — 同时验证数据库状态 AND 磁盘文件存在
+    public func isGalleryFullyDownloaded(gid: Int64) -> Bool {
+        guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }),
+              task.state == Self.stateFinish else { return false }
+        let dir = galleryDirectory(gid: gid, title: task.gallery.bestTitle)
+        return FileManager.default.fileExists(atPath: dir.path)
+    }
+
+    /// 获取已下载画廊的目录路径 (由 ReaderViewModel 调用，替代硬编码路径)
+    public func getDownloadedGalleryDirectory(gid: Int64) -> URL? {
+        guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }) else { return nil }
+        return galleryDirectory(gid: gid, title: task.gallery.bestTitle)
     }
 }
 

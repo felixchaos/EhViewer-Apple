@@ -59,9 +59,9 @@ struct EhViewerApp: App {
         Task.detached(priority: .background) {
             do {
                 try await EhTagDatabase.shared.updateDatabase(forceUpdate: false)
-                print("[EhTagDatabase] Auto-update check completed")
+                debugLog("[EhTagDatabase] Auto-update check completed")
             } catch {
-                print("[EhTagDatabase] Auto-update failed: \(error)")
+                debugLog("[EhTagDatabase] Auto-update failed: \(error)")
             }
         }
     }

@@ -72,9 +72,9 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
 
         do {
             try BGTaskScheduler.shared.submit(request)
-            print("Background download task scheduled")
+            debugLog("Background download task scheduled")
         } catch {
-            print("Failed to schedule background download: \(error)")
+            debugLog("Failed to schedule background download: \(error)")
         }
         #endif
     }
@@ -88,7 +88,7 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
-            print("Failed to schedule background refresh: \(error)")
+            debugLog("Failed to schedule background refresh: \(error)")
         }
         #endif
     }
@@ -185,7 +185,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             // 存储 resume data，下次可以恢复下载
             let key = "resumeData_\(task.taskIdentifier)"
             UserDefaults.standard.set(resumeData, forKey: key)
-            print("[BackgroundDownload] 已保存 resume data (\(resumeData.count) bytes)，可断点续传")
+            debugLog("[BackgroundDownload] 已保存 resume data (\(resumeData.count) bytes)，可断点续传")
         }
 
         taskInfo.completion(.failure(error))

@@ -269,7 +269,7 @@ class QuickSearchViewModel {
         do {
             searches = try EhDatabase.shared.getAllQuickSearches()
         } catch {
-            print("Failed to load quick searches: \(error)")
+            debugLog("Failed to load quick searches: \(error)")
         }
     }
 
@@ -278,7 +278,7 @@ class QuickSearchViewModel {
             try EhDatabase.shared.insertQuickSearch(record)
             loadSearches()
         } catch {
-            print("Failed to add quick search: \(error)")
+            debugLog("Failed to add quick search: \(error)")
         }
     }
 
@@ -288,7 +288,7 @@ class QuickSearchViewModel {
             do {
                 try EhDatabase.shared.deleteQuickSearch(id: id)
             } catch {
-                print("Failed to delete quick search: \(error)")
+                debugLog("Failed to delete quick search: \(error)")
             }
         }
         searches.remove(atOffsets: offsets)

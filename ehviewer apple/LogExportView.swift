@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LogExportView: View {
     @Environment(\.dismiss) private var dismiss

@@ -137,6 +137,7 @@ struct HistoryView: View {
         .listStyle(.plain)
         .navigationDestination(for: GalleryInfo.self) { gallery in
             GalleryDetailView(gallery: gallery)
+                .id(gallery.gid)
         }
     }
 
@@ -173,7 +174,7 @@ class HistoryViewModel {
         do {
             records = try EhDatabase.shared.getAllHistory(limit: AppSettings.shared.historyInfoSize)
         } catch {
-            print("Failed to load history: \(error)")
+            debugLog("Failed to load history: \(error)")
         }
     }
 
@@ -183,7 +184,7 @@ class HistoryViewModel {
             do {
                 try EhDatabase.shared.deleteHistory(gid: record.gid)
             } catch {
-                print("Failed to delete history: \(error)")
+                debugLog("Failed to delete history: \(error)")
             }
         }
         records.remove(atOffsets: offsets)
@@ -194,7 +195,7 @@ class HistoryViewModel {
             try EhDatabase.shared.deleteHistory(gid: gid)
             records.removeAll { $0.gid == gid }
         } catch {
-            print("Failed to delete history: \(error)")
+            debugLog("Failed to delete history: \(error)")
         }
     }
 
@@ -203,7 +204,7 @@ class HistoryViewModel {
             try EhDatabase.shared.clearHistory()
             records.removeAll()
         } catch {
-            print("Failed to clear history: \(error)")
+            debugLog("Failed to clear history: \(error)")
         }
     }
 
@@ -222,7 +223,7 @@ class HistoryViewModel {
             // 重新加载以保持顺序
             loadHistory()
         } catch {
-            print("Failed to add history: \(error)")
+            debugLog("Failed to add history: \(error)")
         }
     }
 }

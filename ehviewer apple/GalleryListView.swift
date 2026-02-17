@@ -337,10 +337,18 @@ struct GalleryListView: View {
     }
 
     private var galleryList: some View {
-        List {
+        // Perf P0-3: 一次性读取配置，避免每个 Row 重复读 UserDefaults
+        let showJpn = AppSettings.shared.showJpnTitle
+        return List {
+            // Fix F2-1: \u9996\u9875\u9876\u90e8\u663e\u793a\u201c\u7ee7\u7eed\u9605\u8bfb\u201d\u5361\u7247
+            if case .home = mode {
+                ContinueReadingCard()
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+            }
             ForEach(viewModel.galleries, id: \.gid) { gallery in
                 NavigationLink(value: gallery) {
-                    GalleryRow(gallery: gallery)
+                    GalleryRow(gallery: gallery, showJpnTitle: showJpn)
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     // 下载 (对齐 Android onItemLongClick: Download)
@@ -383,6 +391,7 @@ struct GalleryListView: View {
         }
         .navigationDestination(for: GalleryInfo.self) { gallery in
             GalleryDetailView(gallery: gallery)
+                .id(gallery.gid)
         }
     }
 
@@ -399,7 +408,9 @@ struct GalleryListView: View {
 
     // iPad/Mac 侧边栏内容
     private var sidebarContent: some View {
-        VStack(spacing: 0) {
+        // Perf P0-3: 一次性读取配置
+        let showJpn = AppSettings.shared.showJpnTitle
+        return VStack(spacing: 0) {
             // 搜索栏 (全宽，置于内容顶部)
             searchBarView
 
@@ -412,7 +423,7 @@ struct GalleryListView: View {
                 } else {
                     List(selection: selectionBinding) {
                         ForEach(viewModel.galleries, id: \.gid) { gallery in
-                            GalleryRow(gallery: gallery)
+                            GalleryRow(gallery: gallery, showJpnTitle: showJpn)
                                 .tag(gallery)
                         }
 
@@ -873,9 +884,11 @@ struct SimpleRatingView: View {
 }
 
 // MARK: - Gallery Row (对齐 Android item_gallery_list.xml 布局)
+// Perf P0-3: showJpnTitle 从外部传入，禁止在 body 中读 AppSettings.shared
 
 struct GalleryRow: View {
     let gallery: GalleryInfo
+    let showJpnTitle: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -893,7 +906,7 @@ struct GalleryRow: View {
             // 信息区 (对齐 Android RelativeLayout 右侧元素)
             VStack(alignment: .leading, spacing: 0) {
                 // 标题 (对齐 Android @id/title: alignParentTop, toRightOf thumb)
-                Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
+                Text(gallery.suitableTitle(preferJpn: showJpnTitle))
                     .font(.subheadline)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)

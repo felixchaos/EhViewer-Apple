@@ -995,7 +995,7 @@ SOFTWARE.
 
         let geometryPreferences = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: orientations)
         windowScene.requestGeometryUpdate(geometryPreferences) { error in
-            print("[SettingsView] 旋转更新错误: \(error.localizedDescription)")
+            debugLog("[SettingsView] 旋转更新错误: \(error.localizedDescription)")
         }
     }
     #endif
@@ -1229,7 +1229,7 @@ class SettingsViewModel {
                 self.isUpdatingTagDb = false
             }
         } catch {
-            print("[SettingsVM] Failed to update tag database: \(error)")
+            debugLog("[SettingsVM] Failed to update tag database: \(error)")
             await MainActor.run {
                 self.isUpdatingTagDb = false
             }

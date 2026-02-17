@@ -246,7 +246,7 @@ struct WebViewLoginView: View {
                 AppSettings.shared.avatar = avatar
             }
         } catch {
-            print("[WebViewLogin] 获取用户资料失败: \(error)")
+            debugLog("[WebViewLogin] 获取用户资料失败: \(error)")
         }
     }
 }

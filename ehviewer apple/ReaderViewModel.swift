@@ -10,6 +10,7 @@ import SwiftUI
 import EhModels
 import EhSpider
 import EhSettings
+import EhDownload
 import CoreImage
 
 #if canImport(UIKit)
@@ -111,6 +112,10 @@ class ReaderViewModel {
     var gid: Int64 = 0
     var token: String = ""
     var isDownloaded: Bool = false
+    /// Perf P0-1: scrollPosition 绑定用 Optional Int (ScrollView 要求 Binding<Int?>)
+    var lazyCurrentPage: Int? = 0
+    /// Perf P0-2: 垂直滚动模式页码追踪 (scrollPosition 绑定)
+    var verticalScrollPage: Int? = 0
 
     // MARK: - Double Page
 
@@ -118,8 +123,8 @@ class ReaderViewModel {
     var isDoublePageEnabled: Bool = false
     /// 页面展页列表 (单页模式下每个 spread 只有一页)
     var spreads: [PageSpread] = []
-    /// 当前展页索引
-    var currentSpreadIndex: Int = 0
+    /// 当前展页索引 (Perf P0-1: Optional for scrollPosition binding)
+    var currentSpreadIndex: Int? = 0
 
     // MARK: - Image Loading
 
@@ -257,9 +262,10 @@ class ReaderViewModel {
 
     // MARK: - Double Page Logic
 
-    /// 根据屏幕宽度更新双页模式
-    func updateLayout(screenWidth: CGFloat) {
-        let shouldDouble = screenWidth > 600
+    /// 根据屏幕尺寸更新双页模式 — 仅横屏 + 宽度 > 700pt 时启用
+    /// 修复: iPad 竖屏不再触发双页模式
+    func updateLayout(screenWidth: CGFloat, screenHeight: CGFloat) {
+        let shouldDouble = screenWidth > screenHeight && screenWidth > 700
         guard shouldDouble != isDoublePageEnabled else { return }
         isDoublePageEnabled = shouldDouble
         computeSpreads()
@@ -435,13 +441,77 @@ class ReaderViewModel {
         }
     }
 
-    // MARK: - Setup
+    // MARK: - Context Switch (画廊切换身份守卫)
 
-    func setupLocalGallery() {
-        guard isDownloaded,
-              let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let ehviewerDir = documentsDir.appendingPathComponent("download", isDirectory: true)
-        downloadDir = ehviewerDir.appendingPathComponent("\(gid)-\(token)", isDirectory: true)
+    /// 身份核对守卫 — 检测是否需要切换画廊上下文
+    /// - Hit Cache: `gid` 未变且已有数据 → 跳过重新加载
+    /// - Context Switch: `gid` 变更 → 重置全部状态后加载新画廊
+    /// - Returns: `true` = 需要重新加载; `false` = 命中缓存可跳过
+    func prepareForGallery(targetGid: Int64, targetToken: String) -> Bool {
+        if self.gid == targetGid && self.totalPages > 0 {
+            // Hit Cache: 同一画廊且数据已就绪 → 不重新加载
+            return false
+        }
+
+        if self.gid != targetGid {
+            // Context Switch: 换书了 → 先清空旧状态
+            resetState()
+        }
+
+        // 设置新身份
+        self.gid = targetGid
+        self.token = targetToken
+        return true
+    }
+
+    /// 彻底重置所有状态 — 在加载新画廊前调用
+    /// UI 会因 totalPages == 0 立即切入 Loading 状态
+    private func resetState() {
+        // 页面状态
+        currentPage = 0
+        totalPages = 0
+        isDownloaded = false
+        lazyCurrentPage = 0
+        verticalScrollPage = 0
+
+        // 双页模式
+        spreads = []
+        currentSpreadIndex = 0
+
+        // 图片数据
+        imageURLs.removeAll()
+        cachedImages.removeAll()
+        errorPages.removeAll()
+        errorMessages.removeAll()
+        retryingPages.removeAll()
+        downloadProgress.removeAll()
+        retryGeneration.removeAll()
+
+        // 视觉
+        dominantColors.removeAll()
+
+        // 私有状态
+        pTokens.removeAll()
+        showKeys.removeAll()
+        loadingPages.removeAll()
+        downloadingImages.removeAll()
+        downloadDir = nil
+    }
+
+    // MARK: - Setup (Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，不再信任调用方传入的 Bool)
+
+    /// 检查下载状态并设置本地目录 — 替代旧的硬编码 `isDownloaded` + `gid-token` 路径
+    /// 验证: 数据库状态 == stateFinish AND 磁盘目录存在
+    func setupLocalGallery() async {
+        let fullyDownloaded = await DownloadManager.shared.isGalleryFullyDownloaded(gid: gid)
+        if fullyDownloaded,
+           let dir = await DownloadManager.shared.getDownloadedGalleryDirectory(gid: gid) {
+            self.isDownloaded = true
+            self.downloadDir = dir
+        } else {
+            self.isDownloaded = false
+            self.downloadDir = nil
+        }
     }
 
     func extractPTokens(from previewSet: PreviewSet) {
@@ -594,7 +664,7 @@ class ReaderViewModel {
                 return
             } catch {
                 if Task.isCancelled { return }
-                print("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
+                debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
                 if attempt < 2 {
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
                     if Task.isCancelled { return }
@@ -638,7 +708,7 @@ class ReaderViewModel {
         guard imageURLs[index] == nil else { return }
         guard !loadingPages.contains(index) else { return }
 
-        // 优先本地
+        // 优先本地 (Fix D-1: 通过 DownloadManager 统一路径，本地找不到时回退网络)
         if isDownloaded, let dir = downloadDir {
             if let localURL = SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: index) {
                 await MainActor.run {
@@ -647,6 +717,7 @@ class ReaderViewModel {
                 }
                 return
             }
+            // 本地文件缺失 — 不 return，继续尝试网络加载
         }
 
         // URL 缓存
@@ -692,7 +763,7 @@ class ReaderViewModel {
                     self.errorPages.remove(index)
                 }
             } else {
-                print("[Reader] Failed to extract image URL from page HTML for page \(index)")
+                debugLog("[Reader] Failed to extract image URL from page HTML for page \(index)")
                 await MainActor.run { _ = self.errorPages.insert(index) }
                 return
             }
@@ -707,7 +778,7 @@ class ReaderViewModel {
             return
         } catch {
             if !Task.isCancelled {
-                print("[Reader] Page \(index) load error: \(error.localizedDescription)")
+                debugLog("[Reader] Page \(index) load error: \(error.localizedDescription)")
             }
         }
     }

@@ -32,7 +32,11 @@ final class GalleryActionService {
     func quickFavorite(gallery: GalleryInfo) async -> Bool {
         let defaultSlot = AppSettings.shared.defaultFavSlot
         if defaultSlot >= 0 && defaultSlot <= 9 {
-            await addFavorite(gid: gallery.gid, token: gallery.token, slot: defaultSlot)
+            do {
+                try await addFavorite(gid: gallery.gid, token: gallery.token, slot: defaultSlot)
+            } catch {
+                return false
+            }
             return true
         } else if defaultSlot == -1 {
             addLocalFavorite(gallery: gallery)
@@ -41,17 +45,13 @@ final class GalleryActionService {
         return false // 需要弹出选择器
     }
 
-    /// 添加云端收藏 (对齐 Android EhEngine.addFavorites)
-    func addFavorite(gid: Int64, token: String, slot: Int) async {
-        do {
-            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
-            AppSettings.shared.recentFavCat = slot
-            NotificationCenter.default.post(name: .galleryFavoriteChanged,
-                                            object: nil,
-                                            userInfo: ["gid": gid, "favorited": true, "slot": slot])
-        } catch {
-            print("[GalleryActionService] Add favorite failed: \(error)")
-        }
+    /// 添加云端收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
+    func addFavorite(gid: Int64, token: String, slot: Int) async throws {
+        try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
+        AppSettings.shared.recentFavCat = slot
+        NotificationCenter.default.post(name: .galleryFavoriteChanged,
+                                        object: nil,
+                                        userInfo: ["gid": gid, "favorited": true, "slot": slot])
     }
 
     /// 添加本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
@@ -71,32 +71,23 @@ final class GalleryActionService {
                                             object: nil,
                                             userInfo: ["gid": gallery.gid, "favorited": true, "slot": -1])
         } catch {
-            print("[GalleryActionService] Add local favorite failed: \(error)")
+            debugLog("[GalleryActionService] Add local favorite failed: \(error)")
         }
     }
 
-    /// 取消收藏 — 同时移除云端和本地 (对齐 Android: 取消收藏清除所有源)
-    func removeFavorite(gid: Int64, token: String) async {
-        do {
-            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
-            try? EhDatabase.shared.deleteLocalFavorite(gid: gid)
-            NotificationCenter.default.post(name: .galleryFavoriteChanged,
-                                            object: nil,
-                                            userInfo: ["gid": gid, "favorited": false])
-        } catch {
-            print("[GalleryActionService] Remove favorite failed: \(error)")
-        }
+    /// 取消收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
+    func removeFavorite(gid: Int64, token: String) async throws {
+        try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
+        try? EhDatabase.shared.deleteLocalFavorite(gid: gid)
+        NotificationCenter.default.post(name: .galleryFavoriteChanged,
+                                        object: nil,
+                                        userInfo: ["gid": gid, "favorited": false])
     }
 
     // MARK: - 下载
 
-    /// 快速下载 — 检查状态后启动 (对齐 Android CommonOperations.startDownload)
+    /// 快速下载 (Fix A-1: 已失败/已暂停的任务允许重新启动)
     func startDownload(gallery: GalleryInfo) async {
-        let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
-        if state != DownloadManager.stateInvalid {
-            // 已在下载队列
-            return
-        }
         await DownloadManager.shared.startDownload(gallery: gallery)
     }
 

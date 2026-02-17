@@ -102,7 +102,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             return granted
         } catch {
-            print("[DownloadNotification] Authorization error: \(error)")
+            debugLog("[DownloadNotification] Authorization error: \(error)")
             return false
         }
     }
@@ -262,7 +262,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
 
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("[DownloadNotification] Failed to send: \(error)")
+                debugLog("[DownloadNotification] Failed to send: \(error)")
             }
         }
     }

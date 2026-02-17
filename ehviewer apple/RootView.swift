@@ -206,7 +206,7 @@ struct RootView: View {
                 AppSettings.shared.avatar = avatar
             }
         } catch {
-            print("[RootView] 获取用户资料失败: \(error)")
+            debugLog("[RootView] 获取用户资料失败: \(error)")
         }
 
         // 3. ExH 可达性检测
@@ -228,7 +228,7 @@ struct RootView: View {
                 showExHAlert = true
             }
         } catch {
-            print("[RootView] ExHentai 检测失败: \(error)")
+            debugLog("[RootView] ExHentai 检测失败: \(error)")
         }
     }
 
@@ -368,6 +368,23 @@ final class AppState {
         let hasMemberId = cookies.contains { $0.name == "ipb_member_id" }
         let hasPassHash = cookies.contains { $0.name == "ipb_pass_hash" }
         isSignedIn = hasMemberId && hasPassHash
+
+        // Fix F1-3: 未登录或无有效 igneous Cookie 时，强制降级到 E-Hentai
+        if !isSignedIn && AppSettings.shared.gallerySite == .exHentai {
+            AppSettings.shared.gallerySite = .eHentai
+        } else if isSignedIn && AppSettings.shared.gallerySite == .exHentai {
+            validateExHentaiAccess()
+        }
+    }
+
+    /// 检查 ExHentai 访问权限 (igneous cookie)
+    /// 无有效 igneous 时自动降级到 E-Hentai 并提示
+    private func validateExHentaiAccess() {
+        let exCookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
+        let hasIgneous = exCookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
+        if !hasIgneous {
+            AppSettings.shared.gallerySite = .eHentai
+        }
     }
 
     func signOut() {

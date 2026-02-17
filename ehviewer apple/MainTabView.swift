@@ -186,6 +186,7 @@ struct MainTabView: View {
         .sheet(item: $clipboardGallery) { gallery in
             NavigationStack {
                 GalleryDetailView(gallery: gallery)
+                    .id(gallery.gid)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("关闭") { clipboardGallery = nil }

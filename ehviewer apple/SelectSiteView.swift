@@ -56,9 +56,14 @@ struct SelectSiteView: View {
                     .foregroundStyle(.secondary)
                 
                 if selectedSite == .exHentai {
-                    Text("⚠️ ExHentai 需要有效的账号登录后才能访问")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
+                    VStack(spacing: 4) {
+                        Text("⚠️ ExHentai 需要特定账号权限才能访问")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        Text("如果您的账号不支持，登录后将自动切换到 E-Hentai")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.top, 24)

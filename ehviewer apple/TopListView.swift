@@ -101,6 +101,7 @@ struct TopListView: View {
                                 token: parsed.token,
                                 title: item.text
                             ))
+                            .id(parsed.gid)
                         } label: {
                             TopListRow(rank: idx + 1, item: item)
                         }

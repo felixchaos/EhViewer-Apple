@@ -207,6 +207,7 @@ struct FavoritesView: View {
                         } else {
                             NavigationLink {
                                 GalleryDetailView(gallery: record.toGalleryInfo())
+                                    .id(record.gid)
                             } label: {
                                 localFavoriteRow(record)
                             }
@@ -265,6 +266,7 @@ struct FavoritesView: View {
                     ForEach(localFavorites.prefix(5), id: \.gid) { record in
                         NavigationLink {
                             GalleryDetailView(gallery: record.toGalleryInfo())
+                                .id(record.gid)
                         } label: {
                             localFavoriteRow(record)
                                 .padding(.horizontal, 16)
@@ -391,7 +393,7 @@ struct FavoritesView: View {
         isBatchProcessing = true
         Task {
             for record in selected {
-                await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
+                try? await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
                 try? EhDatabase.shared.deleteLocalFavorite(gid: record.gid)
             }
             await MainActor.run {

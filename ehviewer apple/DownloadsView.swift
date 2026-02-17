@@ -434,11 +434,13 @@ struct DownloadsView: View {
         .listStyle(.plain)
         #if os(iOS)
         .fullScreenCover(item: $readerGallery) { gallery in
-            ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages, isDownloaded: true)
+            ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages)
+                .id(gallery.gid)
         }
         #else
         .sheet(item: $readerGallery) { gallery in
-            ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages, isDownloaded: true)
+            ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages)
+                .id(gallery.gid)
                 .frame(minWidth: 800, minHeight: 600)
         }
         #endif
@@ -670,11 +672,12 @@ struct DownloadTaskRow: View {
             }
 
             #if os(macOS)
-            // Mac: 在 Finder 中显示
+            // Mac: 在 Finder 中显示 (Fix A-3: 使用统一路径算法)
             if task.state == DownloadManager.stateFinish {
                 Button {
+                    let dirName = DownloadManager.galleryDirectoryName(gid: task.gallery.gid, title: task.gallery.bestTitle)
                     let dir = DownloadManager.shared.downloadDirectory
-                        .appendingPathComponent("\(task.gallery.gid)-\(task.gallery.bestTitle.prefix(50))")
+                        .appendingPathComponent(dirName)
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir.path)
                 } label: {
                     Label("在 Finder 中显示", systemImage: "folder")
@@ -834,10 +837,11 @@ class DownloadsViewModel {
         }
     }
 
+    /// Fix A-2: 清除已完成下载时同时删除文件，释放磁盘空间
     func clearFinished() {
         Task {
             for task in tasks where task.state == DownloadManager.stateFinish {
-                await DownloadManager.shared.deleteDownload(gid: task.gallery.gid, deleteFiles: false)
+                await DownloadManager.shared.deleteDownload(gid: task.gallery.gid, deleteFiles: true)
             }
             await loadTasks()
         }
