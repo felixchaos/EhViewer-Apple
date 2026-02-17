@@ -339,6 +339,7 @@ struct GalleryListView: View {
     private var galleryList: some View {
         // Perf P0-3: 一次性读取配置，避免每个 Row 重复读 UserDefaults
         let showJpn = AppSettings.shared.showJpnTitle
+        let fixThumb = AppSettings.shared.fixThumbUrl
         return List {
             // Fix F2-1: \u9996\u9875\u9876\u90e8\u663e\u793a\u201c\u7ee7\u7eed\u9605\u8bfb\u201d\u5361\u7247
             if case .home = mode {
@@ -348,7 +349,7 @@ struct GalleryListView: View {
             }
             ForEach(viewModel.galleries, id: \.gid) { gallery in
                 NavigationLink(value: gallery) {
-                    GalleryRow(gallery: gallery, showJpnTitle: showJpn)
+                    GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     // 下载 (对齐 Android onItemLongClick: Download)
@@ -410,6 +411,7 @@ struct GalleryListView: View {
     private var sidebarContent: some View {
         // Perf P0-3: 一次性读取配置
         let showJpn = AppSettings.shared.showJpnTitle
+        let fixThumb = AppSettings.shared.fixThumbUrl
         return VStack(spacing: 0) {
             // 搜索栏 (全宽，置于内容顶部)
             searchBarView
@@ -423,7 +425,7 @@ struct GalleryListView: View {
                 } else {
                     List(selection: selectionBinding) {
                         ForEach(viewModel.galleries, id: \.gid) { gallery in
-                            GalleryRow(gallery: gallery, showJpnTitle: showJpn)
+                            GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
                                 .tag(gallery)
                         }
 
@@ -889,11 +891,28 @@ struct SimpleRatingView: View {
 struct GalleryRow: View {
     let gallery: GalleryInfo
     let showJpnTitle: Bool
+    let fixThumbUrl: Bool
+
+    /// 对齐 Android EhUrl.getFixedThumbUrl: 修复缩略图 CDN 域名不可达问题
+    /// 开启时将 ehgt.org / gt0-3.ehgt.org 替换为当前站点的缩略图前缀
+    private var thumbURL: URL? {
+        guard var urlStr = gallery.thumb, !urlStr.isEmpty else { return nil }
+        if fixThumbUrl {
+            // 替换 ehgt.org 变体 (gt0.ehgt.org, gt1.ehgt.org ...)
+            let site = AppSettings.shared.gallerySite
+            let fixedPrefix = EhURL.thumbPrefix(for: site)
+            // 匹配 https://ehgt.org/ 或 https://gt[0-3].ehgt.org/
+            if let range = urlStr.range(of: "https://(?:gt\\d\\.)?ehgt\\.org/", options: .regularExpression) {
+                urlStr.replaceSubrange(range, with: fixedPrefix)
+            }
+        }
+        return URL(string: urlStr)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // 缩略图 (对齐 Android @id/thumb)
-            CachedAsyncImage(url: URL(string: gallery.thumb ?? "")) { image in
+            CachedAsyncImage(url: thumbURL) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)

@@ -33,6 +33,7 @@ struct ContinueReadingCard: View {
                     pages: record.pages,
                     initialPage: readingProgress
                 )
+                .id(record.gid)
             }
         }
         #endif

@@ -81,6 +81,7 @@ struct GalleryPreviewsView: View {
                 previewSet: initialPreviewSet,
                 initialPage: target.page
             )
+            .id(gid)
         }
         #else
         .sheet(item: $readerTarget) { target in
@@ -91,6 +92,7 @@ struct GalleryPreviewsView: View {
                 previewSet: initialPreviewSet,
                 initialPage: target.page
             )
+            .id(gid)
             .frame(minWidth: 800, minHeight: 600)
         }
         #endif

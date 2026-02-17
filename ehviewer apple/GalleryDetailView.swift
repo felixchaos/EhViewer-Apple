@@ -105,6 +105,7 @@ struct GalleryDetailView: View {
                 previewSet: vm.detail?.previewSet,
                 initialPage: vm.readerInitialPage
             )
+            .id(gallery.gid) // 强制销毁旧 VM，保证切换画廊时状态完全重置
         }
         #else
         .navigationDestination(isPresented: $vm.startReading) {
@@ -116,6 +117,7 @@ struct GalleryDetailView: View {
                 previewSet: vm.detail?.previewSet,
                 initialPage: vm.readerInitialPage
             )
+            .id(gallery.gid) // 强制销毁旧 VM
         }
         #endif
         .task(id: gallery.gid) {
