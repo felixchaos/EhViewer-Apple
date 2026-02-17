@@ -95,29 +95,33 @@ struct GalleryDetailView: View {
         .enableEdgeSwipeBack()
         #endif
         #if os(iOS)
-        .fullScreenCover(isPresented: $vm.startReading) {
+        .fullScreenCover(item: $vm.readerLaunchItem) { item in
             // 全屏呈现阅读器，完全隐藏导航栏
-            // 对齐 Android: intent.putExtra(GalleryActivity.KEY_PAGE, index)
+            // item: 绑定保证每次打开都创建全新 ImageReaderView + ReaderViewModel
             ImageReaderView(
-                gid: gallery.gid,
-                token: gallery.token,
-                pages: vm.detail?.info.pages ?? gallery.pages,
-                previewSet: vm.detail?.previewSet,
-                initialPage: vm.readerInitialPage
+                gid: item.gid,
+                token: item.token,
+                pages: item.pages,
+                previewSet: item.previewSet,
+                initialPage: item.initialPage
             )
-            .id(gallery.gid) // 强制销毁旧 VM，保证切换画廊时状态完全重置
         }
         #else
-        .navigationDestination(isPresented: $vm.startReading) {
+        .navigationDestination(isPresented: Binding(
+            get: { vm.readerLaunchItem != nil },
+            set: { if !$0 { vm.readerLaunchItem = nil } }
+        )) {
             // macOS: 在导航栈中推入阅读器，支持窗口自由调整大小
-            ImageReaderView(
-                gid: gallery.gid,
-                token: gallery.token,
-                pages: vm.detail?.info.pages ?? gallery.pages,
-                previewSet: vm.detail?.previewSet,
-                initialPage: vm.readerInitialPage
-            )
-            .id(gallery.gid) // 强制销毁旧 VM
+            if let item = vm.readerLaunchItem {
+                ImageReaderView(
+                    gid: item.gid,
+                    token: item.token,
+                    pages: item.pages,
+                    previewSet: item.previewSet,
+                    initialPage: item.initialPage
+                )
+                .id(item.id) // 保证每次 launch 创建新视图
+            }
         }
         #endif
         .task(id: gallery.gid) {
@@ -240,8 +244,13 @@ struct GalleryDetailView: View {
             actionButton(icon: "book", title: readTitle) {
                 Haptics.tap()
                 // 对齐 Android: 阅读按钮不传 KEY_PAGE，让阅读器自行恢复进度
-                vm.readerInitialPage = nil
-                vm.startReading = true
+                vm.readerLaunchItem = ReaderLaunchItem(
+                    gid: gallery.gid,
+                    token: gallery.token,
+                    pages: vm.detail?.info.pages ?? gallery.pages,
+                    previewSet: vm.detail?.previewSet,
+                    initialPage: nil
+                )
             }
             Divider().frame(height: 32)
             actionButton(icon: vm.isFavorited ? "heart.fill" : "heart",
@@ -271,8 +280,13 @@ struct GalleryDetailView: View {
                 // Fix F1-4: 已下载状态 → 打开阅读器，不是重新下载
                 if vm.downloadState == DownloadManager.stateFinish {
                     Haptics.tap()
-                    vm.readerInitialPage = nil
-                    vm.startReading = true
+                    vm.readerLaunchItem = ReaderLaunchItem(
+                        gid: gallery.gid,
+                        token: gallery.token,
+                        pages: vm.detail?.info.pages ?? gallery.pages,
+                        previewSet: vm.detail?.previewSet,
+                        initialPage: nil
+                    )
                 } else {
                     Haptics.impact()
                     Task { await vm.startDownload(gallery: gallery) }
@@ -468,8 +482,13 @@ struct GalleryDetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .onTapGesture {
                                 // 对齐 Android: intent.putExtra(GalleryActivity.KEY_PAGE, index)
-                                vm.readerInitialPage = preview.position
-                                vm.startReading = true
+                                vm.readerLaunchItem = ReaderLaunchItem(
+                                    gid: gallery.gid,
+                                    token: gallery.token,
+                                    pages: vm.detail?.info.pages ?? gallery.pages,
+                                    previewSet: vm.detail?.previewSet,
+                                    initialPage: preview.position
+                                )
                             }
                             
                             // 页码标签 (对齐 Android: position + 1)
@@ -486,8 +505,13 @@ struct GalleryDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                                 .onTapGesture {
                                     // 对齐 Android: intent.putExtra(GalleryActivity.KEY_PAGE, index)
-                                    vm.readerInitialPage = preview.position
-                                    vm.startReading = true
+                                    vm.readerLaunchItem = ReaderLaunchItem(
+                                        gid: gallery.gid,
+                                        token: gallery.token,
+                                        pages: vm.detail?.info.pages ?? gallery.pages,
+                                        previewSet: vm.detail?.previewSet,
+                                        initialPage: preview.position
+                                    )
                                 }
                             
                             // 页码标签
@@ -602,6 +626,16 @@ struct GalleryDetailView: View {
 // MARK: - ViewModel
 
 @MainActor
+/// 阅读器启动参数 — 使用 item: 绑定确保每次打开阅读器都创建全新视图
+struct ReaderLaunchItem: Identifiable {
+    let id = UUID()  // 每次启动生成新 ID，保证 SwiftUI 创建新视图
+    let gid: Int64
+    let token: String
+    let pages: Int
+    let previewSet: PreviewSet?
+    let initialPage: Int?
+}
+
 @Observable
 class GalleryDetailViewModel {
     var isLoading = false
@@ -609,8 +643,8 @@ class GalleryDetailViewModel {
     var detail: GalleryDetail?
     var isFavorited = false
     var downloadState: Int = DownloadManager.stateInvalid
-    var startReading = false
-    var readerInitialPage: Int? = nil  // 对齐 Android GalleryActivity.KEY_PAGE
+    /// 阅读器启动项 — 非 nil 时弹出阅读器 (item: 绑定确保视图完全重建)
+    var readerLaunchItem: ReaderLaunchItem? = nil
     var displayRating: Float?
     var isLoadingComments = false
     /// Perf P0-5: 一次性读取阅读进度，避免 body 中读 UserDefaults
@@ -676,8 +710,7 @@ class GalleryDetailViewModel {
         detail = nil
         isFavorited = false
         downloadState = DownloadManager.stateInvalid
-        startReading = false
-        readerInitialPage = nil
+        readerLaunchItem = nil
         displayRating = nil
         isLoadingComments = false
         hasReadingProgress = false

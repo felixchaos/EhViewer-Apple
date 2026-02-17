@@ -15,7 +15,7 @@ import EhSettings
 struct ContinueReadingCard: View {
     @State private var latestRecord: HistoryRecord?
     @State private var readingProgress: Int?
-    @State private var showReader = false
+    @State private var readerLaunchItem: ReaderLaunchItem?
 
     var body: some View {
         Group {
@@ -25,16 +25,13 @@ struct ContinueReadingCard: View {
         }
         .onAppear { loadLatestReading() }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showReader) {
-            if let record = latestRecord {
-                ImageReaderView(
-                    gid: record.gid,
-                    token: record.token,
-                    pages: record.pages,
-                    initialPage: readingProgress
-                )
-                .id(record.gid)
-            }
+        .fullScreenCover(item: $readerLaunchItem) { item in
+            ImageReaderView(
+                gid: item.gid,
+                token: item.token,
+                pages: item.pages,
+                initialPage: item.initialPage
+            )
         }
         #endif
     }
@@ -76,7 +73,13 @@ struct ContinueReadingCard: View {
     @ViewBuilder
     private func cardContent(record: HistoryRecord) -> some View {
         Button {
-            showReader = true
+            readerLaunchItem = ReaderLaunchItem(
+                gid: record.gid,
+                token: record.token,
+                pages: record.pages,
+                previewSet: nil,
+                initialPage: readingProgress
+            )
         } label: {
             HStack(spacing: 12) {
                 // 封面
