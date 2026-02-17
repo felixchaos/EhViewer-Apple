@@ -29,15 +29,29 @@ public actor SpiderDen {
     private var mode: SpiderMode = .read
 
     /// 简单的文件缓存（用于阅读模式）
-    private static nonisolated(unsafe) var readCache: SimpleDiskCache?
-    private static nonisolated(unsafe) var cacheInitialized = false
+    /// 审计修复 C-2: 使用 OSAllocatedUnfairLock 替代 nonisolated(unsafe)，消除数据竞争
+    private static let _readCacheLock = NSLock()
+    private static nonisolated(unsafe) var _readCache: SimpleDiskCache?
+    private static nonisolated(unsafe) var _cacheInitialized = false
+
+    /// 线程安全的 readCache 访问器
+    static var readCache: SimpleDiskCache? {
+        _readCacheLock.lock()
+        defer { _readCacheLock.unlock() }
+        return _readCache
+    }
 
     // MARK: - 初始化
 
     /// 初始化缓存系统 (应在 App 启动时调用)
     public static func initialize() {
-        guard !cacheInitialized else { return }
-        cacheInitialized = true
+        _readCacheLock.lock()
+        guard !_cacheInitialized else {
+            _readCacheLock.unlock()
+            return
+        }
+        _cacheInitialized = true
+        _readCacheLock.unlock()
 
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("spider_image")
@@ -49,7 +63,10 @@ public actor SpiderDen {
         let cacheSizeMB = min(max(AppSettings.shared.readCacheSize, 40), 640)
         let cacheSize = cacheSizeMB * 1024 * 1024
 
-        readCache = SimpleDiskCache(directory: cacheDir, maxSize: cacheSize)
+        let cache = SimpleDiskCache(directory: cacheDir, maxSize: cacheSize)
+        _readCacheLock.lock()
+        _readCache = cache
+        _readCacheLock.unlock()
     }
 
     /// 清除指定画廊的所有缓存图片 (删除画廊时调用, 避免缓存泄漏)
@@ -413,6 +430,7 @@ public enum SpiderMode: Sendable {
 
 /// 简单的LRU磁盘缓存
 /// 对应 Android SimpleDiskCache
+/// 审计修复 C-1: 所有文件系统操作统一在 queue 上执行，消除数据竞争
 final class SimpleDiskCache: @unchecked Sendable {
     private let directory: URL
     private let maxSize: Int
@@ -429,47 +447,57 @@ final class SimpleDiskCache: @unchecked Sendable {
     }
 
     func contains(key: String) -> Bool {
-        let file = fileURL(for: key)
-        return FileManager.default.fileExists(atPath: file.path)
+        queue.sync {
+            let file = fileURL(for: key)
+            return FileManager.default.fileExists(atPath: file.path)
+        }
     }
 
     func getData(forKey key: String) -> Data? {
-        let file = fileURL(for: key)
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        queue.sync {
+            let file = fileURL(for: key)
+            guard FileManager.default.fileExists(atPath: file.path) else { return nil }
 
-        // 更新访问时间 (LRU)
-        try? FileManager.default.setAttributes(
-            [.modificationDate: Date()],
-            ofItemAtPath: file.path
-        )
+            // 更新访问时间 (LRU)
+            try? FileManager.default.setAttributes(
+                [.modificationDate: Date()],
+                ofItemAtPath: file.path
+            )
 
-        return try? Data(contentsOf: file)
-    }
-
-    @discardableResult
-    func set(_ data: Data, forKey key: String) -> Bool {
-        let file = fileURL(for: key)
-        do {
-            try data.write(to: file)
-
-            // 异步检查缓存大小
-            queue.async { [weak self] in
-                self?.trimToSize()
-            }
-            return true
-        } catch {
-            return false
+            return try? Data(contentsOf: file)
         }
     }
 
     @discardableResult
+    func set(_ data: Data, forKey key: String) -> Bool {
+        let success: Bool = queue.sync {
+            let file = fileURL(for: key)
+            do {
+                try data.write(to: file)
+                return true
+            } catch {
+                return false
+            }
+        }
+        if success {
+            // 异步检查缓存大小
+            queue.async { [weak self] in
+                self?.trimToSize()
+            }
+        }
+        return success
+    }
+
+    @discardableResult
     func remove(key: String) -> Bool {
-        let file = fileURL(for: key)
-        do {
-            try FileManager.default.removeItem(at: file)
-            return true
-        } catch {
-            return false
+        queue.sync {
+            let file = fileURL(for: key)
+            do {
+                try FileManager.default.removeItem(at: file)
+                return true
+            } catch {
+                return false
+            }
         }
     }
 

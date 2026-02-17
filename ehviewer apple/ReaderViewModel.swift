@@ -170,12 +170,27 @@ class ReaderViewModel {
         return max(screenMax * 3, 4096) // 至少 4096px，最大约 3× 屏幕
     }()
 
-    /// NSCache 后端: 控制内存用量 (250MB / 40 张)
+    /// NSCache 后端: 根据设备物理内存动态调整
+    /// 审计修复 M-1: iPhone SE (3GB) → 80MB; iPhone 15 Pro (6GB) → 200MB; Mac → 400MB
     /// cost 使用解码后像素字节数而非压缩数据大小
     private static let imageCache: NSCache<NSNumber, PlatformImage> = {
         let cache = NSCache<NSNumber, PlatformImage>()
-        cache.totalCostLimit = 250 * 1024 * 1024
-        cache.countLimit = 40
+        let physicalMemory = ProcessInfo.processInfo.physicalMemory // bytes
+        let memoryGB = Double(physicalMemory) / (1024 * 1024 * 1024)
+        
+        let cacheLimitMB: Int
+        if memoryGB < 4 {
+            cacheLimitMB = 80   // iPhone SE, 低端设备
+        } else if memoryGB < 6 {
+            cacheLimitMB = 150  // iPhone 15 等中端
+        } else if memoryGB < 8 {
+            cacheLimitMB = 250  // iPhone 15 Pro, iPad
+        } else {
+            cacheLimitMB = 400  // Mac, 高端 iPad
+        }
+        
+        cache.totalCostLimit = cacheLimitMB * 1024 * 1024
+        cache.countLimit = min(40, cacheLimitMB / 5) // 每张约 5MB 估算
         return cache
     }()
 
@@ -657,6 +672,8 @@ class ReaderViewModel {
                     await MainActor.run {
                         self.cachedImages[index] = img
                         self.downloadProgress.removeValue(forKey: index)
+                        // 审计修复 M-2: 每次新图片加入后立即淘汰远处页面
+                        self.evictDistantPages(from: self.currentPage)
                     }
                     return
                 } else {

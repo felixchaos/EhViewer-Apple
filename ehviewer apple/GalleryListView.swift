@@ -893,6 +893,8 @@ struct GalleryRow: View {
     let showJpnTitle: Bool
     let fixThumbUrl: Bool
 
+    @Environment(\.responsiveLayout) private var layout
+
     /// 对齐 Android EhUrl.getFixedThumbUrl: 修复缩略图 CDN 域名不可达问题
     /// 开启时将 ehgt.org / gt0-3.ehgt.org 替换为当前站点的缩略图前缀
     private var thumbURL: URL? {
@@ -911,7 +913,7 @@ struct GalleryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // 缩略图 (对齐 Android @id/thumb)
+            // 缩略图 (对齐 Android @id/thumb) - 使用响应式尺寸
             CachedAsyncImage(url: thumbURL) { image in
                 image
                     .resizable()
@@ -919,7 +921,7 @@ struct GalleryRow: View {
             } placeholder: {
                 Color(.secondarySystemBackground)
             }
-            .frame(width: 76, height: 106)
+            .frame(width: layout.galleryThumbnailSize.width, height: layout.galleryThumbnailSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             // 信息区 (对齐 Android RelativeLayout 右侧元素)

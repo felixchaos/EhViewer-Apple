@@ -1,16 +1,40 @@
 import Foundation
 
 // MARK: - 全局设置系统 (对应 Android Settings.java)
+//
+// 审计说明 S-1:
+// 原设计中所有属性均标记 @ObservationIgnored，导致 @Observable 完全失效。
+// SwiftUI View 读取这些属性时不会被 observation tracking 捕获，设置变化不触发 UI 刷新。
+//
+// 修复策略:
+// - 需要实时 UI 联动的属性 (listMode, showJpnTitle, isLogin 等) 改为支持 observation
+//   使用 access/withMutation 包裹 UserDefaults 读写，让 @Observable 正常追踪
+// - 不影响 UI 的纯后台配置 (downloadTimeout, downloadDelay 等) 保持 @ObservationIgnored
+//   避免不必要的 View 重绘
 
 @Observable
 public final class AppSettings: @unchecked Sendable {
     public static let shared = AppSettings()
 
-    // MARK: - 站点选择
+    // ──────────────────────────────────────────
+    // MARK: - 辅助方法: UserDefaults 读写 + Observation 桥接
+    // ──────────────────────────────────────────
+    
+    /// 读取 UserDefaults 并触发 observation access
     @ObservationIgnored
+    private let _defaults = UserDefaults.standard
+
+    // MARK: - 站点选择 (UI 联动)
     public var gallerySite: EhSite {
-        get { EhSite(rawValue: UserDefaults.standard.integer(forKey: "gallery_site")) ?? .eHentai }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "gallery_site") }
+        get {
+            access(keyPath: \.gallerySite)
+            return EhSite(rawValue: _defaults.integer(forKey: "gallery_site")) ?? .eHentai
+        }
+        set {
+            withMutation(keyPath: \.gallerySite) {
+                _defaults.set(newValue.rawValue, forKey: "gallery_site")
+            }
+        }
     }
 
     // MARK: - 网络
@@ -20,51 +44,51 @@ public final class AppSettings: @unchecked Sendable {
     // 因此该选项默认关闭，依赖系统 DNS / 代理 / VPN 解析域名
     @ObservationIgnored
     public var domainFronting: Bool {
-        get { UserDefaults.standard.object(forKey: "domain_fronting") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "domain_fronting") }
+        get { _defaults.object(forKey: "domain_fronting") as? Bool ?? false }
+        set { _defaults.set(newValue, forKey: "domain_fronting") }
     }
 
     @ObservationIgnored
     public var dnsOverHttps: Bool {
-        get { UserDefaults.standard.bool(forKey: "dns_over_https") }
-        set { UserDefaults.standard.set(newValue, forKey: "dns_over_https") }
+        get { _defaults.bool(forKey: "dns_over_https") }
+        set { _defaults.set(newValue, forKey: "dns_over_https") }
     }
 
     @ObservationIgnored
     public var builtInHosts: Bool {
-        get { UserDefaults.standard.object(forKey: "built_in_hosts") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "built_in_hosts") }
+        get { _defaults.object(forKey: "built_in_hosts") as? Bool ?? false }
+        set { _defaults.set(newValue, forKey: "built_in_hosts") }
     }
 
     // MARK: - 下载
     @ObservationIgnored
     public var multiThreadDownload: Int {
-        get { max(1, min(10, UserDefaults.standard.integer(forKey: "multi_thread_download"))) }
-        set { UserDefaults.standard.set(max(1, min(10, newValue)), forKey: "multi_thread_download") }
+        get { max(1, min(10, _defaults.integer(forKey: "multi_thread_download"))) }
+        set { _defaults.set(max(1, min(10, newValue)), forKey: "multi_thread_download") }
     }
 
     @ObservationIgnored
     public var preloadImage: Int {
-        get { UserDefaults.standard.object(forKey: "preload_image") as? Int ?? 5 }
-        set { UserDefaults.standard.set(newValue, forKey: "preload_image") }
+        get { _defaults.object(forKey: "preload_image") as? Int ?? 5 }
+        set { _defaults.set(newValue, forKey: "preload_image") }
     }
 
     @ObservationIgnored
     public var downloadDelay: Int {
-        get { UserDefaults.standard.integer(forKey: "download_delay") }
-        set { UserDefaults.standard.set(newValue, forKey: "download_delay") }
+        get { _defaults.integer(forKey: "download_delay") }
+        set { _defaults.set(newValue, forKey: "download_delay") }
     }
 
     @ObservationIgnored
     public var downloadTimeout: Int {
-        get { UserDefaults.standard.object(forKey: "download_timeout") as? Int ?? 60 }
-        set { UserDefaults.standard.set(newValue, forKey: "download_timeout") }
+        get { _defaults.object(forKey: "download_timeout") as? Int ?? 60 }
+        set { _defaults.set(newValue, forKey: "download_timeout") }
     }
 
     @ObservationIgnored
     public var downloadOriginImage: Bool {
-        get { UserDefaults.standard.bool(forKey: "download_origin_image") }
-        set { UserDefaults.standard.set(newValue, forKey: "download_origin_image") }
+        get { _defaults.bool(forKey: "download_origin_image") }
+        set { _defaults.set(newValue, forKey: "download_origin_image") }
     }
 
     /// 图片分辨率 (对应 Android EhConfig.IMAGE_SIZE_*)
@@ -72,212 +96,272 @@ public final class AppSettings: @unchecked Sendable {
     @ObservationIgnored
     public var imageResolution: ImageResolution {
         get {
-            let raw = UserDefaults.standard.string(forKey: "image_resolution") ?? "a"
+            let raw = _defaults.string(forKey: "image_resolution") ?? "a"
             return ImageResolution(rawValue: raw) ?? .auto
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "image_resolution") }
+        set { _defaults.set(newValue.rawValue, forKey: "image_resolution") }
     }
 
     // MARK: - 缓存
     @ObservationIgnored
     public var readCacheSize: Int {
         get {
-            let v = UserDefaults.standard.object(forKey: "read_cache_size") as? Int ?? 320
+            let v = _defaults.object(forKey: "read_cache_size") as? Int ?? 320
             return max(40, min(640, v))
         }
-        set { UserDefaults.standard.set(max(40, min(640, newValue)), forKey: "read_cache_size") }
+        set { _defaults.set(max(40, min(640, newValue)), forKey: "read_cache_size") }
     }
 
-    // MARK: - 外观
-    @ObservationIgnored
+    // MARK: - 外观 (UI 联动)
     public var listMode: ListMode {
-        get { ListMode(rawValue: UserDefaults.standard.integer(forKey: "list_mode")) ?? .list }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "list_mode") }
+        get {
+            access(keyPath: \.listMode)
+            return ListMode(rawValue: _defaults.integer(forKey: "list_mode")) ?? .list
+        }
+        set {
+            withMutation(keyPath: \.listMode) {
+                _defaults.set(newValue.rawValue, forKey: "list_mode")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var showJpnTitle: Bool {
-        get { UserDefaults.standard.bool(forKey: "show_jpn_title") }
-        set { UserDefaults.standard.set(newValue, forKey: "show_jpn_title") }
+        get {
+            access(keyPath: \.showJpnTitle)
+            return _defaults.bool(forKey: "show_jpn_title")
+        }
+        set {
+            withMutation(keyPath: \.showJpnTitle) {
+                _defaults.set(newValue, forKey: "show_jpn_title")
+            }
+        }
     }
 
-    // MARK: - 用户身份
-    @ObservationIgnored
+    // MARK: - 用户身份 (UI 联动)
     public var isLogin: Bool {
-        get { UserDefaults.standard.bool(forKey: "is_login") }
-        set { UserDefaults.standard.set(newValue, forKey: "is_login") }
+        get {
+            access(keyPath: \.isLogin)
+            return _defaults.bool(forKey: "is_login")
+        }
+        set {
+            withMutation(keyPath: \.isLogin) {
+                _defaults.set(newValue, forKey: "is_login")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var displayName: String? {
-        get { UserDefaults.standard.string(forKey: "display_name") }
-        set { UserDefaults.standard.set(newValue, forKey: "display_name") }
+        get {
+            access(keyPath: \.displayName)
+            return _defaults.string(forKey: "display_name")
+        }
+        set {
+            withMutation(keyPath: \.displayName) {
+                _defaults.set(newValue, forKey: "display_name")
+            }
+        }
     }
 
     @ObservationIgnored
     public var userId: String? {
-        get { UserDefaults.standard.string(forKey: "user_id") }
-        set { UserDefaults.standard.set(newValue, forKey: "user_id") }
+        get { _defaults.string(forKey: "user_id") }
+        set { _defaults.set(newValue, forKey: "user_id") }
     }
 
     @ObservationIgnored
     public var avatar: String? {
-        get { UserDefaults.standard.string(forKey: "avatar") }
-        set { UserDefaults.standard.set(newValue, forKey: "avatar") }
+        get { _defaults.string(forKey: "avatar") }
+        set { _defaults.set(newValue, forKey: "avatar") }
     }
 
-    // MARK: - 外观
-    @ObservationIgnored
+    // MARK: - 外观 (UI 联动)
     public var theme: Int {
-        get { UserDefaults.standard.integer(forKey: "theme") }
-        set { UserDefaults.standard.set(newValue, forKey: "theme") }
+        get {
+            access(keyPath: \.theme)
+            return _defaults.integer(forKey: "theme")
+        }
+        set {
+            withMutation(keyPath: \.theme) {
+                _defaults.set(newValue, forKey: "theme")
+            }
+        }
     }
 
     @ObservationIgnored
     public var launchPage: Int {
-        get { UserDefaults.standard.integer(forKey: "launch_page") }
-        set { UserDefaults.standard.set(newValue, forKey: "launch_page") }
+        get { _defaults.integer(forKey: "launch_page") }
+        set { _defaults.set(newValue, forKey: "launch_page") }
     }
 
     @ObservationIgnored
     public var thumbSize: Int {
-        get { UserDefaults.standard.object(forKey: "thumb_size") as? Int ?? 1 }
-        set { UserDefaults.standard.set(newValue, forKey: "thumb_size") }
+        get { _defaults.object(forKey: "thumb_size") as? Int ?? 1 }
+        set { _defaults.set(newValue, forKey: "thumb_size") }
     }
 
-    @ObservationIgnored
     public var showGalleryPages: Bool {
-        get { UserDefaults.standard.bool(forKey: "show_gallery_pages") }
-        set { UserDefaults.standard.set(newValue, forKey: "show_gallery_pages") }
+        get {
+            access(keyPath: \.showGalleryPages)
+            return _defaults.bool(forKey: "show_gallery_pages")
+        }
+        set {
+            withMutation(keyPath: \.showGalleryPages) {
+                _defaults.set(newValue, forKey: "show_gallery_pages")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var showTagTranslations: Bool {
-        get { UserDefaults.standard.object(forKey: "show_tag_translations") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_tag_translations") }
+        get {
+            access(keyPath: \.showTagTranslations)
+            return _defaults.object(forKey: "show_tag_translations") as? Bool ?? true
+        }
+        set {
+            withMutation(keyPath: \.showTagTranslations) {
+                _defaults.set(newValue, forKey: "show_tag_translations")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var showGalleryComment: Bool {
-        get { UserDefaults.standard.object(forKey: "show_gallery_comment") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_gallery_comment") }
+        get {
+            access(keyPath: \.showGalleryComment)
+            return _defaults.object(forKey: "show_gallery_comment") as? Bool ?? true
+        }
+        set {
+            withMutation(keyPath: \.showGalleryComment) {
+                _defaults.set(newValue, forKey: "show_gallery_comment")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var showGalleryRating: Bool {
-        get { UserDefaults.standard.object(forKey: "show_gallery_rating") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_gallery_rating") }
+        get {
+            access(keyPath: \.showGalleryRating)
+            return _defaults.object(forKey: "show_gallery_rating") as? Bool ?? true
+        }
+        set {
+            withMutation(keyPath: \.showGalleryRating) {
+                _defaults.set(newValue, forKey: "show_gallery_rating")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var showReadProgress: Bool {
-        get { UserDefaults.standard.object(forKey: "show_read_progress") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_read_progress") }
+        get {
+            access(keyPath: \.showReadProgress)
+            return _defaults.object(forKey: "show_read_progress") as? Bool ?? true
+        }
+        set {
+            withMutation(keyPath: \.showReadProgress) {
+                _defaults.set(newValue, forKey: "show_read_progress")
+            }
+        }
     }
 
     /// 大屏幕列表布局模式 (对齐 Android: 0=自适应双栏, 1=全宽单列表)
     @ObservationIgnored
     public var wideScreenListMode: Int {
-        get { UserDefaults.standard.integer(forKey: "wide_screen_list_mode") }
-        set { UserDefaults.standard.set(newValue, forKey: "wide_screen_list_mode") }
+        get { _defaults.integer(forKey: "wide_screen_list_mode") }
+        set { _defaults.set(newValue, forKey: "wide_screen_list_mode") }
     }
 
     @ObservationIgnored
     public var showEhEvents: Bool {
-        get { UserDefaults.standard.object(forKey: "show_eh_events") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_eh_events") }
+        get { _defaults.object(forKey: "show_eh_events") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "show_eh_events") }
     }
 
     @ObservationIgnored
     public var showEhLimits: Bool {
-        get { UserDefaults.standard.object(forKey: "show_eh_limits") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_eh_limits") }
+        get { _defaults.object(forKey: "show_eh_limits") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "show_eh_limits") }
     }
 
     // MARK: - 过滤 / 搜索
     @ObservationIgnored
     public var defaultCategories: Int {
-        get { UserDefaults.standard.object(forKey: "default_categories") as? Int ?? 0x3FF }
-        set { UserDefaults.standard.set(newValue, forKey: "default_categories") }
+        get { _defaults.object(forKey: "default_categories") as? Int ?? 0x3FF }
+        set { _defaults.set(newValue, forKey: "default_categories") }
     }
 
     @ObservationIgnored
     public var excludedTagNamespaces: Int {
-        get { UserDefaults.standard.integer(forKey: "excluded_tag_namespaces") }
-        set { UserDefaults.standard.set(newValue, forKey: "excluded_tag_namespaces") }
+        get { _defaults.integer(forKey: "excluded_tag_namespaces") }
+        set { _defaults.set(newValue, forKey: "excluded_tag_namespaces") }
     }
 
     @ObservationIgnored
     public var excludedLanguages: String? {
-        get { UserDefaults.standard.string(forKey: "excluded_languages") }
-        set { UserDefaults.standard.set(newValue, forKey: "excluded_languages") }
+        get { _defaults.string(forKey: "excluded_languages") }
+        set { _defaults.set(newValue, forKey: "excluded_languages") }
     }
 
     @ObservationIgnored
     public var cellularNetworkWarning: Bool {
-        get { UserDefaults.standard.bool(forKey: "cellular_network_warning") }
-        set { UserDefaults.standard.set(newValue, forKey: "cellular_network_warning") }
+        get { _defaults.bool(forKey: "cellular_network_warning") }
+        set { _defaults.set(newValue, forKey: "cellular_network_warning") }
     }
 
     // MARK: - 阅读器
     @ObservationIgnored
     public var readingDirection: Int {
-        get { UserDefaults.standard.object(forKey: "reading_direction") as? Int ?? 1 }
-        set { UserDefaults.standard.set(newValue, forKey: "reading_direction") }
+        get { _defaults.object(forKey: "reading_direction") as? Int ?? 1 }
+        set { _defaults.set(newValue, forKey: "reading_direction") }
     }
 
     @ObservationIgnored
     public var pageScaling: Int {
-        get { UserDefaults.standard.object(forKey: "page_scaling") as? Int ?? 3 }
-        set { UserDefaults.standard.set(newValue, forKey: "page_scaling") }
+        get { _defaults.object(forKey: "page_scaling") as? Int ?? 3 }
+        set { _defaults.set(newValue, forKey: "page_scaling") }
     }
 
     @ObservationIgnored
     public var startPosition: Int {
-        get { UserDefaults.standard.integer(forKey: "start_position") }
-        set { UserDefaults.standard.set(newValue, forKey: "start_position") }
+        get { _defaults.integer(forKey: "start_position") }
+        set { _defaults.set(newValue, forKey: "start_position") }
     }
 
     @ObservationIgnored
     public var keepScreenOn: Bool {
-        get { UserDefaults.standard.bool(forKey: "keep_screen_on") }
-        set { UserDefaults.standard.set(newValue, forKey: "keep_screen_on") }
+        get { _defaults.bool(forKey: "keep_screen_on") }
+        set { _defaults.set(newValue, forKey: "keep_screen_on") }
     }
 
     @ObservationIgnored
     public var readingFullscreen: Bool {
-        get { UserDefaults.standard.object(forKey: "reading_fullscreen") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "reading_fullscreen") }
+        get { _defaults.object(forKey: "reading_fullscreen") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "reading_fullscreen") }
     }
 
     @ObservationIgnored
     public var showClock: Bool {
-        get { UserDefaults.standard.object(forKey: "gallery_show_clock") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "gallery_show_clock") }
+        get { _defaults.object(forKey: "gallery_show_clock") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "gallery_show_clock") }
     }
 
     @ObservationIgnored
     public var showProgress: Bool {
-        get { UserDefaults.standard.object(forKey: "gallery_show_progress") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "gallery_show_progress") }
+        get { _defaults.object(forKey: "gallery_show_progress") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "gallery_show_progress") }
     }
 
     @ObservationIgnored
     public var showBattery: Bool {
-        get { UserDefaults.standard.object(forKey: "gallery_show_battery") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "gallery_show_battery") }
+        get { _defaults.object(forKey: "gallery_show_battery") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "gallery_show_battery") }
     }
 
     @ObservationIgnored
     public var customScreenLightness: Bool {
-        get { UserDefaults.standard.bool(forKey: "custom_screen_lightness") }
-        set { UserDefaults.standard.set(newValue, forKey: "custom_screen_lightness") }
+        get { _defaults.bool(forKey: "custom_screen_lightness") }
+        set { _defaults.set(newValue, forKey: "custom_screen_lightness") }
     }
 
     @ObservationIgnored
     public var screenLightness: Int {
-        get { UserDefaults.standard.object(forKey: "screen_lightness") as? Int ?? 50 }
-        set { UserDefaults.standard.set(newValue, forKey: "screen_lightness") }
+        get { _defaults.object(forKey: "screen_lightness") as? Int ?? 50 }
+        set { _defaults.set(newValue, forKey: "screen_lightness") }
     }
 
     // MARK: - 阅读器 (新增)
@@ -285,151 +369,174 @@ public final class AppSettings: @unchecked Sendable {
     /// 音量键翻页
     @ObservationIgnored
     public var volumePage: Bool {
-        get { UserDefaults.standard.bool(forKey: "volume_page") }
-        set { UserDefaults.standard.set(newValue, forKey: "volume_page") }
+        get { _defaults.bool(forKey: "volume_page") }
+        set { _defaults.set(newValue, forKey: "volume_page") }
     }
 
     /// 反转音量键
     @ObservationIgnored
     public var reverseVolumePage: Bool {
-        get { UserDefaults.standard.bool(forKey: "reverse_volume_page") }
-        set { UserDefaults.standard.set(newValue, forKey: "reverse_volume_page") }
+        get { _defaults.bool(forKey: "reverse_volume_page") }
+        set { _defaults.set(newValue, forKey: "reverse_volume_page") }
     }
 
     /// 显示页面间距
     @ObservationIgnored
     public var showPageInterval: Bool {
-        get { UserDefaults.standard.bool(forKey: "show_page_interval") }
-        set { UserDefaults.standard.set(newValue, forKey: "show_page_interval") }
+        get { _defaults.bool(forKey: "show_page_interval") }
+        set { _defaults.set(newValue, forKey: "show_page_interval") }
     }
 
     /// 屏幕旋转 (0=跟随系统, 1=竖屏, 2=横屏)
     @ObservationIgnored
     public var screenRotation: Int {
-        get { UserDefaults.standard.integer(forKey: "screen_rotation") }
-        set { UserDefaults.standard.set(newValue, forKey: "screen_rotation") }
+        get { _defaults.integer(forKey: "screen_rotation") }
+        set { _defaults.set(newValue, forKey: "screen_rotation") }
     }
 
     /// 自动翻页延迟 (秒)
     @ObservationIgnored
     public var autoPageInterval: Int {
-        get { UserDefaults.standard.object(forKey: "auto_page_interval") as? Int ?? 5 }
-        set { UserDefaults.standard.set(newValue, forKey: "auto_page_interval") }
+        get { _defaults.object(forKey: "auto_page_interval") as? Int ?? 5 }
+        set { _defaults.set(newValue, forKey: "auto_page_interval") }
     }
 
     /// 色彩滤镜 (护眼模式)
     @ObservationIgnored
     public var colorFilter: Bool {
-        get { UserDefaults.standard.bool(forKey: "color_filter") }
-        set { UserDefaults.standard.set(newValue, forKey: "color_filter") }
+        get { _defaults.bool(forKey: "color_filter") }
+        set { _defaults.set(newValue, forKey: "color_filter") }
     }
 
     /// 色彩滤镜颜色
     @ObservationIgnored
     public var colorFilterColor: Int {
-        get { UserDefaults.standard.object(forKey: "color_filter_color") as? Int ?? 0x20000000 }
-        set { UserDefaults.standard.set(newValue, forKey: "color_filter_color") }
+        get { _defaults.object(forKey: "color_filter_color") as? Int ?? 0x20000000 }
+        set { _defaults.set(newValue, forKey: "color_filter_color") }
     }
 
     // MARK: - 收藏
     @ObservationIgnored
     public var recentFavCat: Int {
-        get { UserDefaults.standard.object(forKey: "recent_fav_cat") as? Int ?? -1 }
-        set { UserDefaults.standard.set(newValue, forKey: "recent_fav_cat") }
+        get { _defaults.object(forKey: "recent_fav_cat") as? Int ?? -1 }
+        set { _defaults.set(newValue, forKey: "recent_fav_cat") }
     }
 
     @ObservationIgnored
     public var defaultFavSlot: Int {
-        get { UserDefaults.standard.object(forKey: "default_favorite_2") as? Int ?? -2 }
-        set { UserDefaults.standard.set(newValue, forKey: "default_favorite_2") }
+        get { _defaults.object(forKey: "default_favorite_2") as? Int ?? -2 }
+        set { _defaults.set(newValue, forKey: "default_favorite_2") }
     }
 
     /// 收藏夹名称 (0-9)
     public func favCatName(_ index: Int) -> String {
-        UserDefaults.standard.string(forKey: "fav_cat_\(index)") ?? "Favorites \(index)"
+        _defaults.string(forKey: "fav_cat_\(index)") ?? "Favorites \(index)"
     }
 
     public func setFavCatName(_ index: Int, _ name: String) {
-        UserDefaults.standard.set(name, forKey: "fav_cat_\(index)")
+        _defaults.set(name, forKey: "fav_cat_\(index)")
     }
 
     /// 收藏夹计数 (0-9)
     public func favCount(_ index: Int) -> Int {
-        UserDefaults.standard.integer(forKey: "fav_count_\(index)")
+        _defaults.integer(forKey: "fav_count_\(index)")
     }
 
     public func setFavCount(_ index: Int, _ count: Int) {
-        UserDefaults.standard.set(count, forKey: "fav_count_\(index)")
+        _defaults.set(count, forKey: "fav_count_\(index)")
     }
 
     // MARK: - 下载
     @ObservationIgnored
     public var recentDownloadLabel: String? {
-        get { UserDefaults.standard.string(forKey: "recent_download_label") }
-        set { UserDefaults.standard.set(newValue, forKey: "recent_download_label") }
+        get { _defaults.string(forKey: "recent_download_label") }
+        set { _defaults.set(newValue, forKey: "recent_download_label") }
     }
 
     @ObservationIgnored
     public var hasDefaultDownloadLabel: Bool {
-        get { UserDefaults.standard.bool(forKey: "has_default_download_label") }
-        set { UserDefaults.standard.set(newValue, forKey: "has_default_download_label") }
+        get { _defaults.bool(forKey: "has_default_download_label") }
+        set { _defaults.set(newValue, forKey: "has_default_download_label") }
     }
 
     @ObservationIgnored
     public var defaultDownloadLabel: String? {
-        get { UserDefaults.standard.string(forKey: "default_download_label") }
-        set { UserDefaults.standard.set(newValue, forKey: "default_download_label") }
+        get { _defaults.string(forKey: "default_download_label") }
+        set { _defaults.set(newValue, forKey: "default_download_label") }
     }
 
     // MARK: - 首次启动引导
     
-    /// 是否需要显示 18+ 警告 (首次启动时显示)
-    @ObservationIgnored
+    /// 是否需要显示 18+ 警告 (首次启动时显示) — UI 联动
     public var showWarning: Bool {
-        get { UserDefaults.standard.object(forKey: "show_warning") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "show_warning") }
+        get {
+            access(keyPath: \.showWarning)
+            return _defaults.object(forKey: "show_warning") as? Bool ?? true
+        }
+        set {
+            withMutation(keyPath: \.showWarning) {
+                _defaults.set(newValue, forKey: "show_warning")
+            }
+        }
     }
     
-    /// 是否已选择站点 (首次启动引导)
-    @ObservationIgnored
+    /// 是否已选择站点 (首次启动引导) — UI 联动
     public var hasSelectedSite: Bool {
-        get { UserDefaults.standard.bool(forKey: "has_selected_site") }
-        set { UserDefaults.standard.set(newValue, forKey: "has_selected_site") }
+        get {
+            access(keyPath: \.hasSelectedSite)
+            return _defaults.bool(forKey: "has_selected_site")
+        }
+        set {
+            withMutation(keyPath: \.hasSelectedSite) {
+                _defaults.set(newValue, forKey: "has_selected_site")
+            }
+        }
     }
 
-    /// 是否跳过登录 (游客模式，仅能访问 E-Hentai)
-    /// 对应 Android: Settings.putNeedSignIn(false)
-    @ObservationIgnored
+    /// 是否跳过登录 (游客模式) — UI 联动
     public var skipSignIn: Bool {
-        get { UserDefaults.standard.bool(forKey: "skip_sign_in") }
-        set { UserDefaults.standard.set(newValue, forKey: "skip_sign_in") }
+        get {
+            access(keyPath: \.skipSignIn)
+            return _defaults.bool(forKey: "skip_sign_in")
+        }
+        set {
+            withMutation(keyPath: \.skipSignIn) {
+                _defaults.set(newValue, forKey: "skip_sign_in")
+            }
+        }
     }
 
-    // MARK: - 隐私安全
-    @ObservationIgnored
+    // MARK: - 隐私安全 (UI 联动)
     public var enableSecurity: Bool {
-        get { UserDefaults.standard.bool(forKey: "enable_secure") }
-        set { UserDefaults.standard.set(newValue, forKey: "enable_secure") }
+        get {
+            access(keyPath: \.enableSecurity)
+            return _defaults.bool(forKey: "enable_secure")
+        }
+        set {
+            withMutation(keyPath: \.enableSecurity) {
+                _defaults.set(newValue, forKey: "enable_secure")
+            }
+        }
     }
     
     /// 安全延迟时间 (秒) - 应用进入后台后多久需要重新认证
     @ObservationIgnored
     public var securityDelay: Int {
-        get { UserDefaults.standard.object(forKey: "security_delay") as? Int ?? 0 }
-        set { UserDefaults.standard.set(newValue, forKey: "security_delay") }
+        get { _defaults.object(forKey: "security_delay") as? Int ?? 0 }
+        set { _defaults.set(newValue, forKey: "security_delay") }
     }
 
     // MARK: - 高级
     @ObservationIgnored
     public var saveParseErrorBody: Bool {
-        get { UserDefaults.standard.bool(forKey: "save_parse_error_body") }
-        set { UserDefaults.standard.set(newValue, forKey: "save_parse_error_body") }
+        get { _defaults.bool(forKey: "save_parse_error_body") }
+        set { _defaults.set(newValue, forKey: "save_parse_error_body") }
     }
 
     @ObservationIgnored
     public var historyInfoSize: Int {
-        get { max(100, UserDefaults.standard.object(forKey: "history_info_size") as? Int ?? 100) }
-        set { UserDefaults.standard.set(max(100, newValue), forKey: "history_info_size") }
+        get { max(100, _defaults.object(forKey: "history_info_size") as? Int ?? 100) }
+        set { _defaults.set(max(100, newValue), forKey: "history_info_size") }
     }
 
     // MARK: - Android 对齐: 附加设置
@@ -437,48 +544,48 @@ public final class AppSettings: @unchecked Sendable {
     /// 详情页信息大小 (对齐 Android Settings.KEY_DETAIL_SIZE; 0=normal, 1=large)
     @ObservationIgnored
     public var detailSize: Int {
-        get { UserDefaults.standard.integer(forKey: "detail_size") }
-        set { UserDefaults.standard.set(newValue, forKey: "detail_size") }
+        get { _defaults.integer(forKey: "detail_size") }
+        set { _defaults.set(newValue, forKey: "detail_size") }
     }
 
     /// 缩略图分辨率 (对齐 Android Settings.KEY_THUMB_RESOLUTION; 0=normal, 1=large)
     @ObservationIgnored
     public var thumbResolution: Int {
-        get { UserDefaults.standard.integer(forKey: "thumb_resolution") }
-        set { UserDefaults.standard.set(newValue, forKey: "thumb_resolution") }
+        get { _defaults.integer(forKey: "thumb_resolution") }
+        set { _defaults.set(newValue, forKey: "thumb_resolution") }
     }
 
     /// 修复缩略图链接 (对齐 Android Settings.KEY_FIX_THUMB_URL)
     @ObservationIgnored
     public var fixThumbUrl: Bool {
-        get { UserDefaults.standard.bool(forKey: "fix_thumb_url") }
-        set { UserDefaults.standard.set(newValue, forKey: "fix_thumb_url") }
+        get { _defaults.bool(forKey: "fix_thumb_url") }
+        set { _defaults.set(newValue, forKey: "fix_thumb_url") }
     }
 
     /// 内置 ExHentai Hosts (对齐 Android Settings.KEY_BUILT_IN_HOSTS_EX)
     @ObservationIgnored
     public var builtExHosts: Bool {
-        get { UserDefaults.standard.object(forKey: "built_ex_hosts") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "built_ex_hosts") }
+        get { _defaults.object(forKey: "built_ex_hosts") as? Bool ?? false }
+        set { _defaults.set(newValue, forKey: "built_ex_hosts") }
     }
 
     /// 媒体扫描 (对齐 Android Settings.KEY_MEDIA_SCAN)
     @ObservationIgnored
     public var mediaScan: Bool {
-        get { UserDefaults.standard.bool(forKey: "media_scan") }
-        set { UserDefaults.standard.set(newValue, forKey: "media_scan") }
+        get { _defaults.bool(forKey: "media_scan") }
+        set { _defaults.set(newValue, forKey: "media_scan") }
     }
 
     /// 导航栏主题色 (对齐 Android Settings.KEY_APPLY_NAV_BAR_THEME_COLOR)
     @ObservationIgnored
     public var applyNavBarThemeColor: Bool {
-        get { UserDefaults.standard.bool(forKey: "apply_nav_bar_theme_color") }
-        set { UserDefaults.standard.set(newValue, forKey: "apply_nav_bar_theme_color") }
+        get { _defaults.bool(forKey: "apply_nav_bar_theme_color") }
+        set { _defaults.set(newValue, forKey: "apply_nav_bar_theme_color") }
     }
 
     private init() {
         // 注册默认值
-        UserDefaults.standard.register(defaults: [
+        _defaults.register(defaults: [
             "gallery_site": EhSite.eHentai.rawValue,
             "domain_fronting": false,   // iOS URLSession 域名前置不可靠，默认禁用
             "built_in_hosts": false,    // iOS URLSession 域名前置不可靠，默认禁用

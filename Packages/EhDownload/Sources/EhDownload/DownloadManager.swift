@@ -451,7 +451,7 @@ extension SpiderInfo {
 
 // MARK: - SpiderInfoUpdater (用于下载时更新 .ehviewer 文件)
 
-final class SpiderInfoUpdater: SpiderDelegate, @unchecked Sendable {
+actor SpiderInfoUpdater: SpiderDelegate {
     private let directory: URL
     private let gid: Int64
     private let title: String

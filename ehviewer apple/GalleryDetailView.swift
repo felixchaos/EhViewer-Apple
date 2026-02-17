@@ -636,7 +636,7 @@ struct ReaderLaunchItem: Identifiable {
     let initialPage: Int?
 }
 
-@Observable
+@MainActor @Observable
 class GalleryDetailViewModel {
     var isLoading = false
     var errorMessage: String?
@@ -653,7 +653,7 @@ class GalleryDetailViewModel {
     var processedComments: [ProcessedComment] = []
     /// Fix F3-4: 下载状态轮询任务
     @ObservationIgnored
-    nonisolated(unsafe) var downloadPollingTask: Task<Void, Never>?
+    var downloadPollingTask: Task<Void, Never>?
 
     // MARK: - Processed Comment (Perf P0-4)
 
@@ -724,13 +724,11 @@ class GalleryDetailViewModel {
         if let cached = GalleryCache.shared.getDetail(gid: gid) {
             // 查询下载状态 (对齐 Android: DownloadManager 状态查询)
             let dlState = await DownloadManager.shared.getTaskState(gid: gid)
-            await MainActor.run {
-                self.detail = cached
-                self.isFavorited = cached.isFavorited
-                self.displayRating = cached.info.rating
-                self.downloadState = dlState
-                self.isLoading = false
-            }
+            self.detail = cached
+            self.isFavorited = cached.isFavorited
+            self.displayRating = cached.info.rating
+            self.downloadState = dlState
+            self.isLoading = false
             // Perf P0-4: 预处理评论 HTML
             preprocessComments(cached.comments.comments)
             // Perf P0-5: 一次性检查阅读进度
@@ -756,13 +754,11 @@ class GalleryDetailViewModel {
             // Fix B-2: 同时检查服务器收藏和本地收藏
             let hasLocalFav = (try? EhDatabase.shared.containsLocalFavorite(gid: gid)) ?? false
 
-            await MainActor.run {
-                self.detail = result
-                self.isFavorited = result.isFavorited || hasLocalFav
-                self.displayRating = result.info.rating
-                self.downloadState = dlState
-                self.isLoading = false
-            }
+            self.detail = result
+            self.isFavorited = result.isFavorited || hasLocalFav
+            self.displayRating = result.info.rating
+            self.downloadState = dlState
+            self.isLoading = false
 
             // Perf P0-4: 预处理评论 HTML
             preprocessComments(result.comments.comments)
@@ -773,10 +769,8 @@ class GalleryDetailViewModel {
             startDownloadPollingIfNeeded(gid: gid)
         } catch {
             debugLog("Error loading detail: \(error)")
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
-                self.isLoading = false
-            }
+            self.errorMessage = EhError.localizedMessage(for: error)
+            self.isLoading = false
         }
     }
 
@@ -857,7 +851,7 @@ class GalleryDetailViewModel {
     func startDownload(gallery: GalleryInfo) async {
         await GalleryActionService.shared.startDownload(gallery: gallery)
         let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
-        await MainActor.run { self.downloadState = state }
+        self.downloadState = state
         // Fix F3-4: 开始下载后启动轮询
         startDownloadPollingIfNeeded(gid: gallery.gid)
     }
@@ -929,10 +923,8 @@ class GalleryDetailViewModel {
                 token: token,
                 rating: rating
             )
-            await MainActor.run {
-                // 如果返回有效评分则使用，否则使用用户选择的评分
-                self.displayRating = result.rating > 0 ? Float(result.rating) : rating
-            }
+            // 如果返回有效评分则使用，否则使用用户选择的评分
+            self.displayRating = result.rating > 0 ? Float(result.rating) : rating
         } catch {
             debugLog("Rate gallery failed: \(error)")
         }
@@ -942,7 +934,7 @@ class GalleryDetailViewModel {
     func loadAllComments(gid: Int64, token: String) async {
         guard !isLoadingComments else { return }
 
-        await MainActor.run { isLoadingComments = true }
+        isLoadingComments = true
 
         do {
             let site = GalleryActionService.siteBaseURL
@@ -951,20 +943,16 @@ class GalleryDetailViewModel {
             let result = try await EhAPI.shared.getGalleryDetail(url: urlStr)
 
             // 更新详情（主要是评论列表）
-            await MainActor.run {
-                // 保留原有详情，只更新评论部分
-                if var currentDetail = self.detail {
-                    currentDetail.comments = result.comments
-                    self.detail = currentDetail
-                    // 更新缓存
-                    GalleryCache.shared.putDetail(currentDetail)
-                }
-                self.isLoadingComments = false
+            // 保留原有详情，只更新评论部分
+            if var currentDetail = self.detail {
+                currentDetail.comments = result.comments
+                self.detail = currentDetail
+                // 更新缓存
+                GalleryCache.shared.putDetail(currentDetail)
             }
+            self.isLoadingComments = false
         } catch {
-            await MainActor.run {
-                self.isLoadingComments = false
-            }
+            self.isLoadingComments = false
             debugLog("Load all comments failed: \(error)")
         }
     }

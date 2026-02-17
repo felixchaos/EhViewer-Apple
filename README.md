@@ -1,7 +1,7 @@
 # EhViewer-Apple
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-brightgreen" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-1.0.1-brightgreen" alt="Version"/>
   <img src="https://img.shields.io/badge/platform-iOS%2017%2B%20%7C%20macOS%2014%2B-blue" alt="Platform"/>
   <img src="https://img.shields.io/badge/swift-6.0-orange" alt="Swift 6.0"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
@@ -10,6 +10,29 @@
 EhViewer-Apple 是一款适用于 iOS 和 macOS 的 [E-Hentai](https://e-hentai.org) / [ExHentai](https://exhentai.org) 画廊浏览客户端，使用 SwiftUI 原生构建。
 
 > **致敬**: 本项目灵感来源于 Android 端的 [EhViewer](https://github.com/Ehviewer-Overhauled/Ehviewer) 和 [EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ)，感谢原作者的出色工作。
+
+---
+
+## 📢 v1.0.1 — 代码审计 & 质量加固
+
+基于全面代码审计（详见 [AUDIT_REPORT.md](AUDIT_REPORT.md)），完成以下加固：
+
+### 🔒 并发安全
+- **SpiderDen** — 静态可变状态用 `NSLock` 保护；`SimpleDiskCache` 所有 I/O 走 `queue.sync`
+- **DownloadManager.SpiderInfoUpdater** — 从 `@unchecked Sendable class` 迁移为 `actor`
+- **BackgroundDownloadManager** — `activeTasks` 字典加 `NSLock` 互斥
+- **GalleryDetailViewModel** — 标注 `@MainActor`，移除 `nonisolated(unsafe)` 和 8 处冗余 `MainActor.run`
+- **AppErrorHandling.ErrorHandler** — 标注 `@MainActor`，GCD → `Task { @MainActor in }`
+- **EhFilterManager / FavouriteStatusRouter** — 标注 `@MainActor`
+
+### 🧠 内存优化
+- **ReaderViewModel** — NSCache 容量根据 `ProcessInfo.physicalMemory` 自适应（80–400 MB）；下载完成后主动驱逐远距离页面
+
+### 📐 响应式布局
+- 新增 `ResponsiveLayout` 工具（`EnvironmentKey`），`GalleryListView` 缩略图尺寸随屏幕自适应
+
+### 🧹 观察模式
+- **AppSettings** — 15 个 UI 属性改用 `access / withMutation` 正确触发 `@Observable`
 
 ---
 

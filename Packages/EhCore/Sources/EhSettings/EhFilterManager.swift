@@ -4,7 +4,7 @@ import EhModels
 // MARK: - EhFilterManager (对应 Android EhFilter.java 运行时过滤逻辑)
 // 使用 EhFilter 条目列表对画廊进行过滤
 
-@Observable
+@MainActor @Observable
 public final class EhFilterManager: @unchecked Sendable {
     public static let shared = EhFilterManager()
 

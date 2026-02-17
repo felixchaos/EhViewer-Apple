@@ -30,6 +30,7 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
 
     /// 存储当前下载任务
     private var activeTasks: [Int: DownloadTaskInfo] = [:]
+    private let tasksLock = NSLock()
 
     /// 防止重复注册后台任务
     private var isRegistered = false
@@ -143,7 +144,9 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
     func downloadImage(url: URL, to destination: URL, completion: @escaping (Result<URL, Error>) -> Void) {
         let task = backgroundSession.downloadTask(with: url)
         let taskInfo = DownloadTaskInfo(destinationURL: destination, completion: completion)
+        tasksLock.lock()
         activeTasks[task.taskIdentifier] = taskInfo
+        tasksLock.unlock()
         task.resume()
     }
 }
@@ -153,7 +156,10 @@ final class BackgroundDownloadManager: NSObject, @unchecked Sendable {
 extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let taskInfo = activeTasks[downloadTask.taskIdentifier] else { return }
+        tasksLock.lock()
+        let taskInfo = activeTasks[downloadTask.taskIdentifier]
+        tasksLock.unlock()
+        guard let taskInfo else { return }
 
         do {
             // 如果目标文件已存在，先删除
@@ -172,12 +178,17 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             taskInfo.completion(.failure(error))
         }
 
+        tasksLock.lock()
         activeTasks.removeValue(forKey: downloadTask.taskIdentifier)
+        tasksLock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        tasksLock.lock()
+        let taskInfo = activeTasks[task.taskIdentifier]
+        tasksLock.unlock()
         guard let error = error,
-              let taskInfo = activeTasks[task.taskIdentifier] else { return }
+              let taskInfo else { return }
 
         // 保存 resume data 以支持断点续传
         if let nsError = error as NSError?,
@@ -189,7 +200,9 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         }
 
         taskInfo.completion(.failure(error))
+        tasksLock.lock()
         activeTasks.removeValue(forKey: task.taskIdentifier)
+        tasksLock.unlock()
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

@@ -4,7 +4,7 @@ import EhModels
 // MARK: - FavouriteStatusRouter (对应 Android FavouriteStatusRouter.java)
 // 跨页面收藏状态同步: 当一个页面修改了收藏状态，其他页面也能收到通知并更新
 
-@Observable
+@MainActor @Observable
 public final class FavouriteStatusRouter: @unchecked Sendable {
     public static let shared = FavouriteStatusRouter()
 
