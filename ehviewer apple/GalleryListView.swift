@@ -185,6 +185,18 @@ struct GalleryListView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                         errorView
+                    } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                        // 安全兜底: 列表为空且未加载 — 提供手动重载入口
+                        ContentUnavailableView {
+                            Label("暂无内容", systemImage: "tray")
+                        } description: {
+                            Text("点击下方按钮重新加载")
+                        } actions: {
+                            Button("重新加载") {
+                                viewModel.loadGalleries(mode: effectiveMode)
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     } else {
                         galleryList
                     }
@@ -262,6 +274,17 @@ struct GalleryListView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                     errorView
+                } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                    ContentUnavailableView {
+                        Label("暂无内容", systemImage: "tray")
+                    } description: {
+                        Text("点击下方按钮重新加载")
+                    } actions: {
+                        Button("重新加载") {
+                            viewModel.loadGalleries(mode: effectiveMode)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 } else {
                     galleryList
                 }
@@ -422,6 +445,17 @@ struct GalleryListView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
                     errorView
+                } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                    ContentUnavailableView {
+                        Label("暂无内容", systemImage: "tray")
+                    } description: {
+                        Text("点击下方按钮重新加载")
+                    } actions: {
+                        Button("重新加载") {
+                            viewModel.loadGalleries(mode: effectiveMode)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 } else {
                     List(selection: selectionBinding) {
                         ForEach(viewModel.galleries, id: \.gid) { gallery in
@@ -1162,7 +1196,8 @@ class GalleryListViewModel {
         if let key = currentCacheKey {
             GalleryCache.shared.removeListResult(forKey: key)
         }
-        galleries = []
+        // 不清除 galleries — loadGalleries/fetchPage 成功后会替换
+        // 避免列表被清空后触发 ProgressView，导致 .refreshable 任务被 SwiftUI 取消
         isLoading = false  // 重置状态，确保 loadGalleries 不会被 guard 拦截
         loadGalleries(mode: mode)
     }
@@ -1172,14 +1207,14 @@ class GalleryListViewModel {
         if let key = currentCacheKey {
             GalleryCache.shared.removeListResult(forKey: key)
         }
-        galleries = []
+        // 不清除 galleries、不设置 isLoading = true
+        // — 保持旧数据可见，防止 SwiftUI 将 galleryList 替换为 ProgressView
+        //   从而取消 .refreshable 的结构化并发任务
         currentMode = mode
-        isLoading = true
         errorMessage = nil
         currentPage = 0
         let cacheKey = Self.cacheKey(for: mode, page: 0)
         currentCacheKey = cacheKey
-        defer { isLoading = false }  // 确保无论成功/失败/取消都会重置
         await fetchPage(mode: mode, page: 0)
     }
 
