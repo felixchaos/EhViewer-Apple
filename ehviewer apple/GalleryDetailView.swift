@@ -616,6 +616,7 @@ class GalleryDetailViewModel {
     /// Perf P0-4: 预处理后的评论 (HTML 已剥离，避免 body 中执行 regex)
     var processedComments: [ProcessedComment] = []
     /// Fix F3-4: 下载状态轮询任务
+    @ObservationIgnored
     nonisolated(unsafe) var downloadPollingTask: Task<Void, Never>?
 
     // MARK: - Processed Comment (Perf P0-4)

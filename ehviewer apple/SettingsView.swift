@@ -1613,7 +1613,8 @@ class SettingsViewModel {
                         orphanDirs.append(dir)
                         // 计算目录大小
                         if let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
-                            for case let fileURL as URL in enumerator {
+                            let fileURLs = enumerator.allObjects.compactMap { $0 as? URL }
+                            for fileURL in fileURLs {
                                 let size = (try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0
                                 totalSize += Int64(size)
                             }

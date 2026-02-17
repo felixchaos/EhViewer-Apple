@@ -382,10 +382,11 @@ struct ImageReaderView: View {
     private func goToNextPage() {
         if vm.isDoublePageEnabled {
             // 双页模式: 按 spread 翻页
-            let nextSpread = (vm.currentSpreadIndex ?? 0) + 1
+            guard let currentIdx = vm.currentSpreadIndex else { return }
+            let nextSpread = currentIdx + 1
             guard nextSpread < vm.spreads.count else { return }
             let nextPage = vm.pageForSpread(nextSpread)
-            // 不使用 withAnimation: TabView 自带翻页动画，额外动画会导致闪烁
+            // 不使用 withAnimation: ScrollView 自带翻页动画，额外动画会导致闪烁
             vm.currentPage = nextPage
             vm.currentSpreadIndex = nextSpread
             Task { await vm.onPageChange(nextPage) }
@@ -398,7 +399,8 @@ struct ImageReaderView: View {
 
     private func goToPreviousPage() {
         if vm.isDoublePageEnabled {
-            let prevSpread = (vm.currentSpreadIndex ?? 0) - 1
+            guard let currentIdx = vm.currentSpreadIndex else { return }
+            let prevSpread = currentIdx - 1
             guard prevSpread >= 0 else { return }
             let prevPage = vm.pageForSpread(prevSpread)
             vm.currentPage = prevPage
@@ -1057,8 +1059,8 @@ struct ImageReaderView: View {
 
             // 页码显示 (双页模式标注 spread)
             Group {
-                if vm.isDoublePageEnabled, (vm.currentSpreadIndex ?? 0) < vm.spreads.count {
-                    let spread = vm.spreads[vm.currentSpreadIndex ?? 0]
+                if vm.isDoublePageEnabled, let currentIdx = vm.currentSpreadIndex, currentIdx < vm.spreads.count {
+                    let spread = vm.spreads[currentIdx]
                     if let sec = spread.secondaryPage {
                         Text("\(spread.primaryPage + 1)-\(sec + 1) / \(vm.totalPages)")
                     } else {

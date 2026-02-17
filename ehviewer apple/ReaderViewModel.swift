@@ -154,7 +154,16 @@ class ReaderViewModel {
     /// 15000×20000 的长条漫会被降采样到合理尺寸，避免 OOM
     private static let maxDecodePixelSize: CGFloat = {
         #if os(iOS)
-        let screenMax = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
+        // iOS 26+ 废弃 UIScreen.main，通过 connectedScenes 获取屏幕信息
+        let screenMax: CGFloat
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first {
+            let screen = scene.screen
+            screenMax = max(screen.bounds.width, screen.bounds.height) * screen.scale
+        } else {
+            // App 未完全初始化时的保守默认值 (iPhone Pro Max @3x)
+            screenMax = 2868
+        }
         #else
         let screenMax = max(NSScreen.main?.frame.width ?? 2560, NSScreen.main?.frame.height ?? 1440) * (NSScreen.main?.backingScaleFactor ?? 2)
         #endif

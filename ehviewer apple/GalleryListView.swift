@@ -1366,7 +1366,7 @@ class GalleryListViewModel {
 
     /// 通用日期跳转 (对齐 Android GoToDialog: 所有模式统一使用日期选择器)
     func goToDate(_ date: Date, mode: GalleryListView.ListMode) {
-        if case .favorites(let slot) = mode {
+        if case .favorites = mode {
             // 收藏模式: ?seek=YYYY-MM-DD
             goToFavoritesDate(date, mode: mode)
         } else {
