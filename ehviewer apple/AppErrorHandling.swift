@@ -62,7 +62,7 @@ final class ErrorHandler {
     var currentError: AppError?
 
     /// 处理错误: 记录日志 + 弹窗展示
-    nonisolated func handle(_ error: Error, context: String = "Unknown") {
+    func handle(_ error: Error, context: String = "Unknown") {
         let appError = AppError.from(error)
 
         // 写入日志
@@ -71,14 +71,11 @@ final class ErrorHandler {
             category: "ErrorHandler"
         )
 
-        // 主线程弹窗 — @MainActor 隔离
-        Task { @MainActor in
-            self.currentError = appError
-        }
+        currentError = appError
     }
 
     /// 静默处理 (仅记日志, 不弹窗)
-    nonisolated func handleSilently(_ error: Error, context: String = "Unknown") {
+    func handleSilently(_ error: Error, context: String = "Unknown") {
         LogManager.shared.warning(
             "\(context): \(error.localizedDescription)",
             category: "ErrorHandler"

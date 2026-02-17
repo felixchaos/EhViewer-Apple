@@ -133,7 +133,7 @@ struct GalleryDetailView: View {
         .onAppear {
             Task {
                 let dlState = await DownloadManager.shared.getTaskState(gid: gallery.gid)
-                await MainActor.run { vm.downloadState = dlState }
+                vm.downloadState = dlState
             }
         }
         #if os(macOS)

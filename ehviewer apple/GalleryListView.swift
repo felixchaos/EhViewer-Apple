@@ -1163,6 +1163,7 @@ class GalleryListViewModel {
             GalleryCache.shared.removeListResult(forKey: key)
         }
         galleries = []
+        isLoading = false  // 重置状态，确保 loadGalleries 不会被 guard 拦截
         loadGalleries(mode: mode)
     }
 
@@ -1178,6 +1179,7 @@ class GalleryListViewModel {
         currentPage = 0
         let cacheKey = Self.cacheKey(for: mode, page: 0)
         currentCacheKey = cacheKey
+        defer { isLoading = false }  // 确保无论成功/失败/取消都会重置
         await fetchPage(mode: mode, page: 0)
     }
 
@@ -1325,17 +1327,16 @@ class GalleryListViewModel {
 
             let result = try await EhAPI.shared.getGalleryList(url: urlComponents.url!.absoluteString)
 
-            await MainActor.run {
-                self.galleries = result.galleries
-                self.hasMore = result.nextPage != nil
-                self.isLoading = false
-            }
+            self.galleries = result.galleries
+            self.hasMore = result.nextPage != nil
+            self.isLoading = false
         } catch {
-            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 self.isLoading = false
+                return
             }
+            self.errorMessage = EhError.localizedMessage(for: error)
+            self.isLoading = false
         }
     }
 
@@ -1347,20 +1348,19 @@ class GalleryListViewModel {
             isLoading = true
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: nextHref)
-                await MainActor.run {
-                    self.galleries.append(contentsOf: result.galleries)
-                    self.hasMore = result.nextHref != nil
-                    self.prevHref = result.prevHref
-                    self.nextHref = result.nextHref
-                    self.totalPages = result.pages
-                    self.isLoading = false
-                }
+                self.galleries.append(contentsOf: result.galleries)
+                self.hasMore = result.nextHref != nil
+                self.prevHref = result.prevHref
+                self.nextHref = result.nextHref
+                self.totalPages = result.pages
+                self.isLoading = false
             } catch {
-                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-                await MainActor.run {
-                    self.errorMessage = EhError.localizedMessage(for: error)
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
                     self.isLoading = false
+                    return
                 }
+                self.errorMessage = EhError.localizedMessage(for: error)
+                self.isLoading = false
             }
             return
         }
@@ -1434,20 +1434,19 @@ class GalleryListViewModel {
         Task {
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: href)
-                await MainActor.run {
-                    self.galleries = result.galleries
-                    self.hasMore = result.nextHref != nil
-                    self.prevHref = result.prevHref
-                    self.nextHref = result.nextHref
-                    self.totalPages = result.pages
-                    self.isLoading = false
-                }
+                self.galleries = result.galleries
+                self.hasMore = result.nextHref != nil
+                self.prevHref = result.prevHref
+                self.nextHref = result.nextHref
+                self.totalPages = result.pages
+                self.isLoading = false
             } catch {
-                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-                await MainActor.run {
-                    self.errorMessage = EhError.localizedMessage(for: error)
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
                     self.isLoading = false
+                    return
                 }
+                self.errorMessage = EhError.localizedMessage(for: error)
+                self.isLoading = false
             }
         }
     }
@@ -1464,20 +1463,19 @@ class GalleryListViewModel {
             let jumpUrl = buildJumpUrl(appendParam, mode: mode)
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: jumpUrl)
-                await MainActor.run {
-                    self.galleries = result.galleries
-                    self.hasMore = result.nextPage != nil || result.nextHref != nil
-                    self.prevHref = result.prevHref
-                    self.nextHref = result.nextHref
-                    self.totalPages = result.pages
-                    self.isLoading = false
-                }
+                self.galleries = result.galleries
+                self.hasMore = result.nextPage != nil || result.nextHref != nil
+                self.prevHref = result.prevHref
+                self.nextHref = result.nextHref
+                self.totalPages = result.pages
+                self.isLoading = false
             } catch {
-                if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-                await MainActor.run {
-                    self.errorMessage = EhError.localizedMessage(for: error)
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
                     self.isLoading = false
+                    return
                 }
+                self.errorMessage = EhError.localizedMessage(for: error)
+                self.isLoading = false
             }
         }
     }
@@ -1581,20 +1579,19 @@ class GalleryListViewModel {
 
         do {
             let result = try await EhAPI.shared.getGalleryList(url: seekUrl)
-            await MainActor.run {
-                self.galleries = result.galleries
-                self.hasMore = result.nextPage != nil || result.nextHref != nil
-                self.prevHref = result.prevHref
-                self.nextHref = result.nextHref
-                self.totalPages = result.pages
-                self.isLoading = false
-            }
+            self.galleries = result.galleries
+            self.hasMore = result.nextPage != nil || result.nextHref != nil
+            self.prevHref = result.prevHref
+            self.nextHref = result.nextHref
+            self.totalPages = result.pages
+            self.isLoading = false
         } catch {
-            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 self.isLoading = false
+                return
             }
+            self.errorMessage = EhError.localizedMessage(for: error)
+            self.isLoading = false
         }
     }
 
@@ -1619,20 +1616,19 @@ class GalleryListViewModel {
         
         do {
             let result = try await EhAPI.shared.getGalleryList(url: favUrl)
-            await MainActor.run {
-                self.galleries = result.galleries
-                self.hasMore = result.nextHref != nil
-                self.prevHref = result.prevHref
-                self.nextHref = result.nextHref
-                self.totalPages = result.pages
-                self.isLoading = false
-            }
+            self.galleries = result.galleries
+            self.hasMore = result.nextHref != nil
+            self.prevHref = result.prevHref
+            self.nextHref = result.nextHref
+            self.totalPages = result.pages
+            self.isLoading = false
         } catch {
-            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 self.isLoading = false
+                return
             }
+            self.errorMessage = EhError.localizedMessage(for: error)
+            self.isLoading = false
         }
     }
 
@@ -1687,40 +1683,36 @@ class GalleryListViewModel {
 
             let result = try await EhAPI.shared.getGalleryList(url: urlString)
 
-            await MainActor.run {
-                if page == 0 {
-                    self.galleries = result.galleries
-                } else {
-                    self.galleries.append(contentsOf: result.galleries)
-                }
-                self.hasMore = result.nextPage != nil || result.nextHref != nil
-                self.prevHref = result.prevHref
-                self.nextHref = result.nextHref
-                // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
-                self.totalPages = result.pages
-                self.isLoading = false
+            if page == 0 {
+                self.galleries = result.galleries
+            } else {
+                self.galleries.append(contentsOf: result.galleries)
+            }
+            self.hasMore = result.nextPage != nil || result.nextHref != nil
+            self.prevHref = result.prevHref
+            self.nextHref = result.nextHref
+            // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
+            self.totalPages = result.pages
+            self.isLoading = false
 
-                // 缓存第一页结果
-                if page == 0 {
-                    let cacheKey = Self.cacheKey(for: mode, page: 0)
-                    GalleryCache.shared.putListResult(
-                        CachedGalleryListResult(
-                            galleries: self.galleries,
-                            hasMore: self.hasMore,
-                            nextPage: result.nextPage,
-                            totalPages: self.totalPages
-                        ),
-                        forKey: cacheKey
-                    )
-                }
+            // 缓存第一页结果
+            if page == 0 {
+                let cacheKey = Self.cacheKey(for: mode, page: 0)
+                GalleryCache.shared.putListResult(
+                    CachedGalleryListResult(
+                        galleries: self.galleries,
+                        hasMore: self.hasMore,
+                        nextPage: result.nextPage,
+                        totalPages: self.totalPages
+                    ),
+                    forKey: cacheKey
+                )
             }
 
         } catch {
+            self.isLoading = false  // 始终重置，包括取消
             if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
-                self.isLoading = false
-            }
+            self.errorMessage = EhError.localizedMessage(for: error)
         }
     }
 
