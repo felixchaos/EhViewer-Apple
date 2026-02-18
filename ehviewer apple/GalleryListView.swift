@@ -174,7 +174,8 @@ struct GalleryListView: View {
 
     // iPhone 布局
     private var compactContent: some View {
-        NavigationStack {
+        let _ = debugLog("[GalleryListView] compactContent: galleries=\(viewModel.galleries.count) loading=\(viewModel.isLoading) error=\(viewModel.errorMessage ?? "nil")")
+        return NavigationStack {
             VStack(spacing: 0) {
                 // 搜索栏 (全宽，置于内容顶部)
                 searchBarView

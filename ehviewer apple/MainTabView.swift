@@ -11,7 +11,7 @@ import EhSettings
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
+    @State private var selectedTab: Tab = Tab.bottomTabSafe(Tab.fromLaunchPage(AppSettings.shared.launchPage))
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
@@ -126,6 +126,7 @@ struct MainTabView: View {
         }
         #else
         // iOS: iPad regular → 侧边栏 NavigationSplitView, iPhone → 底部 TabView
+        let _ = debugLog("[MainTabView] body: sizeClass=\(String(describing: horizontalSizeClass)) tab=\(selectedTab)")
         Group {
             if horizontalSizeClass == .regular {
                 // iPad 横屏 / 外接键盘: 侧边栏导航
@@ -161,10 +162,6 @@ struct MainTabView: View {
                             }
                             .tag(tab)
                     }
-                }
-                .onAppear {
-                    // 启动页面在底部导航不存在时降级
-                    selectedTab = Tab.bottomTabSafe(selectedTab)
                 }
             }
         }

@@ -19,7 +19,7 @@ import AppKit
 /// 根视图: 引导流程控制器
 /// 流程: 18+警告 → 安全认证 → 站点选择 → 登录检查 → 主界面
 struct RootView: View {
-    @State private var appState = AppState()
+    @State private var appState: AppState   // 仅在 init() 中初始化，避免创建多余实例
     @State private var flowStep: OnboardingStep
     
     /// 后台进入时间戳，用于判断是否需要重新认证
@@ -79,21 +79,17 @@ struct RootView: View {
     }
 
     var body: some View {
-        // ★ 核心: 用 ZStack 保证 MainTabView 始终存在于视图树中
-        //   引导/登录页面作为全屏覆盖层显示在上方
-        //   避免 Group{switch} 反复创建/销毁 NavigationStack 导致白屏
-        ZStack {
-            // 底层: 主界面 (始终渲染，消除白屏)
-            MainTabView()
-                .environment(appState)
-                .opacity(flowStep == .main || flowStep == .checking ? 1 : 0)
-                .allowsHitTesting(flowStep == .main || flowStep == .checking)
-
-            // 顶层: 引导/登录覆盖
-            if flowStep != .main && flowStep != .checking {
+        let _ = debugLog("[RootView] body rendered — flowStep=\(flowStep) isSignedIn=\(appState.isSignedIn)")
+        // ★ 主界面 + 引导层分离
+        //   - flowStep == .main/.checking → 直接显示主界面
+        //   - 其他 → 显示对应引导/登录页面
+        //   不使用 ZStack/opacity，消除不必要的 MainTabView 提前渲染
+        Group {
+            if flowStep == .main || flowStep == .checking {
+                MainTabView()
+                    .environment(appState)
+            } else {
                 onboardingOverlay
-                    .transition(.opacity)
-                    .zIndex(1)
             }
         }
         .withGlobalErrorBoundary()

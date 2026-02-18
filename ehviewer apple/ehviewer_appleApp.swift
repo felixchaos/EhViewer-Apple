@@ -17,7 +17,8 @@ import UIKit
 
 @main
 struct EhViewerApp: App {
-    @State private var appState = AppState()
+    // ⚠️ 不在 App 层创建 AppState — 由 RootView 独占管理
+    // 避免多个 @Observable 实例触发 App 重渲染
 
     #if os(iOS)
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
