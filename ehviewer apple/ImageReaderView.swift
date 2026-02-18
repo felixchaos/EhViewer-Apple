@@ -225,15 +225,12 @@ struct ImageReaderView: View {
     // MARK: - Ambient Background (模糊氛围背景)
 
     /// 主色调氛围背景 — 使用当前页的 CIAreaAverage 提取色填充未覆盖区域
-    /// 修复: 翻页时如果新页颜色未就绪，保持上一页颜色而非闪黑
+    /// Perf: dominantColors 已标记 @ObservationIgnored，读取不会建立观察依赖
+    /// 颜色在翻页时自然更新 (currentPage 变化触发 body 重绘)
     @ViewBuilder
     private var ambientBackground: some View {
-        let color = vm.dominantColors[vm.currentPage]
-            ?? vm.dominantColors.values.first
-            ?? Color.black
-        color
-            .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.4), value: vm.dominantColors[vm.currentPage] != nil)
+        let color = vm.dominantColors[vm.currentPage] ?? Color.black
+        color.ignoresSafeArea()
     }
 
     // MARK: - Setup

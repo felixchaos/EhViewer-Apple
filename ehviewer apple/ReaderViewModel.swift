@@ -140,15 +140,19 @@ class ReaderViewModel {
     // MARK: - Visual
 
     /// 每页的主色调 (用于模糊背景填充)
-    var dominantColors: [Int: Color] = [:]
+    /// Perf: @ObservationIgnored — 色调提取在后台完成后写入此字典，
+    /// 但不需要立刻触发 body 重绘，下次翻页时 body 自然读到新值
+    @ObservationIgnored var dominantColors: [Int: Color] = [:]
 
-    // MARK: - Private
+    // MARK: - Private (不驱动 UI，无需触发 SwiftUI 刷新)
 
-    private var pTokens: [Int: String] = [:]
-    private var showKeys: [Int: String] = [:]
-    private var loadingPages: Set<Int> = []
-    private var downloadingImages: Set<Int> = []
-    private var downloadDir: URL?
+    /// Perf: 以下属性仅用于内部状态管理，不被任何 View 读取，
+    /// 标记 @ObservationIgnored 避免写入时触发冗余 body 重绘
+    @ObservationIgnored private var pTokens: [Int: String] = [:]
+    @ObservationIgnored private var showKeys: [Int: String] = [:]
+    @ObservationIgnored private var loadingPages: Set<Int> = []
+    @ObservationIgnored private var downloadingImages: Set<Int> = []
+    @ObservationIgnored private var downloadDir: URL?
 
     /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
     private func cacheKey(for page: Int) -> NSString {
@@ -461,19 +465,21 @@ class ReaderViewModel {
     // MARK: - Memory Management
 
     /// 主动释放距当前页过远的图片，防止 OOM
+    /// Perf: 批量移除 — 构建新字典后一次性赋值，避免 N 次 Observable 通知
     func evictDistantPages(from page: Int) {
         // 保留当前页前后各 5 页 (双页模式下约 2.5 个 spread)
         let lo = max(0, page - 5)
         let hi = min(max(0, totalPages - 1), page + 5)
         let keepRange = lo...hi
 
-        var toEvict: [Int] = []
-        for (p, _) in cachedImages where !keepRange.contains(p) {
-            toEvict.append(p)
+        let beforeCount = cachedImages.count
+        var filtered = cachedImages
+        for (p, _) in filtered where !keepRange.contains(p) {
+            filtered.removeValue(forKey: p)
         }
-        for p in toEvict {
-            cachedImages.removeValue(forKey: p)
-            // NSCache 保留自身引用，这里只释放 Observable 层
+        // 仅在确实有淘汰时才赋值 (单次 Observable 通知)
+        if filtered.count != beforeCount {
+            cachedImages = filtered
         }
     }
 
