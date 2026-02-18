@@ -330,41 +330,56 @@ struct ImageReaderView: View {
     private func initializeReader() async {
         // 🛡️ 身份守卫: 将 View 持有的 gid 显式传给 ViewModel
         // Context Switch → resetState() → UI 立即转 Loading
-        // Hit Cache → 跳过整个初始化流程
+        // Hit Cache → 跳过初始化但仍应用 initialPage
         let needsLoad = vm.prepareForGallery(targetGid: gid, targetToken: token)
-        guard needsLoad else { return }
 
-        // Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，替代硬编码 isDownloaded
-        await vm.setupLocalGallery()
+        if needsLoad {
+            // Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，替代硬编码 isDownloaded
+            await vm.setupLocalGallery()
 
-        // Fix Race: setupLocalGallery 完成后再设置 totalPages
-        // 这样页面视图的 .task 不会在 isDownloaded 确定前触发 loadPage
-        if pages > 0 {
-            vm.totalPages = pages
+            // Fix Race: setupLocalGallery 完成后再设置 totalPages
+            if pages > 0 {
+                vm.totalPages = pages
+            }
+
+            if let ps = previewSet {
+                vm.extractPTokens(from: ps)
+            }
+
+            if vm.totalPages == 0 {
+                await vm.fetchGalleryInfo()
+            }
+
+            // 获取页数后重算 spreads
+            vm.computeSpreads()
         }
 
-        if let ps = previewSet {
-            vm.extractPTokens(from: ps)
-        }
-
-        if vm.totalPages == 0 {
-            await vm.fetchGalleryInfo()
-        }
-
-        // 获取页数后重算 spreads
-        vm.computeSpreads()
-
-        // Fix Race: 阅读进度恢复移到这里 (从 init 迁移)
+        // Fix: 无论是否缓存命中，都应用目标页面
+        // 用户可能从不同缩略图进入同一画廊 → initialPage 必须被尊重
         if let initial = initialPage, initial >= 0, initial < vm.totalPages {
             vm.currentPage = initial
-        } else if initialPage == nil {
+        } else if needsLoad && initialPage == nil {
+            // 仅首次加载时恢复保存的阅读进度 (缓存命中时保持当前页)
             let key = "reading_progress_\(gid)"
             if let saved = UserDefaults.standard.object(forKey: key) as? Int, vm.totalPages > 0 {
                 vm.currentPage = min(saved, max(0, vm.totalPages - 1))
             }
         }
 
-        await vm.loadCurrentPage()
+        // 🔑 同步所有滚动位置绑定 — onChange 不触发初始值，必须显式设置
+        // lazyCurrentPage 驱动 .scrollPosition(id:)，不同步会导致 ScrollView 停留在第 0 页
+        vm.lazyCurrentPage = vm.currentPage
+        vm.verticalScrollPage = vm.currentPage
+        if vm.isDoublePageEnabled {
+            vm.syncSpreadIndex()
+        }
+
+        if needsLoad {
+            await vm.loadCurrentPage()
+        } else {
+            // 缓存命中: 仍然触发目标页的加载/预加载
+            await vm.onPageChange(vm.currentPage)
+        }
     }
 
     // MARK: - Progress Persistence

@@ -255,11 +255,12 @@ class ZoomableScrollView: UIScrollView {
                                contentSize.height > bounds.height + 1
         let shouldScroll = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
         isScrollEnabled = shouldScroll
-        // 注意: 不要禁用 panGestureRecognizer.isEnabled!
-        // 当 panGestureRecognizer 被 disabled 时，它不会进入 possible→failed 生命周期，
-        // 导致父 SwiftUI ScrollView 无法通过子手势的 "failed" 状态来接管翻页手势。
-        // 正确做法: panGestureRecognizer 保持 enabled，由 gestureRecognizerShouldBegin()
-        // 返回 false 让手势正常 fail，父 ScrollView 才能识别翻页。
+        // 关键: 同步禁用 panGestureRecognizer!
+        // SwiftUI ScrollView 不走标准 UIKit failure chain，
+        // gestureRecognizerShouldBegin 返回 false 不够 — 内层 pan recognizer
+        // 仍然会阻断父级 SwiftUI ScrollView 识别翻页手势。
+        // 只有 .isEnabled = false 才能让手势 recognizer 完全跳过竞争。
+        panGestureRecognizer.isEnabled = shouldScroll
         bounces = !isZoomed
     }
 
@@ -270,12 +271,16 @@ class ZoomableScrollView: UIScrollView {
         // 每次布局都钳制水平偏移，阻止 UIScrollView bounce 导致的横向黑边
         clampHorizontalOffset()
 
-        // 仅在 1x (未缩放) 且 bounds 发生变化时重新计算
+        // 仅在 1x (未缩放) 且 bounds 发生变化时重新计算图片布局
         guard zoomScale <= minimumZoomScale + 0.01 else {
             centerImageView()
+            updateScrollEnabled()  // 缩放状态下也确保 pan 手势状态正确
             return
         }
-        guard bounds.size != lastLayoutBoundsSize else { return }
+        guard bounds.size != lastLayoutBoundsSize else {
+            updateScrollEnabled()  // bounds 未变仍要同步手势状态 (view 复用场景)
+            return
+        }
         lastLayoutBoundsSize = bounds.size
 
         guard let imageView = viewWithTag(1001) as? UIImageView,
@@ -395,9 +400,15 @@ class ZoomableScrollView: UIScrollView {
             }
 
             // ③ 滚动启用 (放大 或 1x 内容溢出):
-            // 水平 pan 到达内容边缘 → 透传给父 ScrollView 实现翻页
+            // 水平方向处理: 无水平溢出 → 直接透传; 有水平溢出 → 边缘透传
             // 对齐 Android GalleryView: 放大/宽图到达边缘可以翻下一页
             if isHorizontalPan {
+                let contentOverflowsH = contentSize.width > bounds.width + 1
+                if !contentOverflowsH {
+                    // fitWidth 高图: 纵向可滚动但横向无溢出 → 水平 pan 透传给父翻页
+                    return false
+                }
+                // 横向有溢出 (放大 / origin 模式宽图): 到达边缘时透传
                 let atLeftEdge = contentOffset.x <= 0
                 let atRightEdge = contentOffset.x >= contentSize.width - bounds.width - 1
                 let panningLeft = velocity.x > 0   // 手指向右划 = 想看上一页
