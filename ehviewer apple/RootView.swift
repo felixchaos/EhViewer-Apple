@@ -50,90 +50,59 @@ struct RootView: View {
     // MARK: - 同步计算初始页面 (消除白屏)
     init() {
         let settings = AppSettings.shared
+        let step: OnboardingStep
         if settings.showWarning {
-            _flowStep = State(initialValue: .warning)
+            step = .warning
         } else if settings.enableSecurity {
-            _flowStep = State(initialValue: .security)
+            step = .security
         } else if !settings.hasSelectedSite {
-            _flowStep = State(initialValue: .selectSite)
+            step = .selectSite
         } else if settings.skipSignIn {
-            _flowStep = State(initialValue: .main)
+            step = .main
         } else {
             // 直接检查 Cookie 判断登录状态 (无需 @MainActor)
             let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
             let hasAuth = cookies.contains { $0.name == "ipb_member_id" } &&
                           cookies.contains { $0.name == "ipb_pass_hash" }
-            _flowStep = State(initialValue: hasAuth ? .main : .login)
+            step = hasAuth ? .main : .login
         }
+        _flowStep = State(initialValue: step)
+        // 同步初始化 appState 登录状态，避免首帧后异步 mutation 导致重渲染
+        let initState = AppState()
+        if step == .main {
+            initState.checkLoginStatus()
+            if !initState.isSignedIn {
+                initState.isSignedIn = settings.skipSignIn
+            }
+        }
+        _appState = State(initialValue: initState)
     }
 
     var body: some View {
-        Group {
-            switch flowStep {
-            case .checking:
-                // 兜底分支: init() 已计算跳过此状态，理论上不会到达
-                MainTabView()
-                    .environment(appState)
-                    .onAppear { determineNextStep() }
-                
-            case .warning:
-                WarningView(
-                    onAccept: {
-                        AppSettings.shared.showWarning = false
-                        determineNextStep()
-                    },
-                    onReject: {
-                        // macOS: 正常退出; iOS: 显示永久阻断页面 (Apple 禁止 exit(0))
-                        #if os(macOS)
-                        NSApplication.shared.terminate(nil)
-                        #else
-                        flowStep = .rejected
-                        #endif
-                    }
-                )
-                
-            case .security:
-                SecurityView(onAuthenticated: {
-                    determineNextStep()
-                })
-                
-            case .rejected:
-                // iOS: 用户拒绝 18+ 警告后显示此页面，无法继续使用
-                VStack(spacing: 20) {
-                    Image(systemName: "hand.raised.fill")
-                        .font(.system(size: 64))
-                        .foregroundStyle(.secondary)
-                    Text("您已拒绝使用条款")
-                        .font(.title2.bold())
-                    Text("请关闭应用。")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                
-            case .selectSite:
-                SelectSiteView(onComplete: {
-                    determineNextStep()
-                })
-                
-            case .login:
-                LoginView()
-                    .environment(appState)
-                
-            case .main:
-                MainTabView()
-                    .environment(appState)
-                    .task {
-                        // 确保 AppState 登录状态与 Cookie 同步
-                        if !appState.isSignedIn {
-                            appState.checkLoginStatus()
-                            if !appState.isSignedIn {
-                                appState.isSignedIn = AppSettings.shared.skipSignIn
-                            }
-                        }
-                    }
+        // ★ 核心: 用 ZStack 保证 MainTabView 始终存在于视图树中
+        //   引导/登录页面作为全屏覆盖层显示在上方
+        //   避免 Group{switch} 反复创建/销毁 NavigationStack 导致白屏
+        ZStack {
+            // 底层: 主界面 (始终渲染，消除白屏)
+            MainTabView()
+                .environment(appState)
+                .opacity(flowStep == .main || flowStep == .checking ? 1 : 0)
+                .allowsHitTesting(flowStep == .main || flowStep == .checking)
+
+            // 顶层: 引导/登录覆盖
+            if flowStep != .main && flowStep != .checking {
+                onboardingOverlay
+                    .transition(.opacity)
+                    .zIndex(1)
             }
         }
         .withGlobalErrorBoundary()
+        // 已登录用户: 启动时异步获取资料 + ExH 检测 (不 mutate isSignedIn，不触发重渲染)
+        .task {
+            if appState.isSignedIn && !AppSettings.shared.skipSignIn {
+                await postLoginActions()
+            }
+        }
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             if isSignedIn {
                 flowStep = .main
@@ -217,6 +186,58 @@ struct RootView: View {
         }
     }
     
+    // MARK: - 引导覆盖层
+
+    @ViewBuilder
+    private var onboardingOverlay: some View {
+        switch flowStep {
+        case .warning:
+            WarningView(
+                onAccept: {
+                    AppSettings.shared.showWarning = false
+                    determineNextStep()
+                },
+                onReject: {
+                    #if os(macOS)
+                    NSApplication.shared.terminate(nil)
+                    #else
+                    flowStep = .rejected
+                    #endif
+                }
+            )
+
+        case .rejected:
+            VStack(spacing: 20) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.secondary)
+                Text("您已拒绝使用条款")
+                    .font(.title2.bold())
+                Text("请关闭应用。")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.background)
+
+        case .security:
+            SecurityView(onAuthenticated: {
+                determineNextStep()
+            })
+
+        case .selectSite:
+            SelectSiteView(onComplete: {
+                determineNextStep()
+            })
+
+        case .login:
+            LoginView()
+                .environment(appState)
+
+        case .checking, .main:
+            EmptyView()
+        }
+    }
+
     // MARK: - 流程控制
 
     /// 登录后异步操作：获取用户资料 + ExH 检测
