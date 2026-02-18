@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.2.0] - 2026-02-18
+
+### 🔧 阅读器手势与导航全面修复
+
+#### Bug 修复
+- **修复图片加载后手势失效** — SwiftUI ScrollView 不走 UIKit failure chain，改用 `panGestureRecognizer.isEnabled` 彻底禁用内层手势竞争
+- **修复缩略图预览进入阅读器页面错位** — `lazyCurrentPage` 未同步 `initialPage`，`.onChange` 不触发初始值导致 ScrollView 始终显示第 0 页
+- **修复多层手势冲突** — 重写 `gestureRecognizerShouldBegin()` 为三级优先级逻辑：边缘返回 > 无滚动透传 > 边缘翻页
+- **修复翻页手势只触发一次** — 移除错误的 `panGestureRecognizer.isEnabled = false` 设置
+- **修复 FaceID 认证无限循环** — SecurityView 认证状态机修复
+- **修复阅读器四个关键问题** — 滑动手势冲突、垂直模式点击区域、页码重复显示、FaceID 崩溃
+
+#### 性能优化
+- `@ObservationIgnored` 标记非 UI 属性，减少不必要的视图重绘
+- 批量驱逐远距离页面缓存
+- 翻页去抖 80ms debounce
+
+---
+
 ## [1.1.0] - 2026-02-18
 
 ### 🚀 首个正式 Release
