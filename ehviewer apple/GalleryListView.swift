@@ -180,24 +180,10 @@ struct GalleryListView: View {
                 searchBarView
 
                 Group {
-                    if viewModel.isLoading && viewModel.galleries.isEmpty {
-                        ProgressView("加载中...")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
+                    if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                         errorView
-                    } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                        // 安全兜底: 列表为空且未加载 — 提供手动重载入口
-                        ContentUnavailableView {
-                            Label("暂无内容", systemImage: "tray")
-                        } description: {
-                            Text("点击下方按钮重新加载")
-                        } actions: {
-                            Button("重新加载") {
-                                viewModel.loadGalleries(mode: effectiveMode)
-                            }
-                            .buttonStyle(.bordered)
-                        }
                     } else {
+                        // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
                         galleryList
                     }
                 }
@@ -269,22 +255,8 @@ struct GalleryListView: View {
             searchBarView
 
             Group {
-                if viewModel.isLoading && viewModel.galleries.isEmpty {
-                    ProgressView("加载中...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
+                if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                     errorView
-                } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                    ContentUnavailableView {
-                        Label("暂无内容", systemImage: "tray")
-                    } description: {
-                        Text("点击下方按钮重新加载")
-                    } actions: {
-                        Button("重新加载") {
-                            viewModel.loadGalleries(mode: effectiveMode)
-                        }
-                        .buttonStyle(.bordered)
-                    }
                 } else {
                     galleryList
                 }
@@ -370,6 +342,20 @@ struct GalleryListView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
             }
+
+            // 内联加载指示器 (不阻塞界面，用户可正常操作其他 Tab 和功能)
+            if viewModel.isLoading && viewModel.galleries.isEmpty {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("正在加载…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+                .listRowSeparator(.hidden)
+            }
+
             ForEach(viewModel.galleries, id: \.gid) { gallery in
                 NavigationLink(value: gallery) {
                     GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
@@ -440,24 +426,23 @@ struct GalleryListView: View {
             searchBarView
 
             Group {
-                if viewModel.isLoading && viewModel.galleries.isEmpty {
-                    ProgressView("加载中...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.galleries.isEmpty && viewModel.errorMessage != nil {
+                if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                     errorView
-                } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                    ContentUnavailableView {
-                        Label("暂无内容", systemImage: "tray")
-                    } description: {
-                        Text("点击下方按钮重新加载")
-                    } actions: {
-                        Button("重新加载") {
-                            viewModel.loadGalleries(mode: effectiveMode)
-                        }
-                        .buttonStyle(.bordered)
-                    }
                 } else {
                     List(selection: selectionBinding) {
+                        // 内联加载指示器 (不阻塞界面)
+                        if viewModel.isLoading && viewModel.galleries.isEmpty {
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                Text("正在加载…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                            .listRowSeparator(.hidden)
+                        }
+
                         ForEach(viewModel.galleries, id: \.gid) { gallery in
                             GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
                                 .tag(gallery)

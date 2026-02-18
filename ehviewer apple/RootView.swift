@@ -51,7 +51,7 @@ struct RootView: View {
         Group {
             switch flowStep {
             case .checking:
-                ProgressView("加载中...")
+                Color.clear
                     .task { determineNextStep() }
                 
             case .warning:
