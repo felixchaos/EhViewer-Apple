@@ -46,6 +46,10 @@ struct ZoomableImageView: UIViewRepresentable {
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.scaleMode = scaleMode
         scrollView.startPosition = startPosition
+        scrollView.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
+        // 初始禁用滚动，防止内层 panGesture 拦截父级 ScrollView 的翻页手势
+        // layoutSubviews 完成后会根据内容溢出情况正确设置
+        scrollView.isScrollEnabled = false
 
         let imageView = UIImageView(image: image)
         imageView.contentMode = .scaleToFill  // 手动设置 frame，不依赖 contentMode
@@ -100,6 +104,9 @@ struct ZoomableImageView: UIViewRepresentable {
         context.coordinator.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
         context.coordinator.onSingleTap = onSingleTap
         context.coordinator.onZoomChanged = onZoomChanged
+
+        // 同步 allowsHorizontalScrollAtMinZoom 到 ZoomableScrollView
+        scrollView.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
 
         // 仅在需要重新布局时才调用 setNeedsLayout，避免不必要的重绘
         if imageChanged || scaleModeChanged || startPositionChanged {
@@ -168,16 +175,9 @@ struct ZoomableImageView: UIViewRepresentable {
 
             if let zoomScrollView = scrollView as? ZoomableScrollView {
                 zoomScrollView.clampHorizontalOffset()
+                zoomScrollView.updateScrollEnabled()
 
                 let isZoomed = scrollView.zoomScale > scrollView.minimumZoomScale + 0.01
-                let contentOverflows = scrollView.contentSize.width > boundsSize.width + 1 ||
-                                        scrollView.contentSize.height > boundsSize.height + 1
-
-                // 放大时: 启用滚动 + 禁止弹跳 (防止手势泄漏到 TabView 导致意外翻页)
-                // 1x 时: 根据内容是否溢出决定是否启用滚动
-                zoomScrollView.isScrollEnabled = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
-                zoomScrollView.bounces = !isZoomed
-
                 // 通知外层缩放状态变化
                 if isZoomed != lastIsZoomed {
                     lastIsZoomed = isZoomed
@@ -187,13 +187,10 @@ struct ZoomableImageView: UIViewRepresentable {
         }
 
         func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-            let isZoomed = scale > scrollView.minimumZoomScale + 0.01
             if let zoomScrollView = scrollView as? ZoomableScrollView {
-                let contentOverflows = scrollView.contentSize.width > scrollView.bounds.width + 1 ||
-                                        scrollView.contentSize.height > scrollView.bounds.height + 1
-                zoomScrollView.isScrollEnabled = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
-                zoomScrollView.bounces = !isZoomed
+                zoomScrollView.updateScrollEnabled()
 
+                let isZoomed = scale > scrollView.minimumZoomScale + 0.01
                 if isZoomed != lastIsZoomed {
                     lastIsZoomed = isZoomed
                     onZoomChanged?(isZoomed)
@@ -236,7 +233,7 @@ struct ZoomableImageView: UIViewRepresentable {
 }
 
 /// 自定义 UIScrollView — 实现完整的 ScaleMode 布局逻辑 (对齐 Android ImageView.setScaleOffset)
-/// 在 fit/fitWidth 模式的 1x 缩放时不拦截水平手势，让父 TabView 正常翻页
+/// 在 fit/fitWidth 模式的 1x 缩放时不拦截水平手势，让父 ScrollView 正常翻页
 class ZoomableScrollView: UIScrollView {
     /// 用于检测 bounds 是否变化，避免冗余布局
     var lastLayoutBoundsSize: CGSize = .zero
@@ -246,6 +243,19 @@ class ZoomableScrollView: UIScrollView {
     var startPosition: StartPosition = .center
     /// 是否需要在下次布局时应用起始位置
     var needsStartPositionApply = true
+    /// 是否允许 1x 缩放时水平滚动 (垂直滚动模式需要)
+    var allowsHorizontalScrollAtMinZoom: Bool = false
+
+    /// 根据当前缩放、内容溢出状态更新 isScrollEnabled / bounces
+    /// — 1x + 无溢出: 禁用滚动，让父 ScrollView 处理翻页手势
+    /// — 放大 / 内容溢出: 启用滚动，允许用户平移查看
+    func updateScrollEnabled() {
+        let isZoomed = zoomScale > minimumZoomScale + 0.01
+        let contentOverflows = contentSize.width > bounds.width + 1 ||
+                               contentSize.height > bounds.height + 1
+        isScrollEnabled = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
+        bounces = !isZoomed
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -300,6 +310,9 @@ class ZoomableScrollView: UIScrollView {
             applyStartPosition(scaledW: scaledW, scaledH: scaledH)
             needsStartPositionApply = false
         }
+
+        // 布局完成后更新滚动状态 — 确保 1x 缩放时不拦截父 ScrollView 的翻页手势
+        updateScrollEnabled()
     }
 
     /// 居中图片: 小于屏幕时居中，大于屏幕时对齐边缘 (对齐 Android ImageView.adjustPosition)
@@ -367,12 +380,12 @@ class ZoomableScrollView: UIScrollView {
                 }
 
                 // 只在 fit/fitWidth 模式下拦截水平手势 (这些模式下图片宽度 ≤ 屏幕宽度，无需水平滚动)
-                // 拦截后 → 手势传给 TabView → 实现翻页
+                // 拦截后 → 手势传给父 ScrollView → 实现翻页
                 if abs(velocity.x) > abs(velocity.y) && (scaleMode == .fit || scaleMode == .fitWidth) {
                     return false
                 }
             } else {
-                // 放大时: 图片已到达边缘且继续向外拖动 → 不拦截，让 TabView 翻页
+                // 放大时: 图片已到达边缘且继续向外拖动 → 不拦截，让父 ScrollView 翻页
                 // 对齐 Android GalleryView: 放大时到达边缘可以翻页
                 let isHorizontalPan = abs(velocity.x) > abs(velocity.y)
                 if isHorizontalPan {
