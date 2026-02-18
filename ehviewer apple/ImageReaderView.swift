@@ -64,6 +64,9 @@ struct ImageReaderView: View {
     /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
     @State private var verticalPageInterval: Bool = false
 
+    // Perf: 翻页去抖 — 快速滑动时取消上一次预加载，仅处理最终落地页
+    @State private var pageChangeTask: Task<Void, Never>?
+
     @Environment(\.dismiss) private var dismiss
 
     // 点击区域比例
@@ -282,6 +285,7 @@ struct ImageReaderView: View {
         #endif
         timeTimer?.invalidate()
         autoPageTask?.cancel()
+        pageChangeTask?.cancel()
         saveReadingProgress()
     }
 
@@ -477,7 +481,13 @@ struct ImageReaderView: View {
                         vm.currentPage = page
                     }
                     saveReadingProgress()
-                    Task { await vm.onPageChange(page) }
+                    // Perf: 去抖 — 快速翻页时只处理最终落地页
+                    pageChangeTask?.cancel()
+                    pageChangeTask = Task {
+                        try? await Task.sleep(nanoseconds: 80_000_000) // 80ms debounce
+                        guard !Task.isCancelled else { return }
+                        await vm.onPageChange(page)
+                    }
                 }
             } else {
                 // 单页模式
@@ -500,7 +510,13 @@ struct ImageReaderView: View {
                         vm.currentPage = page
                     }
                     saveReadingProgress()
-                    Task { await vm.onPageChange(vm.currentPage) }
+                    // Perf: 去抖 — 快速滑动时取消上一次预加载，仅处理结束页
+                    pageChangeTask?.cancel()
+                    pageChangeTask = Task {
+                        try? await Task.sleep(nanoseconds: 80_000_000) // 80ms debounce
+                        guard !Task.isCancelled else { return }
+                        await vm.onPageChange(vm.currentPage)
+                    }
                 }
                 .onChange(of: vm.currentPage) { _, newPage in
                     // 外部翻页 (键盘/浮动按钮/slider) → 同步 scrollPosition

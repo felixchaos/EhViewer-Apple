@@ -150,6 +150,11 @@ class ReaderViewModel {
     private var downloadingImages: Set<Int> = []
     private var downloadDir: URL?
 
+    /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
+    private func cacheKey(for page: Int) -> NSString {
+        "\(gid):\(page)" as NSString
+    }
+
     /// 最大解码像素尺寸 (屏幕长边 × 3 倍，限制超大图解码内存)
     /// 15000×20000 的长条漫会被降采样到合理尺寸，避免 OOM
     private static let maxDecodePixelSize: CGFloat = {
@@ -173,8 +178,8 @@ class ReaderViewModel {
     /// NSCache 后端: 根据设备物理内存动态调整
     /// 审计修复 M-1: iPhone SE (3GB) → 80MB; iPhone 15 Pro (6GB) → 200MB; Mac → 400MB
     /// cost 使用解码后像素字节数而非压缩数据大小
-    private static let imageCache: NSCache<NSNumber, PlatformImage> = {
-        let cache = NSCache<NSNumber, PlatformImage>()
+    private static let imageCache: NSCache<NSString, PlatformImage> = {
+        let cache = NSCache<NSString, PlatformImage>()
         let physicalMemory = ProcessInfo.processInfo.physicalMemory // bytes
         let memoryGB = Double(physicalMemory) / (1024 * 1024 * 1024)
         
@@ -196,7 +201,7 @@ class ReaderViewModel {
 
     /// 降采样解码: 用 ImageIO 在解码阶段限制像素尺寸，而非先全量解码再缩放
     /// 一张 15000×20000 JPEG 全量解码 = 1.2GB; 降采样到 4096px 宽 ≈ 40MB
-    private static func downsampledImage(data: Data) -> PlatformImage? {
+    nonisolated private static func downsampledImage(data: Data) -> PlatformImage? {
         let options: [CFString: Any] = [
             kCGImageSourceShouldCache: false  // 不缓存原始数据
         ]
@@ -248,7 +253,7 @@ class ReaderViewModel {
     }
 
     /// 计算解码后图片的实际像素内存占用 (bytes)
-    private static func decodedCost(of image: PlatformImage) -> Int {
+    nonisolated private static func decodedCost(of image: PlatformImage) -> Int {
         #if os(iOS)
         guard let cg = image.cgImage else { return 1024 * 1024 } // 1MB fallback
         return cg.bytesPerRow * cg.height
@@ -415,23 +420,35 @@ class ReaderViewModel {
 
     // MARK: - Dominant Color (模糊背景主色调提取)
 
-    /// 提取图片平均色用于模糊氛围背景
+    /// 提取图片平均色用于模糊氛围背景 — CIFilter 在后台线程执行
     func extractDominantColor(for page: Int) {
         guard dominantColors[page] == nil, let image = cachedImages[page] else { return }
 
+        Task.detached(priority: .utility) {
+            let color = Self.computeDominantColor(from: image)
+            if let color = color {
+                await MainActor.run { [weak self] in
+                    self?.dominantColors[page] = color
+                }
+            }
+        }
+    }
+
+    /// 纯计算: CIFilter 提取平均色 (nonisolated, 可在任意线程运行)
+    nonisolated private static func computeDominantColor(from image: PlatformImage) -> Color? {
         #if os(iOS)
-        guard let cgImage = image.cgImage else { return }
+        guard let cgImage = image.cgImage else { return nil }
         let ciImage = CIImage(cgImage: cgImage)
         #else
         guard let tiffData = image.tiffRepresentation,
-              let ciImage = CIImage(data: tiffData) else { return }
+              let ciImage = CIImage(data: tiffData) else { return nil }
         #endif
 
         guard let filter = CIFilter(name: "CIAreaAverage", parameters: [
             kCIInputImageKey: ciImage,
             kCIInputExtentKey: CIVector(cgRect: ciImage.extent)
         ]),
-        let output = filter.outputImage else { return }
+        let output = filter.outputImage else { return nil }
 
         var bitmap = [UInt8](repeating: 0, count: 4)
         let ctx = CIContext(options: [.workingColorSpace: NSNull()])
@@ -439,7 +456,7 @@ class ReaderViewModel {
                    bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                    format: .RGBA8, colorSpace: nil)
 
-        dominantColors[page] = Color(
+        return Color(
             red: Double(bitmap[0]) / 255.0,
             green: Double(bitmap[1]) / 255.0,
             blue: Double(bitmap[2]) / 255.0
@@ -510,6 +527,9 @@ class ReaderViewModel {
         retryingPages.removeAll()
         downloadProgress.removeAll()
         retryGeneration.removeAll()
+
+        // ⚠️ 关键: 清空 NSCache 防止旧画廊图片被复用
+        Self.imageCache.removeAllObjects()
 
         // 视觉
         dominantColors.removeAll()
@@ -620,7 +640,7 @@ class ReaderViewModel {
 
         await preload(around: page)
 
-        // 提取主色调 (异步，不阻塞翻页)
+        // 提取主色调 (内部已在后台线程执行)
         extractDominantColor(for: page)
 
         // 释放远处页面
@@ -629,8 +649,9 @@ class ReaderViewModel {
 
     /// 下载图片数据到 NSCache，带进度追踪
     func downloadImageData(_ index: Int) async {
-        // 已缓存 → 直接提升到 Observable 层
-        if let cached = Self.imageCache.object(forKey: NSNumber(value: index)) {
+        // 已缓存 → 直接提升到 Observable 层 (使用 gid:page 复合 key)
+        let key = cacheKey(for: index)
+        if let cached = Self.imageCache.object(forKey: key) {
             await MainActor.run {
                 if self.cachedImages[index] == nil {
                     self.cachedImages[index] = cached
@@ -651,24 +672,19 @@ class ReaderViewModel {
                 request.setValue(GalleryActionService.siteBaseURL, forHTTPHeaderField: "Referer")
                 request.timeoutInterval = 60
 
-                let (asyncBytes, response) = try await Self.session.bytes(for: request)
-                let expectedLength = response.expectedContentLength
-                var data = Data()
-                if expectedLength > 0 { data.reserveCapacity(Int(expectedLength)) }
+                // Perf: 使用 data(for:) 一次性下载替代 byte-by-byte 迭代
+                // byte-by-byte 的 async overhead 极高，导致翻页卡顿
+                let (data, _) = try await Self.session.data(for: request)
 
-                var received: Int64 = 0
-                for try await byte in asyncBytes {
-                    data.append(byte)
-                    received += 1
-                    if received % 8192 == 0 && expectedLength > 0 {
-                        let p = min(1.0, Double(received) / Double(expectedLength))
-                        await MainActor.run { self.downloadProgress[index] = p }
-                    }
-                }
+                // 图片解码移到后台线程，避免阻塞 MainActor
+                let img = await Task.detached(priority: .userInitiated) {
+                    Self.downsampledImage(data: data)
+                }.value
 
-                if let img = Self.downsampledImage(data: data) {
+                if let img = img {
                     let cost = Self.decodedCost(of: img)
-                    Self.imageCache.setObject(img, forKey: NSNumber(value: index), cost: cost)
+                    let cacheKey = self.cacheKey(for: index)
+                    Self.imageCache.setObject(img, forKey: cacheKey, cost: cost)
                     await MainActor.run {
                         self.cachedImages[index] = img
                         self.downloadProgress.removeValue(forKey: index)
@@ -819,7 +835,7 @@ class ReaderViewModel {
             self.downloadProgress.removeValue(forKey: index)
             self.retryGeneration[index, default: 0] += 1
         }
-        Self.imageCache.removeObject(forKey: NSNumber(value: index))
+        Self.imageCache.removeObject(forKey: cacheKey(for: index))
         pTokens.removeValue(forKey: index)
         GalleryCache.shared.removeImageURL(gid: gid, page: index)
         loadingPages.remove(index)
