@@ -1,8 +1,8 @@
 # EhViewer-Apple
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.1-brightgreen" alt="Version"/>
-  <img src="https://img.shields.io/badge/platform-iOS%2017%2B%20%7C%20macOS%2014%2B-blue" alt="Platform"/>
+  <img src="https://img.shields.io/badge/version-1.1.0-brightgreen" alt="Version"/>
+  <img src="https://img.shields.io/badge/platform-iOS%2026%2B%20%7C%20macOS%2026%2B-blue" alt="Platform"/>
   <img src="https://img.shields.io/badge/swift-6.0-orange" alt="Swift 6.0"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
@@ -13,26 +13,33 @@ EhViewer-Apple 是一款适用于 iOS 和 macOS 的 [E-Hentai](https://e-hentai.
 
 ---
 
-## 📢 v1.0.1 — 代码审计 & 质量加固
+## 📢 v1.1.0 — 首个正式 Release
 
-基于全面代码审计（详见 [AUDIT_REPORT.md](AUDIT_REPORT.md)），完成以下加固：
+首个多平台发布版本，提供 iPhone / iPad / Mac 安装包。
 
-### 🔒 并发安全
-- **SpiderDen** — 静态可变状态用 `NSLock` 保护；`SimpleDiskCache` 所有 I/O 走 `queue.sync`
-- **DownloadManager.SpiderInfoUpdater** — 从 `@unchecked Sendable class` 迁移为 `actor`
-- **BackgroundDownloadManager** — `activeTasks` 字典加 `NSLock` 互斥
-- **GalleryDetailViewModel** — 标注 `@MainActor`，移除 `nonisolated(unsafe)` 和 8 处冗余 `MainActor.run`
-- **AppErrorHandling.ErrorHandler** — 标注 `@MainActor`，GCD → `Task { @MainActor in }`
-- **EhFilterManager / FavouriteStatusRouter** — 标注 `@MainActor`
+### 🔧 Bug 修复
+- 修复左右翻页手势丢失 — ZoomableScrollView 初始化正确禁用内层滚动
+- 修复标签搜索列表点击画廊导航循环和错乱
+- 修复启动页面设置无法反映到 iPhone 底部导航栏
+- 修复热门列表点击画廊报错
+- 修复启动页面 Picker 下拉菜单无法点击（AppSettings.launchPage 改为 Observable）
+- 修复 HistoryView 重复注册 navigationDestination 警告
+- 修复 ReaderViewModel Main actor isolation 构建错误
+
+### 🏗 架构改进
+- NavigationLink 统一采用 value-based API，消除导航栈冲突
+- Tab.bottomTabs 改为动态计算属性，启动页自动替换底部栏位置
+- maxDecodePixelSize 改用固定保守值，避免非主线程访问 UIApplication
+
+### 🔒 并发安全 (继承 v1.0.1 审计)
+- **SpiderDen** — 静态可变状态用 `NSLock` 保护
+- **DownloadManager.SpiderInfoUpdater** — 迁移为 `actor`
+- **GalleryDetailViewModel** — 标注 `@MainActor`
+- **AppSettings** — UI 属性改用 `access / withMutation` 正确触发 `@Observable`
 
 ### 🧠 内存优化
-- **ReaderViewModel** — NSCache 容量根据 `ProcessInfo.physicalMemory` 自适应（80–400 MB）；下载完成后主动驱逐远距离页面
-
-### 📐 响应式布局
-- 新增 `ResponsiveLayout` 工具（`EnvironmentKey`），`GalleryListView` 缩略图尺寸随屏幕自适应
-
-### 🧹 观察模式
-- **AppSettings** — 15 个 UI 属性改用 `access / withMutation` 正确触发 `@Observable`
+- NSCache 容量根据设备物理内存自适应 (80–400 MB)
+- 翻页时主动驱逐远距离页面
 
 ---
 
@@ -88,10 +95,10 @@ EhViewer-Apple/
 
 | 项目 | 最低版本 |
 |------|---------|
-| Xcode | 16.0+ |
+| Xcode | 26.0+ |
 | Swift | 6.0 |
-| iOS | 17.0+ |
-| macOS | 14.0+ (Sonoma) |
+| iOS | 26.0+ |
+| macOS | 26.0+ |
 
 ## 🚀 快速开始
 

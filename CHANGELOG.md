@@ -2,6 +2,38 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.1.0] - 2026-02-18
+
+### 🚀 首个正式 Release
+
+提供 iPhone / iPad / Mac 多平台安装包。
+
+#### Bug 修复
+- 修复左右翻页手势丢失 — ZoomableScrollView 初始化正确禁用内层滚动
+- 修复标签搜索列表点击画廊导航循环和错乱
+- 修复启动页面设置无法反映到 iPhone 底部导航栏
+- 修复热门列表点击画廊报错
+- 修复启动页面 Picker 下拉菜单无法点击
+- 修复 HistoryView 重复注册 navigationDestination 警告
+- 修复 ReaderViewModel Main actor isolation 构建错误
+
+#### 架构改进
+- NavigationLink 统一采用 value-based API
+- Tab.bottomTabs 改为动态计算属性
+- maxDecodePixelSize 使用固定值避免 actor isolation 问题
+
+#### 并发安全
+- SpiderDen 静态可变状态 NSLock 保护
+- DownloadManager.SpiderInfoUpdater 迁移为 actor
+- GalleryDetailViewModel 标注 @MainActor
+- AppSettings UI 属性支持 @Observable
+
+#### 内存优化
+- NSCache 容量自适应设备内存 (80–400 MB)
+- 翻页时主动驱逐远距离页面
+
+---
+
 ## [0.1.0] - 2026-02-15
 
 ### 🎉 首次发布

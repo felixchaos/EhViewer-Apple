@@ -157,9 +157,9 @@ class ReaderViewModel {
 
     /// 最大解码像素尺寸 (屏幕长边 × 3 倍，限制超大图解码内存)
     /// 15000×20000 的长条漫会被降采样到合理尺寸，避免 OOM
-    /// nonisolated(unsafe): 供 nonisolated 的 downsampledImage 在后台线程安全访问
     /// 使用固定保守值避免在非主线程访问 UIApplication (MainActor-isolated)
-    nonisolated(unsafe) private static let maxDecodePixelSize: CGFloat = {
+    /// CGFloat 是 Sendable 的，nonisolated let 可安全跨隔离域访问
+    nonisolated private static let maxDecodePixelSize: CGFloat = {
         #if os(iOS)
         // iPhone Pro Max @3x ≈ 2868px (当前最大 iPhone 屏幕像素)
         let screenMax: CGFloat = 2868
