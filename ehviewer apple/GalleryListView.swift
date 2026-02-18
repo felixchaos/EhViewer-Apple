@@ -150,19 +150,16 @@ struct GalleryListView: View {
         }
         }
         .task {
-            // ⚠️ 使用 .task 而非 .onAppear — 避免在布局阶段同步修改 @Observable 属性
-            //   .onAppear 是同步的，修改 @Observable → 立即触发重渲染 → NavigationStack 布局期间收到
-            //   多次更新 → "NavigationRequestObserver tried to update multiple times per frame"
-            //   .task 是异步的，修改发生在布局完成之后，不干扰 NavigationStack 初始化
+            print("[EhView] body .task fired, mode=\(mode), galleries=\(viewModel.galleries.count), isLoading=\(viewModel.isLoading)")
+            // 异步执行 ViewModel 初始化 — 避免 .onAppear 同步变更 @Observable 导致 NavigationStack 多次更新
             viewModel.favSearchKeyword = favSearchKeyword
             viewModel.loadSearchHistory()
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
             }
             // 安全兜底: 确保数据加载在任何分支下都能触发
-            // 如果 NavigationStack 内部的 .task 因布局异常未触发, 这里兜底
             if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                debugLog("[GalleryListView] body .task: triggering loadGalleries for \(mode)")
+                print("[EhView] body .task → loadGalleries")
                 viewModel.loadGalleries(mode: mode)
             }
         }
@@ -223,6 +220,14 @@ struct GalleryListView: View {
                     viewModel.applyQuickSearch(search)
                     selectedQuickSearch = nil
                 }
+            }
+        }
+        .task {
+            // compactContent 级加载 — 与 body .task 双重保险，guard !isLoading 防重复
+            print("[EhView] compactContent .task fired, galleries=\(viewModel.galleries.count), isLoading=\(viewModel.isLoading)")
+            if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                print("[EhView] compactContent .task → loadGalleries")
+                viewModel.loadGalleries(mode: mode)
             }
         }
         .sheet(isPresented: $viewModel.showJumpDialog) {
@@ -1151,10 +1156,10 @@ class GalleryListViewModel {
 
     func loadGalleries(mode: GalleryListView.ListMode) {
         guard !isLoading else {
-            debugLog("[GalleryListVM] loadGalleries: skipped (already loading)")
+            print("[EhVM] loadGalleries: SKIPPED (already loading)")
             return
         }
-        debugLog("[GalleryListVM] loadGalleries: starting for mode=\(mode)")
+        print("[EhVM] loadGalleries: START mode=\(mode)")
 
         currentMode = mode
         
@@ -1162,6 +1167,7 @@ class GalleryListViewModel {
         let cacheKey = Self.cacheKey(for: mode, page: 0)
         if let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
            !cached.galleries.isEmpty {
+            print("[EhVM] loadGalleries: CACHE HIT \(cached.galleries.count) galleries")
             galleries = cached.galleries
             hasMore = cached.hasMore
             totalPages = cached.totalPages ?? 0
@@ -1186,6 +1192,7 @@ class GalleryListViewModel {
                     fetchTask.cancel()
                     self.isLoading = false
                     self.errorMessage = "网络请求超时，请检查网络连接或 VPN 设置后重试"
+                    print("[EhVM] loadGalleries: TIMEOUT after 20s")
                 }
             }
             await fetchTask.value
@@ -1670,7 +1677,7 @@ class GalleryListViewModel {
     }
 
     private func fetchPage(mode: GalleryListView.ListMode, page: Int) async {
-        debugLog("[GalleryListVM] fetchPage: mode=\(mode) page=\(page)")
+        print("[EhVM] fetchPage: mode=\(mode) page=\(page)")
         do {
             let site = AppSettings.shared.gallerySite
             let host = EhURL.host(for: site)
@@ -1732,7 +1739,7 @@ class GalleryListViewModel {
             // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
             self.totalPages = result.pages
             self.isLoading = false
-            debugLog("[GalleryListVM] fetchPage: success — \(self.galleries.count) galleries total")
+            print("[EhVM] fetchPage: SUCCESS — \(self.galleries.count) galleries loaded")
 
             // 缓存第一页结果
             if page == 0 {
@@ -1750,8 +1757,11 @@ class GalleryListViewModel {
 
         } catch {
             self.isLoading = false  // 始终重置，包括取消
-            debugLog("[GalleryListVM] fetchPage: error \(error)")
-            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            print("[EhVM] fetchPage: ERROR \(error)")
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                print("[EhVM] fetchPage: cancelled, no errorMessage set")
+                return
+            }
             self.errorMessage = EhError.localizedMessage(for: error)
         }
     }
