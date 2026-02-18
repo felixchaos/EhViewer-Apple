@@ -374,36 +374,37 @@ class ZoomableScrollView: UIScrollView {
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if let panGesture = gestureRecognizer as? UIPanGestureRecognizer {
             let velocity = panGesture.velocity(in: self)
+            let isHorizontalPan = abs(velocity.x) > abs(velocity.y)
 
-            if zoomScale <= minimumZoomScale + 0.01 {
-                // 1x 缩放时:
-                // 允许从屏幕左边缘开始的右滑手势 (返回导航)
-                if let window = self.window {
-                    let locationInWindow = panGesture.location(in: window)
-                    if locationInWindow.x < 30 && velocity.x > 0 && abs(velocity.x) > abs(velocity.y) {
-                        return false
-                    }
-                }
-
-                // 只在 fit/fitWidth 模式下拦截水平手势 (这些模式下图片宽度 ≤ 屏幕宽度，无需水平滚动)
-                // 拦截后 → 手势传给父 ScrollView → 实现翻页
-                if abs(velocity.x) > abs(velocity.y) && (scaleMode == .fit || scaleMode == .fitWidth) {
+            // ① 左边缘右滑 → 始终透传，让 EdgeSwipeDismissView 处理返回导航
+            // 无论缩放/滚动状态，边缘返回手势优先级最高
+            if isHorizontalPan, let window = self.window {
+                let locationInWindow = panGesture.location(in: window)
+                if locationInWindow.x < 30 && velocity.x > 0 {
                     return false
                 }
-            } else {
-                // 放大时: 图片已到达边缘且继续向外拖动 → 不拦截，让父 ScrollView 翻页
-                // 对齐 Android GalleryView: 放大时到达边缘可以翻页
-                let isHorizontalPan = abs(velocity.x) > abs(velocity.y)
-                if isHorizontalPan {
-                    let atLeftEdge = contentOffset.x <= 0
-                    let atRightEdge = contentOffset.x >= contentSize.width - bounds.width - 1
-                    let panningLeft = velocity.x > 0   // 手指向右划 = 内容向左
-                    let panningRight = velocity.x < 0  // 手指向左划 = 内容向右
+            }
 
-                    // 在左边缘且向右划 → 上一页；在右边缘且向左划 → 下一页
-                    if (atLeftEdge && panningLeft) || (atRightEdge && panningRight) {
-                        return false
-                    }
+            // ② 滚动禁用 (1x 缩放 + 无内容溢出) → 拒绝所有 pan
+            // isScrollEnabled 由 updateScrollEnabled() 根据缩放/溢出/模式计算
+            // 当为 false 时，内层 UIScrollView 不需要处理任何 pan 手势，
+            // 全部透传给父 SwiftUI ScrollView 处理翻页
+            // 这同时修复: 斜向/纵向 pan 被内层吞掉、非 fit/fitWidth 模式翻页失效
+            if !isScrollEnabled {
+                return false
+            }
+
+            // ③ 滚动启用 (放大 或 1x 内容溢出):
+            // 水平 pan 到达内容边缘 → 透传给父 ScrollView 实现翻页
+            // 对齐 Android GalleryView: 放大/宽图到达边缘可以翻下一页
+            if isHorizontalPan {
+                let atLeftEdge = contentOffset.x <= 0
+                let atRightEdge = contentOffset.x >= contentSize.width - bounds.width - 1
+                let panningLeft = velocity.x > 0   // 手指向右划 = 想看上一页
+                let panningRight = velocity.x < 0  // 手指向左划 = 想看下一页
+
+                if (atLeftEdge && panningLeft) || (atRightEdge && panningRight) {
+                    return false
                 }
             }
         }
