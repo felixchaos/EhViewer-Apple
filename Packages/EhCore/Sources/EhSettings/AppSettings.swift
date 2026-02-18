@@ -193,10 +193,17 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
-    @ObservationIgnored
     public var launchPage: Int {
-        get { _defaults.integer(forKey: "launch_page") }
-        set { _defaults.set(newValue, forKey: "launch_page") }
+        get {
+            access(keyPath: \.launchPage)
+            return _defaults.integer(forKey: "launch_page")
+        }
+        set {
+            guard newValue != _defaults.integer(forKey: "launch_page") else { return }
+            withMutation(keyPath: \.launchPage) {
+                _defaults.set(newValue, forKey: "launch_page")
+            }
+        }
     }
 
     @ObservationIgnored

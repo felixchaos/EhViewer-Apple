@@ -157,20 +157,15 @@ class ReaderViewModel {
 
     /// 最大解码像素尺寸 (屏幕长边 × 3 倍，限制超大图解码内存)
     /// 15000×20000 的长条漫会被降采样到合理尺寸，避免 OOM
-    private static let maxDecodePixelSize: CGFloat = {
+    /// nonisolated(unsafe): 供 nonisolated 的 downsampledImage 在后台线程安全访问
+    /// 使用固定保守值避免在非主线程访问 UIApplication (MainActor-isolated)
+    nonisolated(unsafe) private static let maxDecodePixelSize: CGFloat = {
         #if os(iOS)
-        // iOS 26+ 废弃 UIScreen.main，通过 connectedScenes 获取屏幕信息
-        let screenMax: CGFloat
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first {
-            let screen = scene.screen
-            screenMax = max(screen.bounds.width, screen.bounds.height) * screen.scale
-        } else {
-            // App 未完全初始化时的保守默认值 (iPhone Pro Max @3x)
-            screenMax = 2868
-        }
+        // iPhone Pro Max @3x ≈ 2868px (当前最大 iPhone 屏幕像素)
+        let screenMax: CGFloat = 2868
         #else
-        let screenMax = max(NSScreen.main?.frame.width ?? 2560, NSScreen.main?.frame.height ?? 1440) * (NSScreen.main?.backingScaleFactor ?? 2)
+        // Mac Retina 5K 显示器
+        let screenMax: CGFloat = 5120
         #endif
         return max(screenMax * 3, 4096) // 至少 4096px，最大约 3× 屏幕
     }()
