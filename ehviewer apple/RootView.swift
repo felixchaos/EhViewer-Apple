@@ -155,7 +155,11 @@ struct RootView: View {
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // 记录进入后台的时间
-            backgroundTime = Date()
+            // Fix: 安全认证中不记录 — FaceID/密码对话框会触发 willResignActive
+            // 但这不是真正的后台切换，不应触发重新认证
+            if flowStep != .security {
+                backgroundTime = Date()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // 检查是否需要重新认证
@@ -165,7 +169,9 @@ struct RootView: View {
         }
         #elseif os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
-            backgroundTime = Date()
+            if flowStep != .security {
+                backgroundTime = Date()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             checkSecurityOnResume()
@@ -225,6 +231,10 @@ struct RootView: View {
 
         case .security:
             SecurityView(onAuthenticated: {
+                // Fix: 清除 backgroundTime，防止 FaceID 对话框触发的
+                // willResignActive 被 checkSecurityOnResume 误判为"从后台恢复"
+                // → 再次设 .security → 无限循环
+                backgroundTime = nil
                 determineNextStep()
             })
 
