@@ -414,10 +414,9 @@ struct GalleryDetailView: View {
             }
             .buttonStyle(.plain)
         } else {
-            // iPhone compact: NavigationLink 推入同一 NavigationStack
-            NavigationLink {
-                GalleryListView(mode: .tag(keyword: fullTag), isPushed: true)
-            } label: {
+            // iPhone compact: value-based NavigationLink 推入同一 NavigationStack
+            // ★ 必须使用 value-based 而非 destination-based，避免与 galleryList 的 NavigationLink(value: GalleryInfo) 混用导致路径混乱
+            NavigationLink(value: TagSearchDestination(tag: fullTag)) {
                 tagLabel(label)
             }
             .buttonStyle(.plain)

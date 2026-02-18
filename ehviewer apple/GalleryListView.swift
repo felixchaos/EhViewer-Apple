@@ -198,6 +198,10 @@ struct GalleryListView: View {
                 GalleryDetailView(gallery: gallery)
                     .id(gallery.gid)
             }
+            // 标签点击推入的画廊列表 (对齐 Android: onTagClick → 叠加新列表)
+            .navigationDestination(for: TagSearchDestination.self) { dest in
+                GalleryListView(mode: .tag(keyword: dest.tag), isPushed: true)
+            }
             .navigationTitle(navigationTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
