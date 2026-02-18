@@ -1187,7 +1187,21 @@ class GalleryListViewModel {
         currentCacheKey = cacheKey
 
         Task {
-            await fetchPage(mode: mode, page: 0)
+            // 超时保护: 如果网络请求超过 20 秒仍未完成，显示错误让用户可以重试
+            let fetchTask = Task {
+                await fetchPage(mode: mode, page: 0)
+            }
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(20))
+                // 仅在仍处于加载状态且画廊为空时触发超时
+                if self.isLoading && self.galleries.isEmpty {
+                    fetchTask.cancel()
+                    self.isLoading = false
+                    self.errorMessage = "网络请求超时，请检查网络连接或 VPN 设置后重试"
+                }
+            }
+            await fetchTask.value
+            timeoutTask.cancel()
         }
     }
 

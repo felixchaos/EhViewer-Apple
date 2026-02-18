@@ -30,7 +30,7 @@ public actor EhAPI {
     private let directImageSession: URLSession
 
     /// 最大重试次数 (超时/连接错误时自动重试)
-    private static let maxRetries = 2
+    private static let maxRetries = 1
 
     private init() {
         // 共享缓存
@@ -45,30 +45,29 @@ public actor EhAPI {
         // 不设置自定义 delegate，不设置 connectionProxyDictionary
         // 让系统自动处理 VPN/代理/TLS 全部流程
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 120
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
         config.httpCookieStorage = .shared
         config.urlCache = sharedCache
         config.allowsCellularAccess = true
-        config.waitsForConnectivity = true  // 等待网络就绪再发请求
+        // 不使用 waitsForConnectivity — 立即尝试，快速失败后交由域名前置回退
         session = URLSession(configuration: config)
 
         // 图片 session — 仅自定义重定向行为 (不跟随重定向)
         let imgConfig = URLSessionConfiguration.default
-        imgConfig.timeoutIntervalForRequest = 20
+        imgConfig.timeoutIntervalForRequest = 15
         imgConfig.timeoutIntervalForResource = 20
         imgConfig.httpCookieStorage = .shared
         imgConfig.urlCache = sharedCache
         imgConfig.allowsCellularAccess = true
-        imgConfig.waitsForConnectivity = true
         imageSession = URLSession(configuration: imgConfig, delegate: RedirectBlockDelegate(), delegateQueue: nil)
 
         // === 域名前置回退 Session (对应 Android OkHttp Dns 接口内置域名解析) ===
         // 当主要 session 因 VPN 分流不当 / DNS 污染 / GFW SNI 拦截导致失败时，
         // 使用内置 IP 地址直连服务器，复刻 Android 端的默认行为
         let directConfig = URLSessionConfiguration.default
-        directConfig.timeoutIntervalForRequest = 15
-        directConfig.timeoutIntervalForResource = 60
+        directConfig.timeoutIntervalForRequest = 10
+        directConfig.timeoutIntervalForResource = 20
         directConfig.httpCookieStorage = .shared
         directConfig.urlCache = sharedCache
         directConfig.allowsCellularAccess = true
