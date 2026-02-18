@@ -11,7 +11,16 @@ import EhSettings
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = Tab.bottomTabSafe(Tab.fromLaunchPage(AppSettings.shared.launchPage))
+    @State private var selectedTab: Tab = {
+        let tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
+        // 底部栏 tab 直接选中；"更多"中的 tab (popular/toplist/history) → 选中 .more 标签
+        return Tab.defaultBottomTabs.contains(tab) ? tab : .more
+    }()
+    /// 启动页面指定的非底部 tab (需在 MoreTabView 中自动导航)
+    @State private var launchMoreTab: Tab? = {
+        let tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
+        return Tab.moreTabs.contains(tab) ? tab : nil
+    }()
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
@@ -188,7 +197,9 @@ struct MainTabView: View {
         .onChange(of: horizontalSizeClass) { _, newSizeClass in
             // iPad 旋转切换时确保选中标签有效
             if newSizeClass == .compact {
-                selectedTab = Tab.bottomTabSafe(selectedTab)
+                if !Tab.defaultBottomTabs.contains(selectedTab) {
+                    selectedTab = .more
+                }
             }
         }
         #endif
@@ -238,7 +249,7 @@ struct MainTabView: View {
             SettingsView()
         case .more:
             // "更多"标签页: 列出剩余功能入口 (对齐 Android DrawerLayout 更多菜单)
-            MoreTabView(onNavigate: { tab in selectedTab = tab })
+            MoreTabView(onNavigate: { tab in selectedTab = tab }, initialTab: launchMoreTab)
         }
     }
 }

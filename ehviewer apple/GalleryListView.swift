@@ -193,6 +193,11 @@ struct GalleryListView: View {
                     }
                 }
             }
+            // ★ navigationDestination 只在 NavigationStack 顶层注册一次，避免 pushedContent 重复注册导致未定义行为
+            .navigationDestination(for: GalleryInfo.self) { gallery in
+                GalleryDetailView(gallery: gallery)
+                    .id(gallery.gid)
+            }
             .navigationTitle(navigationTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -399,10 +404,6 @@ struct GalleryListView: View {
         #endif
         .refreshable {
             await viewModel.refreshAsync(mode: effectiveMode)
-        }
-        .navigationDestination(for: GalleryInfo.self) { gallery in
-            GalleryDetailView(gallery: gallery)
-                .id(gallery.gid)
         }
     }
 
