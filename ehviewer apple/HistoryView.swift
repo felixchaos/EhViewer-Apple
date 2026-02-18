@@ -28,6 +28,10 @@ struct HistoryView: View {
             } else {
                 NavigationStack {
                     historyInnerContent
+                        .navigationDestination(for: GalleryInfo.self) { gallery in
+                            GalleryDetailView(gallery: gallery)
+                                .id(gallery.gid)
+                        }
                 }
             }
         }
@@ -135,10 +139,6 @@ struct HistoryView: View {
             }
         }
         .listStyle(.plain)
-        .navigationDestination(for: GalleryInfo.self) { gallery in
-            GalleryDetailView(gallery: gallery)
-                .id(gallery.gid)
-        }
     }
 
     private func formattedTime(_ date: Date) -> String {
