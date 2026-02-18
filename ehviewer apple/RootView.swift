@@ -20,7 +20,7 @@ import AppKit
 /// 流程: 18+警告 → 安全认证 → 站点选择 → 登录检查 → 主界面
 struct RootView: View {
     @State private var appState = AppState()
-    @State private var flowStep: OnboardingStep = .checking
+    @State private var flowStep: OnboardingStep
     
     /// 后台进入时间戳，用于判断是否需要重新认证
     @State private var backgroundTime: Date?
@@ -47,12 +47,34 @@ struct RootView: View {
         case main          // 主界面
     }
 
+    // MARK: - 同步计算初始页面 (消除白屏)
+    init() {
+        let settings = AppSettings.shared
+        if settings.showWarning {
+            _flowStep = State(initialValue: .warning)
+        } else if settings.enableSecurity {
+            _flowStep = State(initialValue: .security)
+        } else if !settings.hasSelectedSite {
+            _flowStep = State(initialValue: .selectSite)
+        } else if settings.skipSignIn {
+            _flowStep = State(initialValue: .main)
+        } else {
+            // 直接检查 Cookie 判断登录状态 (无需 @MainActor)
+            let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
+            let hasAuth = cookies.contains { $0.name == "ipb_member_id" } &&
+                          cookies.contains { $0.name == "ipb_pass_hash" }
+            _flowStep = State(initialValue: hasAuth ? .main : .login)
+        }
+    }
+
     var body: some View {
         Group {
             switch flowStep {
             case .checking:
-                Color.clear
-                    .task { determineNextStep() }
+                // 兜底分支: init() 已计算跳过此状态，理论上不会到达
+                MainTabView()
+                    .environment(appState)
+                    .onAppear { determineNextStep() }
                 
             case .warning:
                 WarningView(
@@ -100,10 +122,18 @@ struct RootView: View {
             case .main:
                 MainTabView()
                     .environment(appState)
+                    .task {
+                        // 确保 AppState 登录状态与 Cookie 同步
+                        if !appState.isSignedIn {
+                            appState.checkLoginStatus()
+                            if !appState.isSignedIn {
+                                appState.isSignedIn = AppSettings.shared.skipSignIn
+                            }
+                        }
+                    }
             }
         }
         .withGlobalErrorBoundary()
-        .animation(.easeInOut, value: flowStep)
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             if isSignedIn {
                 flowStep = .main
