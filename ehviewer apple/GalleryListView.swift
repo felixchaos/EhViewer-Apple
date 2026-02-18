@@ -144,23 +144,26 @@ struct GalleryListView: View {
                     sidebarPath.append(TagSearchDestination(tag: tag))
                 })
             }
-            .task {
-                if viewModel.galleries.isEmpty {
-                    viewModel.loadGalleries(mode: mode)
-                }
-            }
         } else {
             // iPhone: 单栏布局
             compactContent
         }
         }
-        .onAppear {
-            // 同步收藏搜索关键字到 ViewModel
+        .task {
+            // ⚠️ 使用 .task 而非 .onAppear — 避免在布局阶段同步修改 @Observable 属性
+            //   .onAppear 是同步的，修改 @Observable → 立即触发重渲染 → NavigationStack 布局期间收到
+            //   多次更新 → "NavigationRequestObserver tried to update multiple times per frame"
+            //   .task 是异步的，修改发生在布局完成之后，不干扰 NavigationStack 初始化
             viewModel.favSearchKeyword = favSearchKeyword
             viewModel.loadSearchHistory()
-            // 标签搜索: 将标签关键字放入搜索框 (对齐 Android: mSearchBar.setText(keyword))
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
+            }
+            // 安全兜底: 确保数据加载在任何分支下都能触发
+            // 如果 NavigationStack 内部的 .task 因布局异常未触发, 这里兜底
+            if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                debugLog("[GalleryListView] body .task: triggering loadGalleries for \(mode)")
+                viewModel.loadGalleries(mode: mode)
             }
         }
         .onChange(of: showAdvancedSearch) { _, isShowing in
@@ -220,11 +223,6 @@ struct GalleryListView: View {
                     viewModel.applyQuickSearch(search)
                     selectedQuickSearch = nil
                 }
-            }
-        }
-        .task {
-            if viewModel.galleries.isEmpty {
-                viewModel.loadGalleries(mode: mode)
             }
         }
         .sheet(isPresented: $viewModel.showJumpDialog) {
@@ -1152,7 +1150,11 @@ class GalleryListViewModel {
     private var currentSearchMode: SearchMode = .normal
 
     func loadGalleries(mode: GalleryListView.ListMode) {
-        guard !isLoading else { return }
+        guard !isLoading else {
+            debugLog("[GalleryListVM] loadGalleries: skipped (already loading)")
+            return
+        }
+        debugLog("[GalleryListVM] loadGalleries: starting for mode=\(mode)")
 
         currentMode = mode
         
@@ -1668,6 +1670,7 @@ class GalleryListViewModel {
     }
 
     private func fetchPage(mode: GalleryListView.ListMode, page: Int) async {
+        debugLog("[GalleryListVM] fetchPage: mode=\(mode) page=\(page)")
         do {
             let site = AppSettings.shared.gallerySite
             let host = EhURL.host(for: site)
@@ -1729,6 +1732,7 @@ class GalleryListViewModel {
             // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
             self.totalPages = result.pages
             self.isLoading = false
+            debugLog("[GalleryListVM] fetchPage: success — \(self.galleries.count) galleries total")
 
             // 缓存第一页结果
             if page == 0 {
@@ -1746,6 +1750,7 @@ class GalleryListViewModel {
 
         } catch {
             self.isLoading = false  // 始终重置，包括取消
+            debugLog("[GalleryListVM] fetchPage: error \(error)")
             if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             self.errorMessage = EhError.localizedMessage(for: error)
         }
