@@ -83,6 +83,7 @@ struct RootView: View {
         //   - flowStep == .main/.checking → 直接显示主界面
         //   - 其他 → 显示对应引导/登录页面
         //   不使用 ZStack/opacity，消除不必要的 MainTabView 提前渲染
+        let _ = NSLog("[RENDER] RootView body, flowStep=%@", String(describing: flowStep))
         Group {
             if flowStep == .main || flowStep == .checking {
                 MainTabView()

@@ -38,7 +38,10 @@ struct EhViewerApp: App {
         SpiderDen.initialize()
 
         // 数据库维护: 每 7 天自动 VACUUM + WAL checkpoint (V-05 修复)
+        // ⚠️ 关键修复: 延迟 10 秒再执行维护，避免 VACUUM 持有 DatabaseQueue 串行锁
+        // 阻塞主线程的数据库读取 (ContinueReadingCard 等)，导致白屏 + 闪退
         Task.detached(priority: .background) {
+            try? await Task.sleep(for: .seconds(10))
             EhDatabase.shared.performMaintenanceIfNeeded()
         }
 

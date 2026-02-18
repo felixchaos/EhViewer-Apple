@@ -111,6 +111,8 @@ struct GalleryListView: View {
 
 
     var body: some View {
+        // 诊断: 确认 body 是否被无限重渲染 (NSLog 不受缓冲影响，崩溃前也能看到)
+        let _ = NSLog("[RENDER] GalleryListView body, mode=%@, galleries=%d", String(describing: mode), viewModel.galleries.count)
         Group {
             if isEmbedded {
                 // 嵌入模式: 仅展示列表，由父视图管理导航

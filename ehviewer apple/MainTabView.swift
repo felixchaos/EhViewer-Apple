@@ -71,6 +71,7 @@ struct MainTabView: View {
     }
 
     var body: some View {
+        let _ = NSLog("[RENDER] MainTabView body")
         #if os(macOS)
         NavigationSplitView {
             List(Tab.allCases.filter { $0 != .more }, id: \.self, selection: $selectedTab) { tab in

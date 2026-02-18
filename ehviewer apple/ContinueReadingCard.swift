@@ -23,7 +23,10 @@ struct ContinueReadingCard: View {
                 cardContent(record: record)
             }
         }
-        .onAppear { loadLatestReading() }
+        // ⚠️ 关键修复: 使用 .task (异步) 替代 .onAppear (同步)
+        // 原 .onAppear 在主线程同步调用 dbQueue.read → 如果后台 VACUUM 持有 dbQueue，
+        // 主线程永久阻塞 → .task 永远无法执行 → 白屏 + 发热 + 闪退
+        .task { await loadLatestReadingAsync() }
         #if os(iOS)
         .fullScreenCover(item: $readerLaunchItem) { item in
             ImageReaderView(
@@ -45,29 +48,34 @@ struct ContinueReadingCard: View {
         return Date().timeIntervalSince(lastTime) < 86400 // 24 小时
     }
 
-    private func loadLatestReading() {
+    /// 异步加载最近阅读记录 — 数据库操作在后台线程执行，不阻塞主线程
+    private func loadLatestReadingAsync() async {
         let lastGid = UserDefaults.standard.object(forKey: "eh_last_reading_gid") as? Int64
         guard let gid = lastGid else { return }
 
-        // 从历史数据库查找
-        do {
-            let allHistory = try EhDatabase.shared.getAllHistory(limit: 1)
-            if let first = allHistory.first, first.gid == gid {
-                latestRecord = first
-            } else {
-                // history 表中最新的不是最后阅读的 → 按 gid 查找
-                let searched = try EhDatabase.shared.getAllHistory(limit: 50)
-                latestRecord = searched.first(where: { $0.gid == gid })
+        // 在后台线程执行数据库读取，避免 DatabaseQueue 串行锁阻塞主线程
+        let result: (record: HistoryRecord?, progress: Int?) = await Task.detached {
+            var record: HistoryRecord?
+            do {
+                let allHistory = try EhDatabase.shared.getAllHistory(limit: 1)
+                if let first = allHistory.first, first.gid == gid {
+                    record = first
+                } else {
+                    let searched = try EhDatabase.shared.getAllHistory(limit: 50)
+                    record = searched.first(where: { $0.gid == gid })
+                }
+            } catch {
+                print("[ContinueReadingCard] Failed to load history: \(error)")
             }
-        } catch {
-            debugLog("[ContinueReadingCard] Failed to load history: \(error)")
-        }
 
-        // 读取阅读进度
-        let key = "reading_progress_\(gid)"
-        if let saved = UserDefaults.standard.object(forKey: key) as? Int {
-            readingProgress = saved
-        }
+            let key = "reading_progress_\(gid)"
+            let progress = UserDefaults.standard.object(forKey: key) as? Int
+            return (record, progress)
+        }.value
+
+        // 回到主线程更新 @State
+        latestRecord = result.record
+        readingProgress = result.progress
     }
 
     @ViewBuilder
