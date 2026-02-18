@@ -196,4 +196,6 @@ extension Notification.Name {
     static let tagSearchRequested = Notification.Name("tagSearchRequested")
     /// 磁盘空间不足，所有下载已暂停
     static let ehDiskFull = Notification.Name("ehDiskFull")
+    /// 全局错误展示 (GlobalErrorBoundary 监听)
+    static let ehGlobalError = Notification.Name("ehGlobalError")
 }

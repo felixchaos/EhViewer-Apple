@@ -174,8 +174,7 @@ struct GalleryListView: View {
 
     // iPhone 布局
     private var compactContent: some View {
-        let _ = debugLog("[GalleryListView] compactContent: galleries=\(viewModel.galleries.count) loading=\(viewModel.isLoading) error=\(viewModel.errorMessage ?? "nil")")
-        return NavigationStack {
+        NavigationStack {
             VStack(spacing: 0) {
                 // 搜索栏 (全宽，置于内容顶部)
                 searchBarView
@@ -1157,9 +1156,10 @@ class GalleryListViewModel {
 
         currentMode = mode
         
-        // 先查缓存
+        // 先查缓存 (空结果不视为有效缓存 — 可能是之前网络失败)
         let cacheKey = Self.cacheKey(for: mode, page: 0)
-        if let cached = GalleryCache.shared.getListResult(forKey: cacheKey) {
+        if let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
+           !cached.galleries.isEmpty {
             galleries = cached.galleries
             hasMore = cached.hasMore
             totalPages = cached.totalPages ?? 0

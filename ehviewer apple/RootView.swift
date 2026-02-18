@@ -79,7 +79,6 @@ struct RootView: View {
     }
 
     var body: some View {
-        let _ = debugLog("[RootView] body rendered — flowStep=\(flowStep) isSignedIn=\(appState.isSignedIn)")
         // ★ 主界面 + 引导层分离
         //   - flowStep == .main/.checking → 直接显示主界面
         //   - 其他 → 显示对应引导/登录页面

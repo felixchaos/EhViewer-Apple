@@ -61,7 +61,7 @@ final class ErrorHandler {
     /// 当前待展示的错误 (触发 alert)
     var currentError: AppError?
 
-    /// 处理错误: 记录日志 + 弹窗展示
+    /// 处理错误: 记录日志 + 通知展示
     func handle(_ error: Error, context: String = "Unknown") {
         let appError = AppError.from(error)
 
@@ -72,6 +72,9 @@ final class ErrorHandler {
         )
 
         currentError = appError
+        // 通过 Notification 通知 GlobalErrorBoundary 展示错误
+        // 避免 @Observable 观察链导致渲染循环
+        NotificationCenter.default.post(name: .ehGlobalError, object: appError)
     }
 
     /// 静默处理 (仅记日志, 不弹窗)
@@ -88,22 +91,28 @@ final class ErrorHandler {
 /// 全局错误边界修饰符
 /// 用法: `.modifier(GlobalErrorBoundary())`
 struct GlobalErrorBoundary: ViewModifier {
-    @State private var errorHandler = ErrorHandler.shared
+    // ⚠️ 不用 @State 包裹 @Observable 单例 — 会导致幽灵重渲染循环
+    // 直接在 body 内引用 ErrorHandler.shared
+    @State private var showError = false
+    @State private var capturedError: AppError?
 
     func body(content: Content) -> some View {
         content
+            .onReceive(NotificationCenter.default.publisher(for: .ehGlobalError)) { notification in
+                if let error = notification.object as? AppError {
+                    capturedError = error
+                    showError = true
+                }
+            }
             .alert(
-                errorHandler.currentError?.title ?? "错误",
-                isPresented: Binding(
-                    get: { errorHandler.currentError != nil },
-                    set: { if !$0 { errorHandler.currentError = nil } }
-                )
+                capturedError?.title ?? "错误",
+                isPresented: $showError
             ) {
                 Button("确定", role: .cancel) {
-                    errorHandler.currentError = nil
+                    capturedError = nil
                 }
                 // 提供"复制详情"按钮, 方便用户反馈
-                if let detail = errorHandler.currentError?.underlyingError {
+                if let detail = capturedError?.underlyingError {
                     Button("复制错误详情") {
                         let text = String(describing: detail)
                         #if os(iOS)
@@ -112,11 +121,11 @@ struct GlobalErrorBoundary: ViewModifier {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(text, forType: .string)
                         #endif
-                        errorHandler.currentError = nil
+                        capturedError = nil
                     }
                 }
             } message: {
-                if let msg = errorHandler.currentError?.message {
+                if let msg = capturedError?.message {
                     Text(msg)
                 }
             }

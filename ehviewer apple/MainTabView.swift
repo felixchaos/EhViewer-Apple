@@ -126,7 +126,6 @@ struct MainTabView: View {
         }
         #else
         // iOS: iPad regular → 侧边栏 NavigationSplitView, iPhone → 底部 TabView
-        let _ = debugLog("[MainTabView] body: sizeClass=\(String(describing: horizontalSizeClass)) tab=\(selectedTab)")
         Group {
             if horizontalSizeClass == .regular {
                 // iPad 横屏 / 外接键盘: 侧边栏导航
