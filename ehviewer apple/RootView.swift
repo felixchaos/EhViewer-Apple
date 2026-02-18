@@ -33,6 +33,9 @@ struct RootView: View {
     /// ExHentai 切换提示
     @State private var showExHAlert = false
 
+    /// 缓存深色模式偏好 — 打破 body 对 AppSettings.shared.theme 的直接 observation 链
+    @State private var cachedColorScheme: ColorScheme?
+
     /// Sad Panda / igneous 失效警告 (V-15)
     @State private var showSadPandaAlert = false
     /// 磁盘空间不足警告
@@ -83,6 +86,9 @@ struct RootView: View {
         //   - flowStep == .main/.checking → 直接显示主界面
         //   - 其他 → 显示对应引导/登录页面
         //   不使用 ZStack/opacity，消除不必要的 MainTabView 提前渲染
+        #if DEBUG
+        let _ = Self._printChanges()  // ★ 诊断: 精确显示哪个属性触发了 body 重新求值
+        #endif
         let _ = NSLog("[RENDER] RootView body, flowStep=%@", String(describing: flowStep))
         Group {
             if flowStep == .main || flowStep == .checking {
@@ -95,6 +101,8 @@ struct RootView: View {
         .withGlobalErrorBoundary()
         // 已登录用户: 启动时异步获取资料 + ExH 检测 (不 mutate isSignedIn，不触发重渲染)
         .task {
+            // 在 .task 中初始化 cachedColorScheme，打破 body 对 AppSettings.shared.theme 的直接观察
+            cachedColorScheme = Self.computeColorScheme()
             if appState.isSignedIn && !AppSettings.shared.skipSignIn {
                 await postLoginActions()
             }
@@ -142,8 +150,8 @@ struct RootView: View {
             Text("igneous Cookie 已失效 (Sad Panda)，已自动清除。\n请重新登录以恢复 ExHentai 访问权限，或切换到 E-Hentai。")
         }
         // 对齐 Android: 深色模式支持 (Settings.KEY_THEME)
-        // 0=跟随系统, 1=浅色, 2=深色
-        .preferredColorScheme(preferredColorScheme)
+        // 0=跟随系统, 1=浅色, 2=深色  (使用 cachedColorScheme 避免 body 直接读 AppSettings)
+        .preferredColorScheme(cachedColorScheme)
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // 记录进入后台的时间
@@ -280,7 +288,8 @@ struct RootView: View {
     }
 
     /// 深色模式偏好 (对齐 Android: Settings.KEY_THEME)
-    private var preferredColorScheme: ColorScheme? {
+    /// 静态方法: 用于 .task 中初始化 cachedColorScheme，不在 body 中直接调用
+    private static func computeColorScheme() -> ColorScheme? {
         switch AppSettings.shared.theme {
         case 1: return .light
         case 2: return .dark
@@ -317,7 +326,9 @@ struct RootView: View {
         
         // 如果设置了跳过登录 (游客模式)，直接进入主界面
         if appState.isSignedIn || AppSettings.shared.skipSignIn {
-            appState.isSignedIn = true  // 确保状态一致
+            if !appState.isSignedIn {
+                appState.isSignedIn = true  // 仅在值不同时写入，避免 withMutation 触发无效重渲染
+            }
             flowStep = .main
         } else {
             flowStep = .login
@@ -414,7 +425,10 @@ final class AppState {
         let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
         let hasMemberId = cookies.contains { $0.name == "ipb_member_id" }
         let hasPassHash = cookies.contains { $0.name == "ipb_pass_hash" }
-        isSignedIn = hasMemberId && hasPassHash
+        let newValue = hasMemberId && hasPassHash
+        if newValue != isSignedIn {
+            isSignedIn = newValue  // ★ 仅在值变化时写入，避免 withMutation 触发无效重渲染
+        }
 
         // Fix F1-3: 未登录或无有效 igneous Cookie 时，强制降级到 E-Hentai
         if !isSignedIn && AppSettings.shared.gallerySite == .exHentai {

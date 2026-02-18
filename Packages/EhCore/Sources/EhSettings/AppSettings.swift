@@ -31,6 +31,7 @@ public final class AppSettings: @unchecked Sendable {
             return EhSite(rawValue: _defaults.integer(forKey: "gallery_site")) ?? .eHentai
         }
         set {
+            guard newValue.rawValue != _defaults.integer(forKey: "gallery_site") else { return }
             withMutation(keyPath: \.gallerySite) {
                 _defaults.set(newValue.rawValue, forKey: "gallery_site")
             }
@@ -119,6 +120,7 @@ public final class AppSettings: @unchecked Sendable {
             return ListMode(rawValue: _defaults.integer(forKey: "list_mode")) ?? .list
         }
         set {
+            guard newValue.rawValue != _defaults.integer(forKey: "list_mode") else { return }
             withMutation(keyPath: \.listMode) {
                 _defaults.set(newValue.rawValue, forKey: "list_mode")
             }
@@ -131,6 +133,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "show_jpn_title")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "show_jpn_title") else { return }
             withMutation(keyPath: \.showJpnTitle) {
                 _defaults.set(newValue, forKey: "show_jpn_title")
             }
@@ -144,6 +147,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "is_login")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "is_login") else { return }
             withMutation(keyPath: \.isLogin) {
                 _defaults.set(newValue, forKey: "is_login")
             }
@@ -156,6 +160,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.string(forKey: "display_name")
         }
         set {
+            guard newValue != _defaults.string(forKey: "display_name") else { return }
             withMutation(keyPath: \.displayName) {
                 _defaults.set(newValue, forKey: "display_name")
             }
@@ -181,6 +186,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.integer(forKey: "theme")
         }
         set {
+            guard newValue != _defaults.integer(forKey: "theme") else { return }
             withMutation(keyPath: \.theme) {
                 _defaults.set(newValue, forKey: "theme")
             }
@@ -205,6 +211,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "show_gallery_pages")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "show_gallery_pages") else { return }
             withMutation(keyPath: \.showGalleryPages) {
                 _defaults.set(newValue, forKey: "show_gallery_pages")
             }
@@ -217,6 +224,8 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.object(forKey: "show_tag_translations") as? Bool ?? true
         }
         set {
+            let current = _defaults.object(forKey: "show_tag_translations") as? Bool ?? true
+            guard newValue != current else { return }
             withMutation(keyPath: \.showTagTranslations) {
                 _defaults.set(newValue, forKey: "show_tag_translations")
             }
@@ -229,6 +238,8 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.object(forKey: "show_gallery_comment") as? Bool ?? true
         }
         set {
+            let current = _defaults.object(forKey: "show_gallery_comment") as? Bool ?? true
+            guard newValue != current else { return }
             withMutation(keyPath: \.showGalleryComment) {
                 _defaults.set(newValue, forKey: "show_gallery_comment")
             }
@@ -241,6 +252,8 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.object(forKey: "show_gallery_rating") as? Bool ?? true
         }
         set {
+            let current = _defaults.object(forKey: "show_gallery_rating") as? Bool ?? true
+            guard newValue != current else { return }
             withMutation(keyPath: \.showGalleryRating) {
                 _defaults.set(newValue, forKey: "show_gallery_rating")
             }
@@ -253,6 +266,8 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.object(forKey: "show_read_progress") as? Bool ?? true
         }
         set {
+            let current = _defaults.object(forKey: "show_read_progress") as? Bool ?? true
+            guard newValue != current else { return }
             withMutation(keyPath: \.showReadProgress) {
                 _defaults.set(newValue, forKey: "show_read_progress")
             }
@@ -474,6 +489,8 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.object(forKey: "show_warning") as? Bool ?? true
         }
         set {
+            let current = _defaults.object(forKey: "show_warning") as? Bool ?? true
+            guard newValue != current else { return }
             withMutation(keyPath: \.showWarning) {
                 _defaults.set(newValue, forKey: "show_warning")
             }
@@ -487,6 +504,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "has_selected_site")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "has_selected_site") else { return }
             withMutation(keyPath: \.hasSelectedSite) {
                 _defaults.set(newValue, forKey: "has_selected_site")
             }
@@ -500,6 +518,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "skip_sign_in")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "skip_sign_in") else { return }
             withMutation(keyPath: \.skipSignIn) {
                 _defaults.set(newValue, forKey: "skip_sign_in")
             }
@@ -513,6 +532,7 @@ public final class AppSettings: @unchecked Sendable {
             return _defaults.bool(forKey: "enable_secure")
         }
         set {
+            guard newValue != _defaults.bool(forKey: "enable_secure") else { return }
             withMutation(keyPath: \.enableSecurity) {
                 _defaults.set(newValue, forKey: "enable_secure")
             }

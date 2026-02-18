@@ -112,6 +112,9 @@ struct GalleryListView: View {
 
     var body: some View {
         // 诊断: 确认 body 是否被无限重渲染 (NSLog 不受缓冲影响，崩溃前也能看到)
+        #if DEBUG
+        let _ = Self._printChanges()  // ★ 精确显示触发源: @self/@identity/_property
+        #endif
         let _ = NSLog("[RENDER] GalleryListView body, mode=%@, galleries=%d", String(describing: mode), viewModel.galleries.count)
         Group {
             if isEmbedded {
@@ -224,14 +227,7 @@ struct GalleryListView: View {
                 }
             }
         }
-        .task {
-            // compactContent 级加载 — 与 body .task 双重保险，guard !isLoading 防重复
-            print("[EhView] compactContent .task fired, galleries=\(viewModel.galleries.count), isLoading=\(viewModel.isLoading)")
-            if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                print("[EhView] compactContent .task → loadGalleries")
-                viewModel.loadGalleries(mode: mode)
-            }
-        }
+        // ★ 已移除 compactContent 级 .task — 避免与 body .task 重复加载，由 body .task 统一管理
         .sheet(isPresented: $viewModel.showJumpDialog) {
             jumpSheet
         }
@@ -1831,8 +1827,14 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
                 }
                 .allowsHitTesting(isOpen || edgeDragProgress > 0)
 
-            // 抽屉面板 (含拖拽手势)
-            drawerContent()
+            // ★ 懒加载抽屉内容: 仅在打开或拖拽时才渲染 drawerContent，避免每次父视图重渲染时创建 QuickSearchDrawerContent
+            Group {
+                if isOpen || edgeDragProgress > 0 {
+                    drawerContent()
+                } else {
+                    Color.clear
+                }
+            }
                 .frame(width: drawerWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .background(.regularMaterial)

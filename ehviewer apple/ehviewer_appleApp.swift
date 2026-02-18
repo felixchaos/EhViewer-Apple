@@ -71,6 +71,7 @@ struct EhViewerApp: App {
     }
 
     var body: some Scene {
+        let _ = NSLog("[RENDER] EhViewerApp body — 如果此行反复出现，说明 App 级重渲染")
         WindowGroup {
             RootView()
         }

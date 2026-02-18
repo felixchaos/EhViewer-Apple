@@ -72,6 +72,9 @@ struct MainTabView: View {
 
     var body: some View {
         let _ = NSLog("[RENDER] MainTabView body")
+        #if DEBUG
+        let _ = Self._printChanges()  // ★ 诊断: 精确显示哪个属性触发了 body 重新求值
+        #endif
         #if os(macOS)
         NavigationSplitView {
             List(Tab.allCases.filter { $0 != .more }, id: \.self, selection: $selectedTab) { tab in
