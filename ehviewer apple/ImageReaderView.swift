@@ -668,8 +668,17 @@ struct ImageReaderView: View {
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
             .contentShape(Rectangle())
-            // 移除了 TapGesture: 防止滚动时疯狂误触工具栏
-            // 工具栏切换改由底部浮动导航栏的中央按钮触发
+            // Fix: 使用 SpatialTapGesture 恢复点击翻页区域
+            // 用 simultaneousGesture 不阻塞 ScrollView 的滚动手势
+            // 滚动后 300ms 内忽略点击，防止惯性滚动误触
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        let timeSinceScroll = Date().timeIntervalSince(lastScrollChangeTime)
+                        guard timeSinceScroll > 0.3 else { return }
+                        handleTapZone(location: value.location, viewSize: geometry.size)
+                    }
+            )
             #if os(iOS)
             .simultaneousGesture(
                 MagnifyGesture()
@@ -895,22 +904,21 @@ struct ImageReaderView: View {
         }
 
         if relX < tapZoneRatio {
+            // 左侧 25%: RTL → 下一页, LTR/垂直 → 上一页
             if readingDirection == .rightToLeft {
                 goToNextPage()
-            } else if readingDirection == .leftToRight {
-                goToPreviousPage()
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) { showOverlay.toggle() }
+                goToPreviousPage()
             }
         } else if relX > (1 - tapZoneRatio) {
+            // 右侧 25%: RTL → 上一页, LTR/垂直 → 下一页
             if readingDirection == .rightToLeft {
                 goToPreviousPage()
-            } else if readingDirection == .leftToRight {
-                goToNextPage()
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) { showOverlay.toggle() }
+                goToNextPage()
             }
         } else {
+            // 中间 50%: 切换工具栏
             withAnimation(.easeInOut(duration: 0.2)) { showOverlay.toggle() }
         }
     }
@@ -1172,19 +1180,6 @@ struct ImageReaderView: View {
             }
             .padding(.horizontal)
 
-            // 页码
-            HStack {
-                Text("1")
-                Spacer()
-                Text("\(vm.currentPage + 1)")
-                    .fontWeight(.bold)
-                Spacer()
-                Text("\(vm.totalPages)")
-            }
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.7))
-            .padding(.horizontal, 20)
-
             // 自动翻页
             HStack {
                 Button(action: toggleAutoPage) {
@@ -1218,13 +1213,7 @@ struct ImageReaderView: View {
 
                 Spacer()
 
-                if AppSettings.shared.showProgress {
-                    Text("\(vm.currentPage + 1)/\(vm.totalPages)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-
-                Spacer()
+                // 页码已移至 floatingNavigationOverlay，不再重复显示
 
                 if AppSettings.shared.showBattery {
                     batteryView
