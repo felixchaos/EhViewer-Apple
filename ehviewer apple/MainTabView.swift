@@ -11,16 +11,7 @@ import EhSettings
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = {
-        let tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
-        // 底部栏 tab 直接选中；"更多"中的 tab (popular/toplist/history) → 选中 .more 标签
-        return Tab.defaultBottomTabs.contains(tab) ? tab : .more
-    }()
-    /// 启动页面指定的非底部 tab (需在 MoreTabView 中自动导航)
-    @State private var launchMoreTab: Tab? = {
-        let tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
-        return Tab.moreTabs.contains(tab) ? tab : nil
-    }()
+    @State private var selectedTab: Tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
@@ -55,11 +46,24 @@ struct MainTabView: View {
             }
         }
 
-        /// iOS 底部默认显示的标签页 (对齐 Android: 首页/收藏/下载/设置/更多)
-        static var defaultBottomTabs: [Tab] { [.home, .favorites, .downloads, .settings, .more] }
+        /// 固定的底部默认标签页
+        private static let defaultBottomTabs: [Tab] = [.home, .favorites, .downloads, .settings, .more]
 
-        /// "更多"菜单中的标签页
-        static var moreTabs: [Tab] { [.popular, .toplist, .history] }
+        /// iPhone 底部显示的标签页 — 根据启动页面设置动态调整
+        /// 如果启动页不在默认底部栏中 (热门/排行榜/历史)，替换首页位置
+        static var bottomTabs: [Tab] {
+            let launchTab = fromLaunchPage(AppSettings.shared.launchPage)
+            guard !defaultBottomTabs.contains(launchTab) else { return defaultBottomTabs }
+            var tabs = defaultBottomTabs
+            tabs[0] = launchTab  // 替换 .home
+            return tabs
+        }
+
+        /// "更多"菜单中的标签页 — 不在底部栏且非 .more 的标签
+        static var moreTabs: [Tab] {
+            let bottom = Set(bottomTabs)
+            return allCases.filter { $0 != .more && !bottom.contains($0) }
+        }
 
         /// 启动页面设置映射
         static func fromLaunchPage(_ page: Int) -> Tab {
@@ -71,11 +75,6 @@ struct MainTabView: View {
             case 5: return .history
             default: return .home
             }
-        }
-
-        /// iPhone 底部导航可达性检查 — 不在底部栏的 tab 降级为 .home
-        static func bottomTabSafe(_ tab: Tab) -> Tab {
-            defaultBottomTabs.contains(tab) ? tab : .home
         }
     }
 
@@ -167,7 +166,7 @@ struct MainTabView: View {
             } else {
                 // iPhone / iPad 竖屏: 底部标签栏
                 TabView(selection: $selectedTab) {
-                    ForEach(Tab.defaultBottomTabs, id: \.self) { tab in
+                    ForEach(Tab.bottomTabs, id: \.self) { tab in
                         tabContent(tab)
                             .tabItem {
                                 Label(tab.rawValue, systemImage: tab.icon)
@@ -197,7 +196,7 @@ struct MainTabView: View {
         .onChange(of: horizontalSizeClass) { _, newSizeClass in
             // iPad 旋转切换时确保选中标签有效
             if newSizeClass == .compact {
-                if !Tab.defaultBottomTabs.contains(selectedTab) {
+                if !Tab.bottomTabs.contains(selectedTab) {
                     selectedTab = .more
                 }
             }
@@ -249,7 +248,7 @@ struct MainTabView: View {
             SettingsView()
         case .more:
             // "更多"标签页: 列出剩余功能入口 (对齐 Android DrawerLayout 更多菜单)
-            MoreTabView(onNavigate: { tab in selectedTab = tab }, initialTab: launchMoreTab)
+            MoreTabView(onNavigate: { tab in selectedTab = tab })
         }
     }
 }
