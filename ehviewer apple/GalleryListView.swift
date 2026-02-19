@@ -1380,7 +1380,8 @@ class GalleryListViewModel {
             let result = try await EhAPI.shared.getGalleryList(url: urlComponents.url!.absoluteString)
 
             self.galleries = result.galleries
-            self.hasMore = result.nextPage != nil
+            // ★ 防止分页回绕: nextPage 必须 > 0 才有下一页 (E-Hentai 末页 ptt ">" 链接回 page=0)
+            self.hasMore = (result.nextPage ?? 0) > 0 || result.nextHref != nil
             self.isLoading = false
         } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1394,17 +1395,25 @@ class GalleryListViewModel {
 
     func loadMore(mode: GalleryListView.ListMode) async {
         guard !isLoading, hasMore else { return }
-        
-        // 收藏夹模式: 使用 nextHref 翻页 (不是整数页码)
-        if case .favorites = mode, let nextHref = nextHref {
+
+        // ★ 优先使用 nextHref 翻页 (收藏夹 + 日期跳转后的 searchnav 分页)
+        if let nextHref = nextHref {
             isLoading = true
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: nextHref)
                 self.galleries.append(contentsOf: result.galleries)
-                self.hasMore = result.nextHref != nil
                 self.prevHref = result.prevHref
                 self.nextHref = result.nextHref
                 self.totalPages = result.pages
+                // 判断是否还有更多: href 优先, 否则 nextPage 必须前进
+                if result.nextHref != nil {
+                    self.hasMore = true
+                } else if let np = result.nextPage, np > 0 {
+                    self.hasMore = true
+                    self.currentPage = np - 1 // 同步页码供后续 page-based fallback
+                } else {
+                    self.hasMore = false
+                }
                 self.isLoading = false
             } catch {
                 if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1416,7 +1425,8 @@ class GalleryListViewModel {
             }
             return
         }
-        
+
+        // Page-based 翻页 (home / search / tag)
         isLoading = true
         currentPage += 1
         await fetchPage(mode: mode, page: currentPage)
@@ -1516,7 +1526,12 @@ class GalleryListViewModel {
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: jumpUrl)
                 self.galleries = result.galleries
-                self.hasMore = result.nextPage != nil || result.nextHref != nil
+                // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
+                if result.nextHref != nil {
+                    self.hasMore = true
+                } else {
+                    self.hasMore = (result.nextPage ?? 0) > 0
+                }
                 self.prevHref = result.prevHref
                 self.nextHref = result.nextHref
                 self.totalPages = result.pages
@@ -1632,7 +1647,12 @@ class GalleryListViewModel {
         do {
             let result = try await EhAPI.shared.getGalleryList(url: seekUrl)
             self.galleries = result.galleries
-            self.hasMore = result.nextPage != nil || result.nextHref != nil
+            // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
+            if result.nextHref != nil {
+                self.hasMore = true
+            } else {
+                self.hasMore = (result.nextPage ?? 0) > 0
+            }
             self.prevHref = result.prevHref
             self.nextHref = result.nextHref
             self.totalPages = result.pages
@@ -1741,17 +1761,25 @@ class GalleryListViewModel {
             } else {
                 self.galleries.append(contentsOf: result.galleries)
             }
-            self.hasMore = result.nextPage != nil || result.nextHref != nil
             self.prevHref = result.prevHref
             self.nextHref = result.nextHref
             // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
             self.totalPages = result.pages
-            
-            // Popular 列表不支持翻页 — 始终只有一页内容 (对齐 Android: populars 不做分页)
-            // 服务器可能返回 nextPage，但 popular URL 不接受 page 参数，
-            // 如果不强制截止会导致无限加载重复内容
+
+            // ★ 防止分页循环: 根据模式正确判断 hasMore
             if case .popular = mode {
+                // Popular 不分页
                 self.hasMore = false
+            } else if case .favorites = mode {
+                // 收藏夹使用 href-based 翻页
+                self.hasMore = result.nextHref != nil
+            } else if result.nextHref != nil {
+                // searchnav 模式 (日期跳转后) 用 nextHref
+                self.hasMore = true
+            } else {
+                // ptt 分页: nextPage 必须 > 当前 page 才有下一页
+                // E-Hentai 末页 ptt ">" 链接回 page=0 → nextPage=0 → 不再加载
+                self.hasMore = (result.nextPage ?? 0) > page
             }
             
             self.isLoading = false

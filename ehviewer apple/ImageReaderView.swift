@@ -667,7 +667,7 @@ struct ImageReaderView: View {
         let showInterval = verticalPageInterval
 
         return ScrollViewReader { proxy in
-            ScrollView([.vertical, .horizontal], showsIndicators: false) {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: showInterval ? 8 : 0) {
                     ForEach(0..<vm.totalPages, id: \.self) { idx in
                         verticalPageImage(index: idx)
@@ -675,7 +675,11 @@ struct ImageReaderView: View {
                             .id(idx)
                     }
                 }
+                // ★ 放大时内容居中 (不使用水平滚动, 仅裁剪两侧)
+                .frame(width: contentWidth, alignment: .center)
             }
+            // ★ 裁剪超出视口的水平内容, 防止横向拖出黑色背景
+            .clipped()
             .scrollTargetLayout()
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)

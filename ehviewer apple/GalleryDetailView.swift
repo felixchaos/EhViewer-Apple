@@ -522,6 +522,27 @@ struct GalleryDetailView: View {
                 }
             }
             .padding(.horizontal)
+
+            // ★ 底部额外的「查看全部」按钮 — 方便用户滚动到底部后直接点击
+            if vm.previewPages > 1 {
+                NavigationLink {
+                    GalleryPreviewsView(
+                        gid: gallery.gid,
+                        token: gallery.token,
+                        totalPages: vm.previewPages,
+                        galleryPages: vm.detail?.info.pages ?? gallery.pages,
+                        initialPreviewSet: previewSet
+                    )
+                } label: {
+                    Text("查看全部预览 (\(vm.detail?.info.pages ?? gallery.pages)张)")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .padding(.horizontal)
+            }
         }
         .padding(.bottom, 12)
     }
