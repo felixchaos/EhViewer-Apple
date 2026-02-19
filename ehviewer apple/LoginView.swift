@@ -212,8 +212,13 @@ struct WebViewLoginView: View {
                             await postLoginSetup()
                         }
 
+                        // 先设置登录状态，让 RootView 的 onChange 将 flowStep 切换到 .main
+                        // 延迟 dismiss 以确保状态变更传播完成后再关闭 sheet
+                        // 否则 sheet 关闭动画可能干扰 SwiftUI 的状态更新链
                         appState.isSignedIn = true
-                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            dismiss()
+                        }
                     }
                 )
 
@@ -298,9 +303,14 @@ struct WebViewLogin: UIViewRepresentable {
         }
 
         // WKHTTPCookieStoreObserver — Cookie 变化时自动触发
+        // WKWebView 的 cookie store 在 cookiesDidChange 通知时可能尚未完全提交，
+        // 直接调用 getAllCookies 可能获取不到最新值，添加延迟确保 cookie 已写入
         func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
             guard !hasDetected, let webView = self.webView else { return }
-            checkForLoginCookies(webView: webView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, !self.hasDetected else { return }
+                self.checkForLoginCookies(webView: webView)
+            }
         }
 
         private func checkForLoginCookies(webView: WKWebView) {
@@ -327,12 +337,14 @@ struct WebViewLogin: UIViewRepresentable {
                 if memberId != nil && passHash != nil {
                     self.hasDetected = true
                     // 尝试从页面提取用户名
-                    webView.evaluateJavaScript(
-                        "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
-                    ) { result, _ in
-                        let name = result as? String
-                        DispatchQueue.main.async {
-                            self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
+                    DispatchQueue.main.async {
+                        webView.evaluateJavaScript(
+                            "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
+                        ) { result, _ in
+                            let name = result as? String
+                            DispatchQueue.main.async {
+                                self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
+                            }
                         }
                     }
                 }
@@ -385,9 +397,14 @@ struct WebViewLogin: NSViewRepresentable {
         }
 
         // WKHTTPCookieStoreObserver — Cookie 变化时自动触发
+        // WKWebView 的 cookie store 在 cookiesDidChange 通知时可能尚未完全提交，
+        // 添加延迟确保 cookie 已写入
         func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
             guard !hasDetected, let webView = self.webView else { return }
-            checkForLoginCookies(webView: webView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, !self.hasDetected else { return }
+                self.checkForLoginCookies(webView: webView)
+            }
         }
 
         private func checkForLoginCookies(webView: WKWebView) {
@@ -413,12 +430,14 @@ struct WebViewLogin: NSViewRepresentable {
 
                 if memberId != nil && passHash != nil {
                     self.hasDetected = true
-                    webView.evaluateJavaScript(
-                        "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
-                    ) { result, _ in
-                        let name = result as? String
-                        DispatchQueue.main.async {
-                            self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
+                    DispatchQueue.main.async {
+                        webView.evaluateJavaScript(
+                            "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
+                        ) { result, _ in
+                            let name = result as? String
+                            DispatchQueue.main.async {
+                                self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
+                            }
                         }
                     }
                 }

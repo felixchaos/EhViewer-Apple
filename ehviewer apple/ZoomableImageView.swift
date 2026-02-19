@@ -255,18 +255,48 @@ class ZoomableScrollView: UIScrollView {
                                contentSize.height > bounds.height + 1
         let shouldScroll = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
         isScrollEnabled = shouldScroll
-        // 关键: 同步禁用 panGestureRecognizer!
-        // SwiftUI ScrollView 不走标准 UIKit failure chain，
-        // gestureRecognizerShouldBegin 返回 false 不够 — 内层 pan recognizer
-        // 仍然会阻断父级 SwiftUI ScrollView 识别翻页手势。
-        // 只有 .isEnabled = false 才能让手势 recognizer 完全跳过竞争。
-        panGestureRecognizer.isEnabled = shouldScroll
+        // ★ 不禁用 panGestureRecognizer.isEnabled!
+        // 禁用 pan 会阻止手势进入 .failed 状态，导致父 SwiftUI ScrollView
+        // 的 require(toFail:) 链永远等待 → 翻页手势失效。
+        // 正确做法: pan 始终 enabled，通过 gestureRecognizerShouldBegin 返回 false
+        // 让 pan 立即进入 .failed → 父级检测到失败后接管翻页。
         bounces = !isZoomed
+    }
+
+    /// 已关联的父级 pan 手势 (用于 require(toFail:) 去重)
+    private weak var linkedParentPan: UIPanGestureRecognizer?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            setupParentGestureRelationship()
+        }
+    }
+
+    /// 设置与父 ScrollView 的手势优先级关系 (解决 SwiftUI ScrollView 嵌套 UIScrollView 翻页冲突)
+    /// 父级 pan 通过 require(toFail:) 等待内层 pan 失败后再识别
+    /// 内层 pan 通过 gestureRecognizerShouldBegin 控制: 不需要滚动时返回 false → 立即 .failed → 父级翻页
+    private func setupParentGestureRelationship() {
+        guard linkedParentPan == nil else { return }
+        var view: UIView? = self.superview
+        while let current = view {
+            if let scrollView = current as? UIScrollView, scrollView !== self {
+                scrollView.panGestureRecognizer.require(toFail: self.panGestureRecognizer)
+                linkedParentPan = scrollView.panGestureRecognizer
+                break
+            }
+            view = current.superview
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0 else { return }
+
+        // 确保父级手势关系已建立 (didMoveToWindow 可能未覆盖所有场景)
+        if linkedParentPan == nil {
+            setupParentGestureRelationship()
+        }
 
         // 每次布局都钳制水平偏移，阻止 UIScrollView bounce 导致的横向黑边
         clampHorizontalOffset()

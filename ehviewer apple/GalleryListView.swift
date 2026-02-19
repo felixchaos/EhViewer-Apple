@@ -828,7 +828,7 @@ struct GalleryListView: View {
 
     @ViewBuilder
     private var searchSuggestionsContent: some View {
-        ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
+        ForEach(viewModel.suggestions) { suggestion in
             Button {
                 viewModel.applySuggestion(suggestion.english)
             } label: {
@@ -1118,7 +1118,12 @@ class GalleryListViewModel {
     }
 
     // MARK: - 搜索建议 (对齐 Android SearchBar.updateSuggestions)
-    var suggestions: [(chinese: String, english: String)] = []
+    struct TagSuggestionItem: Identifiable {
+        let chinese: String
+        let english: String
+        var id: String { english }
+    }
+    var suggestions: [TagSuggestionItem] = []
     private var suggestionTask: Task<Void, Never>?
 
     /// 更新搜索建议 (对齐 Android SearchBar.updateSuggestions)
@@ -1135,7 +1140,7 @@ class GalleryListViewModel {
             }
             let results = EhTagDatabase.shared.suggest(extracted.keyword)
             if !Task.isCancelled {
-                suggestions = results
+                suggestions = results.map { TagSuggestionItem(chinese: $0.chinese, english: $0.english) }
             }
         }
     }
@@ -1741,6 +1746,14 @@ class GalleryListViewModel {
             self.nextHref = result.nextHref
             // 解析总页数 (对齐 Android: GalleryListParser 返回的 pages)
             self.totalPages = result.pages
+            
+            // Popular 列表不支持翻页 — 始终只有一页内容 (对齐 Android: populars 不做分页)
+            // 服务器可能返回 nextPage，但 popular URL 不接受 page 参数，
+            // 如果不强制截止会导致无限加载重复内容
+            if case .popular = mode {
+                self.hasMore = false
+            }
+            
             self.isLoading = false
             print("[EhVM] fetchPage: SUCCESS — \(self.galleries.count) galleries loaded")
 
