@@ -42,6 +42,10 @@ struct DownloadsView: View {
     @State private var showBatchDeleteConfirm = false
     @State private var showMoveLabelSheet = false
 
+    // MARK: - 单项删除确认 (Fix: 从 Row 移至父视图，避免 Timer 刷新销毁 @State)
+    @State private var deletingTaskGid: Int64? = nil
+    @State private var showSingleDeleteConfirm = false
+
     // MARK: - 标签管理
     @State private var showNewLabelAlert = false
     @State private var newLabelName = ""
@@ -54,11 +58,22 @@ struct DownloadsView: View {
     // MARK: - 阅读器 (fullScreenCover 呈现，隐藏导航栏)
     @State private var readerGallery: GalleryInfo?
 
+    // MARK: - 存储信息
+    @State private var gallerySizes: [Int64: Int64] = [:]  // gid -> bytes
+    @State private var totalStorageSize: Int64 = 0
+    @State private var isCalculatingSize = false
+    @State private var readingProgress: [Int64: Int] = [:]  // gid -> page index
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 // 标签选择栏
                 labelPicker
+
+                // 存储空间概览
+                if !vm.tasks.isEmpty {
+                    storageOverview
+                }
 
                 // 内容
                 if filteredTasks.isEmpty {
@@ -70,6 +85,11 @@ struct DownloadsView: View {
                     .frame(maxHeight: .infinity)
                 } else {
                     downloadList
+                }
+
+                // 批量操作底栏
+                if isSelectMode {
+                    batchActionBar
                 }
             }
             .navigationTitle("下载")
@@ -93,6 +113,26 @@ struct DownloadsView: View {
                 }
                 Button("删除记录和文件", role: .destructive) {
                     batchDelete(withFiles: true)
+                }
+            }
+            // 单项删除确认 (Fix: 放在父视图，不受 Timer 刷新影响)
+            .confirmationDialog("确认删除下载？", isPresented: $showSingleDeleteConfirm, titleVisibility: .visible) {
+                Button("仅删除记录", role: .destructive) {
+                    if let gid = deletingTaskGid {
+                        vm.deleteTask(gid: gid, withFiles: false)
+                        // 移除缓存的大小
+                        gallerySizes.removeValue(forKey: gid)
+                        recalcTotalSize()
+                    }
+                    deletingTaskGid = nil
+                }
+                Button("删除记录和文件", role: .destructive) {
+                    if let gid = deletingTaskGid {
+                        vm.deleteTask(gid: gid, withFiles: true)
+                        gallerySizes.removeValue(forKey: gid)
+                        recalcTotalSize()
+                    }
+                    deletingTaskGid = nil
                 }
             }
             // 新建标签
@@ -127,7 +167,216 @@ struct DownloadsView: View {
         .task {
             await vm.loadTasks()
             loadLabels()
+            await loadReadingProgress()
+            await calculateStorageSizes()
         }
+    }
+
+    // MARK: - 存储空间概览
+
+    private var storageOverview: some View {
+        HStack(spacing: 12) {
+            // 总存储
+            HStack(spacing: 4) {
+                Image(systemName: "internaldrive")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if isCalculatingSize {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Text("总计 \(Self.formatFileSize(totalStorageSize))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // 下载数统计
+            let activeCount = vm.tasks.filter { $0.state == DownloadManager.stateDownload || $0.state == DownloadManager.stateWait }.count
+            let finishedCount = vm.tasks.filter { $0.state == DownloadManager.stateFinish }.count
+            if activeCount > 0 {
+                Text("\(activeCount) 进行中")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+            Text("\(finishedCount)/\(vm.tasks.count) 已完成")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // 刷新按钮
+            Button {
+                Task { await calculateStorageSizes() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    // MARK: - 批量操作底栏
+
+    private var batchActionBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 0) {
+                // 全选/取消全选
+                Button {
+                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
+                    if selectedGids == allGids {
+                        selectedGids.removeAll()
+                    } else {
+                        selectedGids = allGids
+                    }
+                } label: {
+                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
+                    VStack(spacing: 2) {
+                        Image(systemName: selectedGids == allGids ? "checkmark.circle" : "checkmark.circle.fill")
+                            .font(.title3)
+                        Text(selectedGids == allGids ? "取消全选" : "全选")
+                            .font(.caption2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                // 开始
+                Button {
+                    batchResume()
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "play.fill")
+                            .font(.title3)
+                        Text("开始")
+                            .font(.caption2)
+                    }
+                }
+                .disabled(selectedGids.isEmpty)
+                .frame(maxWidth: .infinity)
+
+                // 暂停
+                Button {
+                    batchPause()
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "pause.fill")
+                            .font(.title3)
+                        Text("暂停")
+                            .font(.caption2)
+                    }
+                }
+                .disabled(selectedGids.isEmpty)
+                .frame(maxWidth: .infinity)
+
+                // 移动标签
+                Button {
+                    showMoveLabelSheet = true
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "tag")
+                            .font(.title3)
+                        Text("标签")
+                            .font(.caption2)
+                    }
+                }
+                .disabled(selectedGids.isEmpty)
+                .frame(maxWidth: .infinity)
+
+                // 删除
+                Button {
+                    showBatchDeleteConfirm = true
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "trash")
+                            .font(.title3)
+                        Text("删除")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(selectedGids.isEmpty ? .secondary : .red)
+                }
+                .disabled(selectedGids.isEmpty)
+                .frame(maxWidth: .infinity)
+
+                // 退出选择
+                Button {
+                    exitSelectMode()
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "xmark.circle")
+                            .font(.title3)
+                        Text("退出")
+                            .font(.caption2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(.bar)
+
+            // 已选计数
+            if !selectedGids.isEmpty {
+                Text("已选择 \(selectedGids.count) 项")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 4)
+            }
+        }
+    }
+
+    // MARK: - 存储计算
+
+    private func calculateStorageSizes() async {
+        isCalculatingSize = true
+        let tasks = vm.tasks
+        let sizes: [Int64: Int64] = await Task.detached {
+            var result: [Int64: Int64] = [:]
+            for task in tasks {
+                let dir = DownloadManager.shared.galleryDirectory(gid: task.gallery.gid, title: task.gallery.bestTitle)
+                result[task.gallery.gid] = StorageUtils.directorySize(at: dir)
+            }
+            return result
+        }.value
+        gallerySizes = sizes
+        recalcTotalSize()
+        isCalculatingSize = false
+    }
+
+    private func recalcTotalSize() {
+        totalStorageSize = gallerySizes.values.reduce(0, +)
+    }
+
+    /// 递归计算目录大小
+    static func directorySize(at url: URL) -> Int64 {
+        StorageUtils.directorySize(at: url)
+    }
+
+    /// 格式化文件大小
+    static func formatFileSize(_ bytes: Int64) -> String {
+        StorageUtils.formatFileSize(bytes)
+    }
+
+    // MARK: - 阅读进度
+
+    private func loadReadingProgress() async {
+        let tasks = vm.tasks
+        let progress: [Int64: Int] = await Task.detached {
+            var result: [Int64: Int] = [:]
+            for task in tasks {
+                let key = "reading_progress_\(task.gallery.gid)"
+                if let page = UserDefaults.standard.object(forKey: key) as? Int {
+                    result[task.gallery.gid] = page
+                }
+            }
+            return result
+        }.value
+        readingProgress = progress
     }
 
     // MARK: - 过滤后的任务列表
@@ -404,12 +653,17 @@ struct DownloadsView: View {
                                 .font(.title3)
                                 .foregroundStyle(selectedGids.contains(task.gallery.gid) ? Color.accentColor : Color.secondary)
 
-                            DownloadTaskRow(task: task) {
+                            DownloadTaskRow(
+                                task: task,
+                                readingPage: readingProgress[task.gallery.gid],
+                                storageSize: gallerySizes[task.gallery.gid]
+                            ) {
                                 vm.pauseTask(gid: task.gallery.gid)
                             } onResume: {
                                 vm.resumeTask(gid: task.gallery.gid)
-                            } onDelete: { withFiles in
-                                vm.deleteTask(gid: task.gallery.gid, withFiles: withFiles)
+                            } onRequestDelete: {
+                                deletingTaskGid = task.gallery.gid
+                                showSingleDeleteConfirm = true
                             }
                         }
                     }
@@ -419,12 +673,17 @@ struct DownloadsView: View {
                     Button {
                         readerGallery = task.gallery
                     } label: {
-                        DownloadTaskRow(task: task) {
+                        DownloadTaskRow(
+                            task: task,
+                            readingPage: readingProgress[task.gallery.gid],
+                            storageSize: gallerySizes[task.gallery.gid]
+                        ) {
                             vm.pauseTask(gid: task.gallery.gid)
                         } onResume: {
                             vm.resumeTask(gid: task.gallery.gid)
-                        } onDelete: { withFiles in
-                            vm.deleteTask(gid: task.gallery.gid, withFiles: withFiles)
+                        } onRequestDelete: {
+                            deletingTaskGid = task.gallery.gid
+                            showSingleDeleteConfirm = true
                         }
                     }
                     .buttonStyle(.plain)
@@ -590,11 +849,11 @@ struct DownloadsView: View {
 
 struct DownloadTaskRow: View {
     let task: DownloadTask
+    let readingPage: Int?      // 阅读进度 (当前页索引)
+    let storageSize: Int64?    // 画廊占用空间 (字节)
     let onPause: () -> Void
     let onResume: () -> Void
-    let onDelete: (_ withFiles: Bool) -> Void
-
-    @State private var showDeleteConfirm = false
+    let onRequestDelete: () -> Void   // 请求删除 (由父视图处理确认)
 
     var body: some View {
         HStack(spacing: 12) {
@@ -607,14 +866,14 @@ struct DownloadTaskRow: View {
             .frame(width: 52, height: 72)
             .clipShape(RoundedRectangle(cornerRadius: 4))
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 // 标题
                 Text(task.gallery.bestTitle)
                     .font(.subheadline)
                     .lineLimit(2)
 
-                // 状态
-                HStack(spacing: 8) {
+                // 状态 + 页数 + 存储
+                HStack(spacing: 6) {
                     statusIcon
                     Text(statusText)
                         .font(.caption)
@@ -622,15 +881,36 @@ struct DownloadTaskRow: View {
 
                     Spacer()
 
+                    // 占用空间
+                    if let size = storageSize, size > 0 {
+                        Text(DownloadsView.formatFileSize(size))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
+
                     Text("\(task.gallery.pages) 页")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                // 进度条 + 页数详情
+                // 阅读进度 (已完成 / 非下载中 状态显示)
+                if let page = readingPage, task.gallery.pages > 0,
+                   task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
+                    HStack(spacing: 6) {
+                        ProgressView(value: Double(page + 1), total: Double(task.gallery.pages))
+                            .tint(.green)
+                        Text("阅读 \(page + 1)/\(task.gallery.pages)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                // 下载进度条 + 页数详情 (下载中/等待中)
                 if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
                     VStack(spacing: 2) {
-                        ProgressView(value: progress)
+                        ProgressView(value: downloadProgress)
                             .tint(.accentColor)
                         HStack {
                             Text("\(task.downloadedPages)/\(task.gallery.pages)")
@@ -642,7 +922,7 @@ struct DownloadTaskRow: View {
                                     .font(.caption2)
                                     .foregroundStyle(.blue)
                             }
-                            Text("\(Int(progress * 100))%")
+                            Text("\(Int(downloadProgress * 100))%")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -669,9 +949,9 @@ struct DownloadTaskRow: View {
 
             Divider()
 
-            // 删除
+            // 删除 (请求父视图弹出确认)
             Button(role: .destructive) {
-                showDeleteConfirm = true
+                onRequestDelete()
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -692,7 +972,7 @@ struct DownloadTaskRow: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                showDeleteConfirm = true
+                onRequestDelete()
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -712,14 +992,6 @@ struct DownloadTaskRow: View {
                     Label("继续", systemImage: "play")
                 }
                 .tint(.green)
-            }
-        }
-        .confirmationDialog("确认删除下载？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("仅删除记录", role: .destructive) {
-                onDelete(false)
-            }
-            Button("删除记录和文件", role: .destructive) {
-                onDelete(true)
             }
         }
     }
@@ -757,7 +1029,7 @@ struct DownloadTaskRow: View {
         }
     }
 
-    private var progress: Double {
+    private var downloadProgress: Double {
         guard task.gallery.pages > 0 else { return 0 }
         return Double(task.downloadedPages) / Double(task.gallery.pages)
     }
@@ -860,6 +1132,35 @@ class DownloadsViewModel {
             }
             await loadTasks()
         }
+    }
+}
+
+// MARK: - 存储工具 (非 MainActor，可在后台线程安全调用)
+
+enum StorageUtils {
+    /// 递归计算目录大小
+    static func directorySize(at url: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return 0 }
+        var totalSize: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  resourceValues.isRegularFile == true,
+                  let fileSize = resourceValues.fileSize else { continue }
+            totalSize += Int64(fileSize)
+        }
+        return totalSize
+    }
+
+    /// 格式化文件大小
+    static func formatFileSize(_ bytes: Int64) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024 { return String(format: "%.1f KB", kb) }
+        let mb = kb / 1024.0
+        if mb < 1024 { return String(format: "%.1f MB", mb) }
+        let gb = mb / 1024.0
+        return String(format: "%.2f GB", gb)
     }
 }
 
