@@ -516,6 +516,8 @@ struct ImageReaderView: View {
                 }
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $vm.lazyCurrentPage)
+                // 图片缩放时禁用翻页滚动，让 SwiftUIZoomableImage 的拖动手势控制平移
+                .scrollDisabled(isZoomed)
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
@@ -692,6 +694,8 @@ struct ImageReaderView: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
+                        // 有图片处于缩放状态时忽略父级点击 (由 SwiftUIZoomableImage 自行处理)
+                        guard !verticalImageIsZoomed else { return }
                         let timeSinceScroll = Date().timeIntervalSince(lastScrollChangeTime)
                         guard timeSinceScroll > 0.5 else { return }
                         handleTapZone(location: value.location, viewSize: geometry.size)
@@ -1457,9 +1461,15 @@ private struct ViewSizePreferenceKey: PreferenceKey {
 }
 
 /// 纯 SwiftUI 可缩放图片 — 不使用 UIScrollView，彻底避免与父 ScrollView 的手势冲突
-/// 支持双指缩放 (1x~3x)、双击切换 (1x ↔ 2x)、放大后拖动平移
-/// 关键设计: DragGesture 仅在 scale > 1 时通过 overlay 注入，1x 时不存在任何拖动手势，
-/// 因此不干扰父 ScrollView 的滚动/翻页
+///
+/// 手势架构:
+/// 1. 单击/双击: 统一用 SpatialTapGesture(count:1) + 手动 300ms 延时检测
+///    解决 TapGesture(count:2) 与 SpatialTapGesture(count:1) 类型不匹配导致双击无法触发的问题
+/// 2. 双指缩放 (MagnifyGesture): 始终以 .simultaneousGesture 挂载，不阻塞父 ScrollView
+/// 3. 拖动平移 (DragGesture): 通过 overlay + allowsHitTesting(isZoomed) 控制
+///    - 1x 时 overlay 不接收触摸 → 父 ScrollView 自由滚动/翻页
+///    - >1x 时 overlay 拦截触摸 → 拖动平移图片，阻止父 ScrollView 滚动
+///    - overlay 上同时挂载 tap + pinch 手势，防止被 overlay 遮挡
 #if os(iOS)
 private struct SwiftUIZoomableImage: View {
     let image: PlatformImage
@@ -1473,6 +1483,11 @@ private struct SwiftUIZoomableImage: View {
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var viewSize: CGSize = .zero
+    /// 手动双击检测
+    @State private var lastTapTime: Date = .distantPast
+    @State private var pendingSingleTap: Task<Void, Never>?
+    /// 防止双指缩放时触发拖动平移
+    @State private var isPinching: Bool = false
 
     private var isZoomed: Bool { scale > 1.01 }
 
@@ -1481,79 +1496,114 @@ private struct SwiftUIZoomableImage: View {
         let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.0
 
         imageContent(ratio: ratio)
-            // 双击: 1x → 2x → 1x (highPriority: 优先于单击)
-            .highPriorityGesture(
-                TapGesture(count: 2)
-                    .onEnded {
-                        withAnimation(.spring(duration: 0.3)) {
-                            if scale < 1.5 {
-                                scale = 2.0
-                                lastScale = 2.0
-                                onZoomChanged?(true)
-                            } else {
-                                resetZoom()
-                            }
-                        }
-                    }
-            )
-            // 单击: 工具栏切换 (仅翻页模式需要，垂直滚动由父 ScrollView 的 SpatialTapGesture 处理)
             .background {
-                if onSingleTap != nil {
-                    GeometryReader { geo in
-                        Color.clear
-                            .preference(key: ViewSizePreferenceKey.self, value: geo.size)
-                    }
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(key: ViewSizePreferenceKey.self, value: geo.size)
                 }
             }
-            .onPreferenceChange(ViewSizePreferenceKey.self) { size in
-                viewSize = size
-            }
+            .onPreferenceChange(ViewSizePreferenceKey.self) { viewSize = $0 }
+            // ── 非缩放时的手势 (overlay 不拦截, 这些生效) ──
+            // 单击/双击: 统一 SpatialTapGesture + 300ms 手动检测
             .gesture(
                 SpatialTapGesture(count: 1)
                     .onEnded { value in
-                        if let onSingleTap = onSingleTap {
-                            onSingleTap(value.location, viewSize)
-                        }
+                        handleTap(at: value.location)
                     }
             )
-            // 双指缩放 (simultaneous: 不阻塞父 ScrollView 的滚动手势)
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        scale = max(1.0, min(3.0, lastScale * value.magnification))
-                    }
-                    .onEnded { _ in
-                        lastScale = scale
-                        if scale < 1.1 {
-                            withAnimation(.spring()) {
-                                resetZoom()
-                            }
-                        } else {
-                            onZoomChanged?(true)
-                        }
-                    }
-            )
-            // 放大后拖动平移 — overlay 仅在 scale > 1 时存在
-            // 1x 时不注入任何 DragGesture，完全不干扰父 ScrollView
+            // 双指缩放: simultaneousGesture 不阻塞父 ScrollView
+            .simultaneousGesture(magnifyGesture)
+            // ── 缩放后的拖动 overlay ──
+            // allowsHitTesting: 1x 时不拦截 → 父 ScrollView 正常; >1x 时拦截 → 拖动平移
             .overlay {
-                if isZoomed {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                }
-                                .onEnded { _ in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(isZoomed)
+                    // overlay 上也需要 tap + pinch，否则会被 overlay 吞掉
+                    .gesture(
+                        SpatialTapGesture(count: 1)
+                            .onEnded { value in
+                                handleTap(at: value.location)
+                            }
+                    )
+                    .simultaneousGesture(magnifyGesture)
+                    // 拖动平移 (simultaneousGesture: 不阻塞同层 tap/pinch)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 5)
+                            .onChanged { value in
+                                guard !isPinching else { return }
+                                let proposed = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                                offset = clampOffset(proposed)
+                            }
+                            .onEnded { _ in
+                                if isPinching {
+                                    // 双指缩放期间的误触拖动 → 还原
+                                    offset = lastOffset
+                                } else {
                                     lastOffset = offset
                                 }
-                        )
+                            }
+                    )
+            }
+    }
+
+    // MARK: - Gesture Definitions
+
+    /// 双指缩放手势 (抽取为计算属性, base 和 overlay 复用)
+    private var magnifyGesture: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                isPinching = true
+                scale = max(1.0, min(3.0, lastScale * value.magnification))
+            }
+            .onEnded { _ in
+                isPinching = false
+                lastScale = scale
+                if scale < 1.1 {
+                    withAnimation(.spring()) { resetZoom() }
+                } else {
+                    onZoomChanged?(true)
                 }
             }
     }
+
+    /// 手动双击/单击检测: 300ms 窗口
+    /// - 第二次点击在 300ms 内 → 双击 (缩放切换)
+    /// - 超过 300ms 无第二次 → 单击 (工具栏/翻页)
+    private func handleTap(at location: CGPoint) {
+        let now = Date()
+        let interval = now.timeIntervalSince(lastTapTime)
+        lastTapTime = now
+
+        if interval < 0.3 {
+            // ── 双击 ──
+            pendingSingleTap?.cancel()
+            pendingSingleTap = nil
+            withAnimation(.spring(duration: 0.3)) {
+                if scale < 1.5 {
+                    scale = 2.0
+                    lastScale = 2.0
+                    onZoomChanged?(true)
+                } else {
+                    resetZoom()
+                }
+            }
+        } else {
+            // ── 可能是单击 — 等 300ms 确认不是双击 ──
+            pendingSingleTap?.cancel()
+            let size = viewSize
+            pendingSingleTap = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                onSingleTap?(location, size)
+            }
+        }
+    }
+
+    // MARK: - Image Content
 
     @ViewBuilder
     private func imageContent(ratio: CGFloat) -> some View {
@@ -1583,6 +1633,16 @@ private struct SwiftUIZoomableImage: View {
         offset = .zero
         lastOffset = .zero
         onZoomChanged?(false)
+    }
+
+    /// 限制平移范围: 不允许超过缩放后多出的可视区域
+    private func clampOffset(_ proposed: CGSize) -> CGSize {
+        let maxX = max(0, viewSize.width * (scale - 1) / 2)
+        let maxY = max(0, viewSize.height * (scale - 1) / 2)
+        return CGSize(
+            width: min(maxX, max(-maxX, proposed.width)),
+            height: min(maxY, max(-maxY, proposed.height))
+        )
     }
 }
 #endif
