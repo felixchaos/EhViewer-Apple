@@ -8,6 +8,10 @@ public final class EhCookieManager: @unchecked Sendable {
 
     private let storage: HTTPCookieStorage
 
+    /// Cookie 写操作队列 — 匹配 HTTPCookieStorage 内部 XPC 守护进程的 Default QoS，
+    /// 避免 User-initiated 线程阻塞在低优先级 XPC 同步上导致优先级反转 (Hang Risk)
+    private let writeQueue = DispatchQueue(label: "com.ehviewer.cookie.write", qos: .default)
+
     // MARK: - Cookie 名称常量
 
     public static let keyIPBMemberId = "ipb_member_id"
@@ -101,7 +105,9 @@ public final class EhCookieManager: @unchecked Sendable {
             .expires: Date.distantFuture,
         ]
         if let cookie = HTTPCookie(properties: properties) {
-            storage.setCookie(cookie)
+            writeQueue.async { [storage] in
+                storage.setCookie(cookie)
+            }
         }
     }
 
@@ -149,8 +155,13 @@ public final class EhCookieManager: @unchecked Sendable {
         }
 
         // 移除 uconfig cookie (对应 Android EhCookieStore L97: if KEY_UCONFIG.equals(name) continue)
-        for cookie in cookies where cookie.name == Self.keyUConfig {
-            storage.deleteCookie(cookie)
+        let uconfigCookies = cookies.filter { $0.name == Self.keyUConfig }
+        if !uconfigCookies.isEmpty {
+            writeQueue.async { [storage] in
+                for cookie in uconfigCookies {
+                    storage.deleteCookie(cookie)
+                }
+            }
         }
     }
 
@@ -168,8 +179,13 @@ public final class EhCookieManager: @unchecked Sendable {
     public func clearIgneous() {
         guard let url = URL(string: "https://exhentai.org") else { return }
         let cookies = storage.cookies(for: url) ?? []
-        for cookie in cookies where cookie.name == Self.keyIgneous {
-            storage.deleteCookie(cookie)
+        let igneousCookies = cookies.filter { $0.name == Self.keyIgneous }
+        if !igneousCookies.isEmpty {
+            writeQueue.async { [storage] in
+                for cookie in igneousCookies {
+                    storage.deleteCookie(cookie)
+                }
+            }
         }
     }
 
@@ -179,8 +195,12 @@ public final class EhCookieManager: @unchecked Sendable {
             return
         }
         let cookies = storage.cookies(for: url) ?? []
-        for cookie in cookies {
-            storage.deleteCookie(cookie)
+        if !cookies.isEmpty {
+            writeQueue.async { [storage] in
+                for cookie in cookies {
+                    storage.deleteCookie(cookie)
+                }
+            }
         }
     }
 
