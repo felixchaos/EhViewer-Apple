@@ -47,12 +47,30 @@ final class DownloadLiveActivityManager {
     private var lastUpdateTime: Date = .distantPast
     private let updateInterval: TimeInterval = 1.0  // 每秒最多更新一次
 
-    private init() {}
+    private init() {
+        // 启动时清理上次残留的 Activity
+        cleanupStaleActivities()
+    }
+
+    /// 清理所有残留的 Live Activity (应用重启后遗留)
+    func cleanupStaleActivities() {
+        for activity in Activity<DownloadActivityAttributes>.activities {
+            Task {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        currentActivity = nil
+    }
 
     /// 开始下载 Live Activity
     func startActivity(gid: Int64, title: String) {
-        // 先结束旧的 Activity
-        endActivity()
+        // 先结束所有已存在的 Activity（包括残留的）
+        for activity in Activity<DownloadActivityAttributes>.activities {
+            Task {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        currentActivity = nil
 
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             debugLog("[LiveActivity] Live Activities 未启用")
@@ -83,6 +101,10 @@ final class DownloadLiveActivityManager {
 
     /// 更新下载进度
     func updateProgress(gid: Int64, downloaded: Int, total: Int, speed: Int64) {
+        // 如果引用丢失，尝试从系统恢复
+        if currentActivity == nil {
+            currentActivity = Activity<DownloadActivityAttributes>.activities.first
+        }
         guard let activity = currentActivity else { return }
 
         // 节流: 每秒最多更新一次
@@ -106,7 +128,12 @@ final class DownloadLiveActivityManager {
 
     /// 下载完成，结束 Live Activity
     func finishActivity(success: Bool, title: String) {
+        // 如果引用丢失，尝试从系统恢复
+        if currentActivity == nil {
+            currentActivity = Activity<DownloadActivityAttributes>.activities.first
+        }
         guard let activity = currentActivity else { return }
+        currentActivity = nil  // 同步清除引用，避免竞态
 
         let finalState = DownloadActivityAttributes.ContentState(
             progress: success ? 1.0 : 0,
@@ -121,16 +148,18 @@ final class DownloadLiveActivityManager {
                 .init(state: finalState, staleDate: nil),
                 dismissalPolicy: .after(.now + 5)  // 5 秒后自动消失
             )
-            currentActivity = nil
         }
     }
 
     /// 强制结束 Activity
     func endActivity() {
-        guard let activity = currentActivity else { return }
-        Task {
-            await activity.end(nil, dismissalPolicy: .immediate)
-            currentActivity = nil
+        currentActivity = nil  // 同步清除引用
+
+        // 结束所有残留的 Activity
+        for activity in Activity<DownloadActivityAttributes>.activities {
+            Task {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
         }
     }
 }

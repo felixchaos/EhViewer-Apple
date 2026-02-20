@@ -167,16 +167,30 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
-    @ObservationIgnored
     public var userId: String? {
-        get { _defaults.string(forKey: "user_id") }
-        set { _defaults.set(newValue, forKey: "user_id") }
+        get {
+            access(keyPath: \.userId)
+            return _defaults.string(forKey: "user_id")
+        }
+        set {
+            guard newValue != _defaults.string(forKey: "user_id") else { return }
+            withMutation(keyPath: \.userId) {
+                _defaults.set(newValue, forKey: "user_id")
+            }
+        }
     }
 
-    @ObservationIgnored
     public var avatar: String? {
-        get { _defaults.string(forKey: "avatar") }
-        set { _defaults.set(newValue, forKey: "avatar") }
+        get {
+            access(keyPath: \.avatar)
+            return _defaults.string(forKey: "avatar")
+        }
+        set {
+            guard newValue != _defaults.string(forKey: "avatar") else { return }
+            withMutation(keyPath: \.avatar) {
+                _defaults.set(newValue, forKey: "avatar")
+            }
+        }
     }
 
     // MARK: - 外观 (UI 联动)

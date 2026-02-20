@@ -65,7 +65,7 @@ struct DownloadLiveActivityWidget: Widget {
                         }
                         .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 12)
                 }
             } compactLeading: {
                 // 紧凑模式左侧

@@ -255,11 +255,9 @@ class ZoomableScrollView: UIScrollView {
                                contentSize.height > bounds.height + 1
         let shouldScroll = isZoomed || contentOverflows || allowsHorizontalScrollAtMinZoom
         isScrollEnabled = shouldScroll
-        // ★ 不禁用 panGestureRecognizer.isEnabled!
-        // 禁用 pan 会阻止手势进入 .failed 状态，导致父 SwiftUI ScrollView
-        // 的 require(toFail:) 链永远等待 → 翻页手势失效。
-        // 正确做法: pan 始终 enabled，通过 gestureRecognizerShouldBegin 返回 false
-        // 让 pan 立即进入 .failed → 父级检测到失败后接管翻页。
+        // 不禁用 panGestureRecognizer — 依赖 gestureRecognizerShouldBegin 返回 false
+        // 来让 pan 立即 .failed，配合 require(toFail:) 链触发父级翻页
+        // (iOS 上已改用 SwiftUIZoomableImage 避免嵌套 UIScrollView 问题)
         bounces = !isZoomed
     }
 

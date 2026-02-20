@@ -43,6 +43,7 @@ struct SettingsView: View {
         #if os(macOS)
         macSettingsContent
             .navigationTitle("设置")
+            .onAppear { vm.checkLoginState() }
         #else
         Form {
             accountSection
@@ -62,6 +63,7 @@ struct SettingsView: View {
         }
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { vm.checkLoginState() }
         #endif
     }
 

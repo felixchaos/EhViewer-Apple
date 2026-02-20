@@ -35,7 +35,8 @@ struct GalleryListView: View {
     @State private var selectedGallery: GalleryInfo?
     @FocusState private var isSearchFocused: Bool
     /// 跳页模式切换 (对齐 Android JumpDateSelector: DATE_PICKER_TYPE / DATE_NODE_TYPE)
-    @State private var jumpUseQuickNode = true
+    /// 跳页模式: 0 = 快捷跳转, 1 = 日期选择, 2 = 页码跳转
+    @State private var jumpMode: Int = 0
 
     /// 标签导航路径 — iPad 双栏布局中支持标签推入左侧
     @State private var sidebarPath = NavigationPath()
@@ -553,18 +554,23 @@ struct GalleryListView: View {
                 .textInputAutocapitalization(.never)
                 #endif
 
-            // 右侧图标 (对齐 Android AddDeleteDrawable)
-            Button {
-                if viewModel.searchText.isEmpty {
-                    showAdvancedSearch = true
-                } else {
+            // 清除按钮 (输入内容时显示)
+            if !viewModel.searchText.isEmpty {
+                Button {
                     viewModel.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+            }
+
+            // 搜索选项按钮 (始终可见, 对齐 Android AddDeleteDrawable)
+            Button {
+                showAdvancedSearch = true
             } label: {
-                Image(systemName: viewModel.searchText.isEmpty
-                      ? (advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                      : "xmark.circle.fill")
-                    .foregroundStyle(viewModel.searchText.isEmpty ? .primary : .secondary)
+                Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
+                    .foregroundStyle(.primary)
             }
             .buttonStyle(.plain)
         }
@@ -587,13 +593,9 @@ struct GalleryListView: View {
                     Image(systemName: "bookmark")
                 }
 
-                // 跳页 (对齐 Android showGoToDialog: mPages>0 → 页码, mPages<0 → 日期)
+                // 跳页 (对齐 Android showGoToDialog: 统一使用跳页 Sheet，支持页码/日期/快捷跳转)
                 Button {
-                    if viewModel.totalPages > 0 {
-                        viewModel.showGoToDialog = true
-                    } else {
-                        viewModel.showJumpDialog = true
-                    }
+                    viewModel.showJumpDialog = true
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
@@ -610,7 +612,12 @@ struct GalleryListView: View {
         let showSuggestions = !viewModel.searchText.isEmpty && !viewModel.suggestions.isEmpty
 
         if isSearchFocused && (showHistory || showSuggestions) {
-            VStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                // 点击空白关闭
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { isSearchFocused = false }
+
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         // 搜索历史 (搜索框为空时)
@@ -656,17 +663,12 @@ struct GalleryListView: View {
                     }
                 }
                 .frame(maxHeight: 300)
-
-                // 点击空白关闭
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { isSearchFocused = false }
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
             }
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-            .padding(.horizontal, 8)
-            .padding(.top, 4)
         }
     }
 
@@ -716,15 +718,18 @@ struct GalleryListView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     // 模式切换 (对齐 Android JumpDateSelector 的 toggle 按钮)
-                    Picker("跳页模式", selection: $jumpUseQuickNode) {
-                        Text("快捷跳转").tag(true)
-                        Text("日期选择").tag(false)
+                    Picker("跳页模式", selection: $jumpMode) {
+                        Text("快捷跳转").tag(0)
+                        Text("日期选择").tag(1)
+                        if viewModel.totalPages > 0 {
+                            Text("页码跳转").tag(2)
+                        }
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
                     .padding(.top, 8)
 
-                    if jumpUseQuickNode {
+                    if jumpMode == 0 {
                         // 快捷节点 (对齐 Android JumpDateSelector RadioGroup)
                         VStack(spacing: 12) {
                             Text("选择时间范围快速跳转")
@@ -769,7 +774,7 @@ struct GalleryListView: View {
                             }
                             .padding(.horizontal)
                         }
-                    } else {
+                    } else if jumpMode == 1 {
                         // 日期选择器 (对齐 Android JumpDateSelector DATE_PICKER_TYPE)
                         Text("选择日期跳转到对应时间的画廊")
                             .font(.subheadline)
@@ -783,6 +788,22 @@ struct GalleryListView: View {
                         )
                         .datePickerStyle(.graphical)
                         .padding(.horizontal)
+                    } else if jumpMode == 2 {
+                        // 页码跳转
+                        VStack(spacing: 12) {
+                            Text("输入页码跳转 (1-\(viewModel.totalPages))")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            TextField("页码", text: $viewModel.goToPageInput)
+                                #if os(iOS)
+                                .keyboardType(.numberPad)
+                                #endif
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 200)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
                     }
 
                     // 前/后页快捷按钮 (仅收藏模式)
@@ -822,10 +843,16 @@ struct GalleryListView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("跳转") {
                         viewModel.showJumpDialog = false
-                        if jumpUseQuickNode {
+                        if jumpMode == 0 {
                             viewModel.goToJump("jump=\(selectedJumpNode)", mode: effectiveMode)
-                        } else {
+                        } else if jumpMode == 1 {
                             viewModel.goToDate(viewModel.jumpDate, mode: effectiveMode)
+                        } else if jumpMode == 2 {
+                            if let page = Int(viewModel.goToPageInput), page >= 1,
+                               page <= viewModel.totalPages {
+                                viewModel.goToPage(page - 1, mode: effectiveMode)
+                            }
+                            viewModel.goToPageInput = ""
                         }
                     }
                 }

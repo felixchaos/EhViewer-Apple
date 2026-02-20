@@ -335,16 +335,19 @@ struct DownloadsView: View {
     private func calculateStorageSizes() async {
         isCalculatingSize = true
         let tasks = vm.tasks
-        let sizes: [Int64: Int64] = await Task.detached {
-            var result: [Int64: Int64] = [:]
+        let downloadDir = DownloadManager.shared.downloadDirectory
+        let result: ([Int64: Int64], Int64) = await Task.detached {
+            var sizes: [Int64: Int64] = [:]
             for task in tasks {
                 let dir = DownloadManager.shared.galleryDirectory(gid: task.gallery.gid, title: task.gallery.bestTitle)
-                result[task.gallery.gid] = StorageUtils.directorySize(at: dir)
+                sizes[task.gallery.gid] = StorageUtils.directorySize(at: dir)
             }
-            return result
+            // 总空间直接从下载根目录计算，确保包含所有文件（含孤立目录和元数据）
+            let total = StorageUtils.directorySize(at: downloadDir)
+            return (sizes, total)
         }.value
-        gallerySizes = sizes
-        recalcTotalSize()
+        gallerySizes = result.0
+        totalStorageSize = result.1
         isCalculatingSize = false
     }
 
@@ -1140,9 +1143,9 @@ class DownloadsViewModel {
 
 // MARK: - 存储工具 (非 MainActor，可在后台线程安全调用)
 
-enum StorageUtils {
+enum StorageUtils: Sendable {
     /// 递归计算目录大小
-    static func directorySize(at url: URL) -> Int64 {
+    nonisolated static func directorySize(at url: URL) -> Int64 {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return 0 }
         var totalSize: Int64 = 0
@@ -1156,7 +1159,7 @@ enum StorageUtils {
     }
 
     /// 格式化文件大小
-    static func formatFileSize(_ bytes: Int64) -> String {
+    nonisolated static func formatFileSize(_ bytes: Int64) -> String {
         if bytes < 1024 { return "\(bytes) B" }
         let kb = Double(bytes) / 1024.0
         if kb < 1024 { return String(format: "%.1f KB", kb) }

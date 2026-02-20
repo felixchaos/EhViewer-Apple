@@ -16,7 +16,7 @@
 		DC7155A02F3DAC4900D09B4E /* EhParser in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08172F3DA31000717C38 /* EhParser */; };
 		DC7155A12F3DAC4900D09B4E /* EhSpider in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08182F3DA31000717C38 /* EhSpider */; };
 		DC7155A22F3DAC4900D09B4E /* EhDownload in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08192F3DA31000717C38 /* EhDownload */; };
-		DC9A300D2F40A10100AABB0D /* EhDownloadWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DC9A300D2F40A10100AABB0D /* EhDownloadWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -290,9 +290,6 @@
 					DC4A07672F3DA21800717C38 = {
 						CreatedOnToolsVersion = 26.2;
 					};
-					DC9A30012F40A10100AABB01 = {
-						CreatedOnToolsVersion = 26.2;
-					};
 					DC4A07782F3DA21800717C38 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = DC4A07672F3DA21800717C38;
@@ -300,6 +297,9 @@
 					DC4A07822F3DA21800717C38 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = DC4A07672F3DA21800717C38;
+					};
+					DC9A30012F40A10100AABB01 = {
+						CreatedOnToolsVersion = 26.2;
 					};
 				};
 			};
@@ -309,6 +309,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = DC4A075F2F3DA21800717C38;
 			minimizedProjectReferenceProxies = 1;
@@ -408,9 +409,7 @@
 		};
 		DC9A30092F40A10100AABB09 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			platformFilters = (
-				ios,
-			);
+			platformFilter = ios;
 			target = DC9A30012F40A10100AABB01 /* EhDownloadWidget */;
 			targetProxy = DC9A30082F40A10100AABB08 /* PBXContainerItemProxy */;
 		};

@@ -59,8 +59,8 @@ struct ImageReaderView: View {
     @State private var isUpdatingFromScroll = false
     @State private var hasAppliedInitialScroll = false
     @State private var lastScrollChangeTime: Date = .distantPast
-    @State private var verticalZoomScale: CGFloat = 1.0
-    @State private var verticalBaseScale: CGFloat = 1.0
+    /// 垂直模式单图缩放状态: 任意图片处于放大状态时禁用 ScrollView 滚动
+    @State private var verticalImageIsZoomed = false
     /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
     @State private var verticalPageInterval: Bool = false
 
@@ -69,10 +69,10 @@ struct ImageReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // 点击区域比例
-    private let tapZoneRatio: CGFloat = 0.25
-    /// 纵向边缘死区比例 (上下各 15%)
-    private let tapZoneVerticalDeadZone: CGFloat = 0.15
+    // 点击区域比例 (左右各 30%，中间 40% 用于工具栏)
+    private let tapZoneRatio: CGFloat = 0.30
+    /// 纵向边缘死区比例 (上下各 20%，防止误触)
+    private let tapZoneVerticalDeadZone: CGFloat = 0.20
 
     /// 显式初始化器 (Fix D-2: 移除 isDownloaded 参数，由 ReaderViewModel 自行检查)
     init(
@@ -214,10 +214,12 @@ struct ImageReaderView: View {
         }
         #endif
         #if os(iOS)
-        // 边缘侧滑返回 (fullScreenCover 无 UINavigationController，需自行添加手势)
+        // 边缘侧滑返回 — 仅在工具栏可见时启用，避免与翻页手势冲突
         .overlay {
-            EdgeSwipeDismissView { dismiss() }
-                .allowsHitTesting(true)
+            if showOverlay {
+                EdgeSwipeDismissView { dismiss() }
+                    .allowsHitTesting(true)
+            }
         }
         #endif
     }
@@ -663,55 +665,38 @@ struct ImageReaderView: View {
     // .scrollPosition 是 SwiftUI 原生 API，内部由 runtime 高效追踪
 
     private func verticalScrollReader(geometry: GeometryProxy) -> some View {
-        let contentWidth = geometry.size.width * verticalZoomScale
+        let contentWidth = geometry.size.width
         let showInterval = verticalPageInterval
 
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: showInterval ? 8 : 0) {
                     ForEach(0..<vm.totalPages, id: \.self) { idx in
-                        verticalPageImage(index: idx)
+                        verticalPageImage(index: idx, containerWidth: contentWidth)
                             .frame(width: contentWidth)
                             .id(idx)
                     }
                 }
-                // ★ 放大时内容居中 (不使用水平滚动, 仅裁剪两侧)
-                .frame(width: contentWidth, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            // ★ 裁剪超出视口的水平内容, 防止横向拖出黑色背景
             .clipped()
+            // 有图片处于放大状态时禁用滚动，让拖动手势控制平移
+            .scrollDisabled(verticalImageIsZoomed)
             .scrollTargetLayout()
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
             .contentShape(Rectangle())
             // Fix: 使用 SpatialTapGesture 恢复点击翻页区域
             // 用 simultaneousGesture 不阻塞 ScrollView 的滚动手势
-            // 滚动后 300ms 内忽略点击，防止惯性滚动误触
+            // 滚动后 500ms 内忽略点击，防止惯性滚动误触
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
                         let timeSinceScroll = Date().timeIntervalSince(lastScrollChangeTime)
-                        guard timeSinceScroll > 0.3 else { return }
+                        guard timeSinceScroll > 0.5 else { return }
                         handleTapZone(location: value.location, viewSize: geometry.size)
                     }
             )
-            #if os(iOS)
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        verticalZoomScale = max(1.0, min(3.0, verticalBaseScale * value.magnification))
-                    }
-                    .onEnded { value in
-                        verticalBaseScale = verticalZoomScale
-                        if verticalZoomScale < 1.1 {
-                            withAnimation(.spring()) {
-                                verticalZoomScale = 1.0
-                                verticalBaseScale = 1.0
-                            }
-                        }
-                    }
-            )
-            #endif
             .onAppear {
                 if vm.currentPage > 0 && !hasAppliedInitialScroll {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -751,7 +736,10 @@ struct ImageReaderView: View {
 
     /// 垂直滚动模式的页面图片 — 宽度撑满、高度按比例
     @ViewBuilder
-    private func verticalPageImage(index: Int) -> some View {
+    private func verticalPageImage(index: Int, containerWidth: CGFloat) -> some View {
+        // 预估占位高度 (典型漫画页比例 ~1.4:1)，减少图片加载时的布局跳动
+        let estimatedHeight = containerWidth * 1.4
+
         if vm.errorPages.contains(index) {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -768,15 +756,14 @@ struct ImageReaderView: View {
                 .tint(.white.opacity(0.9))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 300)
+            .frame(height: estimatedHeight)
         } else if let cachedImage = vm.cachedImages[index] {
-            let imgSize = cachedImage.size
-            let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.0
-            nativeImage(cachedImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(1.0 / ratio, contentMode: .fit)
+            SwiftUIZoomableImage(
+                image: cachedImage,
+                onZoomChanged: { zoomed in
+                    verticalImageIsZoomed = zoomed
+                }
+            )
         } else if vm.imageURLs[index] != nil {
             VStack(spacing: 8) {
                 if let progress = vm.downloadProgress[index], progress > 0 {
@@ -803,7 +790,7 @@ struct ImageReaderView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 300)
+            .frame(height: estimatedHeight)
             .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
                 await vm.downloadImageData(index)
             }
@@ -819,7 +806,7 @@ struct ImageReaderView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 300)
+            .frame(height: estimatedHeight)
             .task {
                 await vm.loadPageWithRetry(index)
             }
@@ -847,6 +834,18 @@ struct ImageReaderView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let cachedImage = vm.cachedImages[index] {
+                #if os(iOS)
+                SwiftUIZoomableImage(
+                    image: cachedImage,
+                    isFullPage: true,
+                    onSingleTap: { location, viewSize in
+                        handleTapZone(location: location, viewSize: viewSize)
+                    },
+                    onZoomChanged: { zoomed in
+                        isZoomed = zoomed
+                    }
+                )
+                #else
                 ZoomableImageView(
                     image: cachedImage,
                     scaleMode: scaleMode,
@@ -859,6 +858,7 @@ struct ImageReaderView: View {
                         isZoomed = zoomed
                     }
                 )
+                #endif
             } else if vm.imageURLs[index] != nil {
                 VStack(spacing: 8) {
                     if let progress = vm.downloadProgress[index], progress > 0 {
@@ -1445,6 +1445,147 @@ struct ReaderSettingsSheet: View {
 // Perf P0-2: PageOffsetPreferenceKey 已移除 — 改用 .scrollPosition(id:) 追踪页码
 
 // MARK: - Edge Swipe Dismiss (iOS fullScreenCover 边缘侧滑返回)
+
+// MARK: - SwiftUI Zoomable Image (纯 SwiftUI 缩放)
+
+/// PreferenceKey: 向父视图传递子视图尺寸
+private struct ViewSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
+/// 纯 SwiftUI 可缩放图片 — 不使用 UIScrollView，彻底避免与父 ScrollView 的手势冲突
+/// 支持双指缩放 (1x~3x)、双击切换 (1x ↔ 2x)、放大后拖动平移
+/// 关键设计: DragGesture 仅在 scale > 1 时通过 overlay 注入，1x 时不存在任何拖动手势，
+/// 因此不干扰父 ScrollView 的滚动/翻页
+#if os(iOS)
+private struct SwiftUIZoomableImage: View {
+    let image: PlatformImage
+    /// 全屏页模式 (翻页阅读器) vs 流式模式 (垂直滚动)
+    var isFullPage: Bool = false
+    var onSingleTap: ((CGPoint, CGSize) -> Void)?
+    var onZoomChanged: ((Bool) -> Void)?
+
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    @State private var viewSize: CGSize = .zero
+
+    private var isZoomed: Bool { scale > 1.01 }
+
+    var body: some View {
+        let imgSize = image.size
+        let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.0
+
+        imageContent(ratio: ratio)
+            // 双击: 1x → 2x → 1x (highPriority: 优先于单击)
+            .highPriorityGesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        withAnimation(.spring(duration: 0.3)) {
+                            if scale < 1.5 {
+                                scale = 2.0
+                                lastScale = 2.0
+                                onZoomChanged?(true)
+                            } else {
+                                resetZoom()
+                            }
+                        }
+                    }
+            )
+            // 单击: 工具栏切换 (仅翻页模式需要，垂直滚动由父 ScrollView 的 SpatialTapGesture 处理)
+            .background {
+                if onSingleTap != nil {
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(key: ViewSizePreferenceKey.self, value: geo.size)
+                    }
+                }
+            }
+            .onPreferenceChange(ViewSizePreferenceKey.self) { size in
+                viewSize = size
+            }
+            .gesture(
+                SpatialTapGesture(count: 1)
+                    .onEnded { value in
+                        if let onSingleTap = onSingleTap {
+                            onSingleTap(value.location, viewSize)
+                        }
+                    }
+            )
+            // 双指缩放 (simultaneous: 不阻塞父 ScrollView 的滚动手势)
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        scale = max(1.0, min(3.0, lastScale * value.magnification))
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                        if scale < 1.1 {
+                            withAnimation(.spring()) {
+                                resetZoom()
+                            }
+                        } else {
+                            onZoomChanged?(true)
+                        }
+                    }
+            )
+            // 放大后拖动平移 — overlay 仅在 scale > 1 时存在
+            // 1x 时不注入任何 DragGesture，完全不干扰父 ScrollView
+            .overlay {
+                if isZoomed {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    offset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                }
+                                .onEnded { _ in
+                                    lastOffset = offset
+                                }
+                        )
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func imageContent(ratio: CGFloat) -> some View {
+        if isFullPage {
+            nativeImage(image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(scale)
+                .offset(offset)
+                .clipped()
+        } else {
+            nativeImage(image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1.0 / ratio, contentMode: .fit)
+                .scaleEffect(scale)
+                .offset(offset)
+                .clipped()
+        }
+    }
+
+    private func resetZoom() {
+        scale = 1.0
+        lastScale = 1.0
+        offset = .zero
+        lastOffset = .zero
+        onZoomChanged?(false)
+    }
+}
+#endif
 
 #if os(iOS)
 /// UIScreenEdgePanGestureRecognizer — 在 fullScreenCover 中实现原生边缘右滑返回

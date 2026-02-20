@@ -673,9 +673,18 @@ class ReaderViewModel {
                 request.setValue(GalleryActionService.siteBaseURL, forHTTPHeaderField: "Referer")
                 request.timeoutInterval = 60
 
-                // Perf: 使用 data(for:) 一次性下载替代 byte-by-byte 迭代
-                // byte-by-byte 的 async overhead 极高，导致翻页卡顿
-                let (data, _) = try await Self.session.data(for: request)
+                // 使用 download(for:delegate:) 追踪下载进度
+                // 相比 bytes(for:) 的 byte-by-byte async 迭代，download task 在底层 C 层处理数据接收，
+                // 仅通过 delegate 回调报告进度，开销极低
+                let progressDelegate = ImageDownloadProgressDelegate { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        self?.downloadProgress[index] = progress
+                    }
+                }
+
+                let (tempURL, _) = try await Self.session.download(for: request, delegate: progressDelegate)
+                let data = try Data(contentsOf: tempURL)
+                try? FileManager.default.removeItem(at: tempURL)
 
                 // 图片解码移到后台线程，避免阻塞 MainActor
                 let img = await Task.detached(priority: .userInitiated) {
@@ -895,5 +904,35 @@ class ReaderViewModel {
 
         if let pt = pTokens[page] { return pt }
         throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "pToken not found"])
+    }
+}
+
+// MARK: - Download Progress Delegate
+
+/// 用于 download(for:delegate:) 的进度追踪代理
+/// 通过 URLSessionDownloadDelegate 回调监听下载进度，避免 byte-by-byte async 迭代的高开销
+private final class ImageDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let onProgress: @Sendable (Double) -> Void
+    private var lastUpdate = Date.distantPast
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        // download(for:) 内部处理文件，此处留空
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let now = Date()
+        // 节流: 每 100ms 最多更新一次进度
+        guard now.timeIntervalSince(lastUpdate) >= 0.1 else { return }
+        lastUpdate = now
+        let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        onProgress(progress)
     }
 }

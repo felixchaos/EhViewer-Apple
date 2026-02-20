@@ -75,6 +75,19 @@ public actor DownloadManager {
                 )
                 return DownloadTask(gallery: gallery, label: record.label, state: record.state)
             }
+            // 扫描磁盘已下载的图片文件，恢复中断下载的进度
+            for i in downloadQueue.indices {
+                let task = downloadQueue[i]
+                if task.state == Self.stateFinish {
+                    // 已完成的任务直接设置为总页数
+                    downloadQueue[i].downloadedPages = task.gallery.pages
+                } else if task.gallery.pages > 0 {
+                    // 扫描目录中已有的图片文件数
+                    let dir = galleryDirectory(gid: task.gallery.gid, title: task.gallery.bestTitle)
+                    let existingPages = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: task.gallery.pages)
+                    downloadQueue[i].downloadedPages = existingPages.count
+                }
+            }
         } catch {
             print("Failed to load downloads from database: \(error)")
         }
@@ -342,12 +355,17 @@ public actor DownloadManager {
         downloadQueue[index].spider = spider
 
         // 设置代理以便更新 .ehviewer 文件和进度通知
+        // 统计已有的下载页数作为初始值
+        let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
+        downloadQueue[index].downloadedPages = initialDownloaded
+
         let updater = SpiderInfoUpdater(
             directory: dir,
             gid: gallery.gid,
             title: gallery.bestTitle,
             total: gallery.pages,
-            listener: listener
+            listener: listener,
+            initialDownloaded: initialDownloaded
         )
         await spider.setDelegate(updater)
 
@@ -478,31 +496,48 @@ actor SpiderInfoUpdater: SpiderDelegate {
     private let totalPages: Int
     private weak var listener: DownloadListener?
 
-    private var downloadedCount = 0
+    private var downloadedCount: Int
+    private var totalBytesDownloaded: Int64 = 0
     private var startTime: Date = Date()
     private var lastNotifyTime: Date = .distantPast
     private let notifyInterval: TimeInterval = 1.0 // 每秒最多通知一次
 
-    init(directory: URL, gid: Int64, title: String, total: Int, listener: DownloadListener?) {
+    init(directory: URL, gid: Int64, title: String, total: Int, listener: DownloadListener?, initialDownloaded: Int = 0) {
         self.directory = directory
         self.gid = gid
         self.title = title
         self.totalPages = total
         self.listener = listener
+        self.downloadedCount = initialDownloaded
         self.startTime = Date()
+    }
+
+    /// 获取指定页面的实际文件大小
+    private func getPageFileSize(index: Int) -> Int64 {
+        let prefix = String(format: "%08d", index + 1)
+        for ext in [".jpg", ".png", ".gif", ".webp"] {
+            let fileURL = directory.appendingPathComponent("\(prefix)\(ext)")
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+               let size = attrs[.size] as? UInt64 {
+                return Int64(size)
+            }
+        }
+        return 0
     }
 
     func onPageLoaded(index: Int, imageUrl: String) async {
         downloadedCount += 1
 
+        // 累计实际下载字节数
+        let pageSize = getPageFileSize(index: index)
+        totalBytesDownloaded += pageSize
+
         // 同步更新 DownloadManager 队列中的进度 (便于 UI 读取)
         await DownloadManager.shared.updateDownloadedPages(gid: gid, count: downloadedCount)
 
-        // 计算速度 (字节/秒，这里简化为页数/秒 * 估计大小)
+        // 计算真实下载速度 (字节/秒)
         let elapsed = Date().timeIntervalSince(startTime)
-        let pagesPerSecond = elapsed > 0 ? Double(downloadedCount) / elapsed : 0
-        let estimatedBytesPerPage: Int64 = 500_000 // 估计每页 500KB
-        let speed = Int64(pagesPerSecond * Double(estimatedBytesPerPage))
+        let speed = elapsed > 0 ? Int64(Double(totalBytesDownloaded) / elapsed) : 0
 
         // 同步速度到 DownloadManager 队列 (便于 UI 读取)
         await DownloadManager.shared.updateDownloadSpeed(gid: gid, speed: speed)
