@@ -487,6 +487,13 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "default_download_label") }
     }
 
+    /// 是否启用灵动岛 (Live Activity) 显示下载进度 (仅 iOS)
+    @ObservationIgnored
+    public var showLiveActivity: Bool {
+        get { _defaults.object(forKey: "show_live_activity") as? Bool ?? true }
+        set { _defaults.set(newValue, forKey: "show_live_activity") }
+    }
+
     // MARK: - 首次启动引导
     
     /// 是否需要显示 18+ 警告 (首次启动时显示) — UI 联动
@@ -640,6 +647,7 @@ public final class AppSettings: @unchecked Sendable {
             "thumb_size": 1,
             "image_size": "auto",
             "history_info_size": 100,
+            "show_live_activity": true,
         ])
     }
 }

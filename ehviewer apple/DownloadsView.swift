@@ -637,6 +637,11 @@ struct DownloadTaskRow: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             Spacer()
+                            if task.speed > 0 {
+                                Text(Self.formatSpeed(task.speed))
+                                    .font(.caption2)
+                                    .foregroundStyle(.blue)
+                            }
                             Text("\(Int(progress * 100))%")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -755,6 +760,16 @@ struct DownloadTaskRow: View {
     private var progress: Double {
         guard task.gallery.pages > 0 else { return 0 }
         return Double(task.downloadedPages) / Double(task.gallery.pages)
+    }
+
+    /// 自适应格式化下载速度 (KB/s 或 MB/s)
+    static func formatSpeed(_ bytesPerSecond: Int64) -> String {
+        let kb = Double(bytesPerSecond) / 1024.0
+        if kb < 1024 {
+            return String(format: "%.1f KB/s", kb)
+        }
+        let mb = kb / 1024.0
+        return String(format: "%.2f MB/s", mb)
     }
 }
 

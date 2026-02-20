@@ -16,6 +16,7 @@
 		DC7155A02F3DAC4900D09B4E /* EhParser in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08172F3DA31000717C38 /* EhParser */; };
 		DC7155A12F3DAC4900D09B4E /* EhSpider in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08182F3DA31000717C38 /* EhSpider */; };
 		DC7155A22F3DAC4900D09B4E /* EhDownload in Frameworks */ = {isa = PBXBuildFile; productRef = DC4A08192F3DA31000717C38 /* EhDownload */; };
+		DC9A300D2F40A10100AABB0D /* EhDownloadWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -33,12 +34,34 @@
 			remoteGlobalIDString = DC4A07672F3DA21800717C38;
 			remoteInfo = "ehviewer apple";
 		};
+		DC9A30082F40A10100AABB08 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DC4A07602F3DA21800717C38 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DC9A30012F40A10100AABB01;
+			remoteInfo = EhDownloadWidget;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		DC9A30072F40A10100AABB07 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				DC9A300D2F40A10100AABB0D /* EhDownloadWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		DC4A07682F3DA21800717C38 /* ehviewer apple.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ehviewer apple.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC4A07792F3DA21800717C38 /* ehviewer appleTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "ehviewer appleTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC4A07832F3DA21800717C38 /* ehviewer appleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "ehviewer appleUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = EhDownloadWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -57,6 +80,13 @@
 			);
 			target = DC4A07782F3DA21800717C38 /* ehviewer appleTests */;
 		};
+		DC9A300E2F40A10100AABB0E /* Exceptions for "EhDownloadWidget" folder in "EhDownloadWidget" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = DC9A30012F40A10100AABB01 /* EhDownloadWidget */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -72,6 +102,14 @@
 		DC4A07862F3DA21800717C38 /* ehviewer appleUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "ehviewer appleUITests";
+			sourceTree = "<group>";
+		};
+		DC9A30032F40A10100AABB03 /* EhDownloadWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DC9A300E2F40A10100AABB0E /* Exceptions for "EhDownloadWidget" folder in "EhDownloadWidget" target */,
+			);
+			path = EhDownloadWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -107,6 +145,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DC9A30042F40A10100AABB04 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -114,6 +159,7 @@
 			isa = PBXGroup;
 			children = (
 				DC4A076A2F3DA21800717C38 /* ehviewer apple */,
+				DC9A30032F40A10100AABB03 /* EhDownloadWidget */,
 				DC4A07862F3DA21800717C38 /* ehviewer appleUITests */,
 				DC4A07692F3DA21800717C38 /* Products */,
 			);
@@ -125,6 +171,7 @@
 				DC4A07682F3DA21800717C38 /* ehviewer apple.app */,
 				DC4A07792F3DA21800717C38 /* ehviewer appleTests.xctest */,
 				DC4A07832F3DA21800717C38 /* ehviewer appleUITests.xctest */,
+				DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,10 +186,12 @@
 				DC4A07642F3DA21800717C38 /* Sources */,
 				DC4A07652F3DA21800717C38 /* Frameworks */,
 				DC4A07662F3DA21800717C38 /* Resources */,
+				DC9A30072F40A10100AABB07 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				DC9A30092F40A10100AABB09 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				DC4A076A2F3DA21800717C38 /* ehviewer apple */,
@@ -206,6 +255,28 @@
 			productReference = DC4A07832F3DA21800717C38 /* ehviewer appleUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		DC9A30012F40A10100AABB01 /* EhDownloadWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DC9A300C2F40A10100AABB0C /* Build configuration list for PBXNativeTarget "EhDownloadWidget" */;
+			buildPhases = (
+				DC9A30052F40A10100AABB05 /* Sources */,
+				DC9A30042F40A10100AABB04 /* Frameworks */,
+				DC9A30062F40A10100AABB06 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DC9A30032F40A10100AABB03 /* EhDownloadWidget */,
+			);
+			name = EhDownloadWidget;
+			packageProductDependencies = (
+			);
+			productName = EhDownloadWidget;
+			productReference = DC9A30022F40A10100AABB02 /* EhDownloadWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -217,6 +288,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					DC4A07672F3DA21800717C38 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					DC9A30012F40A10100AABB01 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 					DC4A07782F3DA21800717C38 = {
@@ -254,6 +328,7 @@
 				DC4A07672F3DA21800717C38 /* ehviewer apple */,
 				DC4A07782F3DA21800717C38 /* ehviewer appleTests */,
 				DC4A07822F3DA21800717C38 /* ehviewer appleUITests */,
+				DC9A30012F40A10100AABB01 /* EhDownloadWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -274,6 +349,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		DC4A07812F3DA21800717C38 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DC9A30062F40A10100AABB06 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -304,6 +386,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DC9A30052F40A10100AABB05 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -316,6 +405,14 @@
 			isa = PBXTargetDependency;
 			target = DC4A07672F3DA21800717C38 /* ehviewer apple */;
 			targetProxy = DC4A07842F3DA21800717C38 /* PBXContainerItemProxy */;
+		};
+		DC9A30092F40A10100AABB09 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				ios,
+			);
+			target = DC9A30012F40A10100AABB01 /* EhDownloadWidget */;
+			targetProxy = DC9A30082F40A10100AABB08 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -630,6 +727,68 @@
 			};
 			name = Release;
 		};
+		DC9A300A2F40A10100AABB0A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HWZEUNLCY6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = EhDownloadWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EhDownloadWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Stellatrix.ehviewer-apple.EhDownloadWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DC9A300B2F40A10100AABB0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HWZEUNLCY6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = EhDownloadWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EhDownloadWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Stellatrix.ehviewer-apple.EhDownloadWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -665,6 +824,15 @@
 			buildConfigurations = (
 				DC4A07952F3DA21800717C38 /* Debug */,
 				DC4A07962F3DA21800717C38 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DC9A300C2F40A10100AABB0C /* Build configuration list for PBXNativeTarget "EhDownloadWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DC9A300A2F40A10100AABB0A /* Debug */,
+				DC9A300B2F40A10100AABB0B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

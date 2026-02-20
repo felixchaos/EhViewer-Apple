@@ -8,6 +8,7 @@
 
 import Foundation
 import EhDownload
+import EhSettings
 
 /// 桥接 DownloadManager 的监听器到 Live Activity + 通知
 final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
@@ -21,7 +22,9 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
         await MainActor.run {
             #if os(iOS)
             // 启动灵动岛 Live Activity (替代传统通知)
-            DownloadLiveActivityManager.shared.startActivity(gid: gid, title: title)
+            if AppSettings.shared.showLiveActivity {
+                DownloadLiveActivityManager.shared.startActivity(gid: gid, title: title)
+            }
             #else
             DownloadNotificationService.shared.onDownloadStart(gid: gid, title: title)
             #endif
@@ -32,12 +35,14 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
         await MainActor.run {
             #if os(iOS)
             // 更新灵动岛进度 (替代传统通知轮询)
-            DownloadLiveActivityManager.shared.updateProgress(
-                gid: gid,
-                downloaded: downloaded,
-                total: total,
-                speed: speed
-            )
+            if AppSettings.shared.showLiveActivity {
+                DownloadLiveActivityManager.shared.updateProgress(
+                    gid: gid,
+                    downloaded: downloaded,
+                    total: total,
+                    speed: speed
+                )
+            }
             #else
             DownloadNotificationService.shared.onDownloadProgress(
                 gid: gid,
@@ -54,7 +59,9 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
         await MainActor.run {
             #if os(iOS)
             // 结束灵动岛 Live Activity
-            DownloadLiveActivityManager.shared.finishActivity(success: success, title: title)
+            if AppSettings.shared.showLiveActivity {
+                DownloadLiveActivityManager.shared.finishActivity(success: success, title: title)
+            }
             #endif
             // 完成通知仍使用传统通知 (在通知中心保留记录)
             DownloadNotificationService.shared.onDownloadFinish(gid: gid, title: title, success: success)

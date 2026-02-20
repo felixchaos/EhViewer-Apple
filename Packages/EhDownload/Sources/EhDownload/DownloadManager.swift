@@ -238,6 +238,13 @@ public actor DownloadManager {
         }
     }
 
+    /// 更新下载速度 (由 SpiderInfoUpdater 调用，同步到队列以便 UI 读取)
+    public func updateDownloadSpeed(gid: Int64, speed: Int64) {
+        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
+            downloadQueue[index].speed = speed
+        }
+    }
+
     /// 设置下载监听器
     public func setListener(_ listener: DownloadListener?) {
         self.listener = listener
@@ -427,6 +434,8 @@ public struct DownloadTask: Sendable {
     public var label: String?
     public var state: Int
     public var downloadedPages: Int
+    /// 下载速度 (字节/秒)
+    public var speed: Int64
     public var spider: SpiderQueen?
 
     public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait) {
@@ -434,6 +443,7 @@ public struct DownloadTask: Sendable {
         self.label = label
         self.state = state
         self.downloadedPages = 0
+        self.speed = 0
     }
 }
 
@@ -483,6 +493,9 @@ actor SpiderInfoUpdater: SpiderDelegate {
         let pagesPerSecond = elapsed > 0 ? Double(downloadedCount) / elapsed : 0
         let estimatedBytesPerPage: Int64 = 500_000 // 估计每页 500KB
         let speed = Int64(pagesPerSecond * Double(estimatedBytesPerPage))
+
+        // 同步速度到 DownloadManager 队列 (便于 UI 读取)
+        await DownloadManager.shared.updateDownloadSpeed(gid: gid, speed: speed)
 
         // 节流通知
         let now = Date()

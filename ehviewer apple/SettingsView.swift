@@ -729,6 +729,14 @@ struct SettingsView: View {
                 set: { AppSettings.shared.downloadOriginImage = $0 }
             ))
 
+            #if os(iOS)
+            // 灵动岛 (Live Activity) 下载进度显示
+            Toggle("灵动岛显示下载进度", isOn: Binding(
+                get: { AppSettings.shared.showLiveActivity },
+                set: { AppSettings.shared.showLiveActivity = $0 }
+            ))
+            #endif
+
             // TODO: Connect to Logic — mediaScan 是 Android 概念，iOS 无意义
             #if DEBUG
             Toggle("媒体扫描", isOn: Binding(
