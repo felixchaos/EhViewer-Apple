@@ -714,6 +714,11 @@ class ReaderViewModel {
                 let data = try Data(contentsOf: tempURL)
                 try? FileManager.default.removeItem(at: tempURL)
 
+                // 下载完成 → 标记 100%，让用户看到从进度到解码的过渡
+                await MainActor.run {
+                    self.downloadProgress[index] = 1.0
+                }
+
                 // 图片解码移到后台线程，避免阻塞 MainActor
                 let img = await Task.detached(priority: .userInitiated) {
                     Self.downsampledImage(data: data)
@@ -739,11 +744,16 @@ class ReaderViewModel {
                     return
                 }
             } catch is CancellationError {
+                await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
                 return
             } catch let urlError as URLError where urlError.code == .cancelled {
+                await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
                 return
             } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
+                    return
+                }
                 debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
                 if attempt < 2 {
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
@@ -942,6 +952,8 @@ class ReaderViewModel {
 private final class ImageDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Double) -> Void
     private var lastUpdate = Date.distantPast
+    /// 典型漫画图片大小估值 (~2MB)，用于服务器不返回 Content-Length 时的进度估算
+    private static let estimatedImageSize: Int64 = 2_000_000
 
     init(onProgress: @escaping @Sendable (Double) -> Void) {
         self.onProgress = onProgress
@@ -955,12 +967,22 @@ private final class ImageDownloadProgressDelegate: NSObject, URLSessionDownloadD
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }
         let now = Date()
-        // 节流: 每 100ms 最多更新一次进度
-        guard now.timeIntervalSince(lastUpdate) >= 0.1 else { return }
+        // 第一次回调立即放行，后续每 100ms 节流一次
+        let isFirstUpdate = (lastUpdate == Date.distantPast)
+        guard isFirstUpdate || now.timeIntervalSince(lastUpdate) >= 0.1 else { return }
         lastUpdate = now
-        let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+
+        let progress: Double
+        if totalBytesExpectedToWrite > 0 {
+            // 服务器返回了 Content-Length
+            progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        } else {
+            // Content-Length 未知 (chunked transfer) → 用估算值，上限 95% 防止预判完成
+            let estimated = downloadTask.response?.expectedContentLength ?? -1
+            let denominator = estimated > 0 ? estimated : Self.estimatedImageSize
+            progress = min(0.95, Double(totalBytesWritten) / Double(denominator))
+        }
         onProgress(progress)
     }
 }
