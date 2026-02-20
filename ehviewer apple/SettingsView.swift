@@ -10,6 +10,7 @@ import EhSettings
 import EhDownload
 import EhDatabase
 import EhSpider
+import EhAPI
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
@@ -39,6 +40,10 @@ struct SettingsView: View {
     }
 
     private var settingsInnerContent: some View {
+        #if os(macOS)
+        macSettingsContent
+            .navigationTitle("设置")
+        #else
         Form {
             accountSection
             siteSection
@@ -56,20 +61,129 @@ struct SettingsView: View {
             aboutSection
         }
         .navigationTitle("设置")
-        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
     }
+
+    // MARK: - macOS 分栏设置布局
+    #if os(macOS)
+    @State private var selectedSettingsTab: SettingsTab = .account
+
+    private enum SettingsTab: String, CaseIterable, Identifiable {
+        case account = "账号"
+        case site = "站点"
+        case display = "外观"
+        case favorites = "收藏"
+        case network = "网络"
+        case reading = "阅读"
+        case download = "下载"
+        case cache = "缓存"
+        case security = "隐私安全"
+        case advanced = "高级"
+        case about = "关于"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .account: return "person.circle"
+            case .site: return "globe"
+            case .display: return "paintbrush"
+            case .favorites: return "heart"
+            case .network: return "network"
+            case .reading: return "book"
+            case .download: return "arrow.down.circle"
+            case .cache: return "internaldrive"
+            case .security: return "lock.shield"
+            case .advanced: return "gearshape.2"
+            case .about: return "info.circle"
+            }
+        }
+    }
+
+    private var macSettingsContent: some View {
+        HStack(spacing: 0) {
+            // 左侧侧边栏
+            List(SettingsTab.allCases, selection: $selectedSettingsTab) { tab in
+                Label(tab.rawValue, systemImage: tab.icon)
+                    .tag(tab)
+            }
+            .listStyle(.sidebar)
+            .frame(width: 180)
+
+            Divider()
+
+            // 右侧内容区
+            ScrollView {
+                Form {
+                    macSettingsTabContent
+                }
+                .formStyle(.grouped)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 700, minHeight: 500)
+    }
+
+    @ViewBuilder
+    private var macSettingsTabContent: some View {
+        switch selectedSettingsTab {
+        case .account:
+            accountSection
+        case .site:
+            siteSection
+        case .display:
+            displaySection
+        case .favorites:
+            favoritesSection
+        case .network:
+            networkSection
+        case .reading:
+            readingSection
+        case .download:
+            downloadSection
+        case .cache:
+            cacheSection
+        case .security:
+            securitySection
+        case .advanced:
+            advancedSection
+        case .about:
+            aboutSection
+        }
+    }
+    #endif
 
     // MARK: - Account
 
     private var accountSection: some View {
         Section("账号") {
             if vm.isLoggedIn {
-                HStack {
-                    Image(systemName: "person.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(Color.accentColor)
+                HStack(spacing: 12) {
+                    // 用户头像 (对齐 Android: 从论坛资料页获取)
+                    if let avatarURL = vm.avatarURL {
+                        AsyncImage(url: avatarURL) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(Circle())
+                            case .failure:
+                                Image(systemName: "person.circle.fill")
+                                    .font(.system(size: 36))
+                                    .foregroundStyle(Color.accentColor)
+                            default:
+                                ProgressView()
+                                    .frame(width: 40, height: 40)
+                            }
+                        }
+                    } else {
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 36))
+                            .foregroundStyle(Color.accentColor)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         if let name = vm.displayName, !name.isEmpty {
                             Text(name)
@@ -1188,6 +1302,8 @@ class SettingsViewModel {
     var hasExAccess = false
     var displayName: String?
     var userId: String?
+    var avatarURL: URL?
+    var isFetchingProfile = false
     var showLogoutConfirm = false
     var showLogin = false
 
@@ -1352,12 +1468,47 @@ class SettingsViewModel {
         // 加载保存的用户信息
         displayName = AppSettings.shared.displayName
         userId = AppSettings.shared.userId
+        if let avatarStr = AppSettings.shared.avatar, let url = URL(string: avatarStr) {
+            avatarURL = url
+        }
 
         // 如果没有保存 UID，尝试从 Cookie 读取
         if userId == nil || userId?.isEmpty == true {
             if let memberId = ehCookies.first(where: { $0.name == "ipb_member_id" })?.value {
                 userId = memberId
                 AppSettings.shared.userId = memberId
+            }
+        }
+
+        // 如果已登录但没有头像/用户名，异步获取
+        if isLoggedIn && (avatarURL == nil || displayName == nil || displayName?.isEmpty == true) {
+            fetchProfileIfNeeded()
+        }
+    }
+
+    /// 异步获取用户资料 (displayName + avatar)
+    func fetchProfileIfNeeded() {
+        guard !isFetchingProfile else { return }
+        isFetchingProfile = true
+        Task {
+            do {
+                let profile = try await EhAPI.shared.getProfile()
+                await MainActor.run {
+                    if let name = profile.displayName, !name.isEmpty {
+                        self.displayName = name
+                        AppSettings.shared.displayName = name
+                    }
+                    if let avatar = profile.avatar, let url = URL(string: avatar) {
+                        self.avatarURL = url
+                        AppSettings.shared.avatar = avatar
+                    }
+                    self.isFetchingProfile = false
+                }
+            } catch {
+                debugLog("[SettingsVM] 获取用户资料失败: \(error)")
+                await MainActor.run {
+                    self.isFetchingProfile = false
+                }
             }
         }
     }
@@ -1374,6 +1525,7 @@ class SettingsViewModel {
         hasExAccess = false
         displayName = nil
         userId = nil
+        avatarURL = nil
         AppSettings.shared.isLogin = false
         AppSettings.shared.displayName = nil
         AppSettings.shared.userId = nil
