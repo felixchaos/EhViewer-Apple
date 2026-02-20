@@ -156,9 +156,19 @@ public actor DownloadManager {
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
             downloadQueue[index].state = Self.stateWait
             try? EhDatabase.shared.updateDownloadState(gid: gid, state: Self.stateWait)
-            if !isRunning {
+            // 用 activeTask == nil 判断，避免 isRunning 残留 true 时队列卡死
+            if activeTask == nil {
+                isRunning = false
                 processQueue()
             }
+        }
+    }
+
+    /// 强制尝试处理队列 (外部调用，修复 isRunning 残留问题)
+    public func kickQueue() {
+        if activeTask == nil {
+            isRunning = false
+            processQueue()
         }
     }
 

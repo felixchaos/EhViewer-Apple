@@ -889,21 +889,23 @@ struct DownloadTaskRow: View {
                             .monospacedDigit()
                     }
 
-                    Text("\(task.gallery.pages) 页")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                // 阅读进度 (已完成 / 非下载中 状态显示)
-                if let page = readingPage, task.gallery.pages > 0,
-                   task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
-                    HStack(spacing: 6) {
-                        ProgressView(value: Double(page + 1), total: Double(task.gallery.pages))
-                            .tint(.green)
-                        Text("阅读 \(page + 1)/\(task.gallery.pages)")
-                            .font(.caption2)
+                    // 阅读进度 (已完成/暂停/失败 状态显示) — 与总页数去重
+                    if let page = readingPage, task.gallery.pages > 0,
+                       task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
+                        HStack(spacing: 4) {
+                            ProgressView(value: Double(page + 1), total: Double(task.gallery.pages))
+                                .tint(.green)
+                                .frame(maxWidth: 60)
+                            Text("\(page + 1)/\(task.gallery.pages) 页")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    } else if task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
+                        // 无阅读进度时才单独显示总页数
+                        Text("\(task.gallery.pages) 页")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                            .monospacedDigit()
                     }
                 }
 
@@ -1108,9 +1110,8 @@ class DownloadsViewModel {
 
     func pauseAll() {
         Task {
-            for task in tasks where task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                await DownloadManager.shared.pauseDownload(gid: task.gallery.gid)
-            }
+            // 使用 DownloadManager 的批量暂停，避免逐个暂停时 processQueue 不断启动下一个
+            await DownloadManager.shared.pauseAllDownloads()
             await loadTasks()
         }
     }
@@ -1120,6 +1121,8 @@ class DownloadsViewModel {
             for task in tasks where task.state == DownloadManager.stateNone || task.state == DownloadManager.stateFailed {
                 await DownloadManager.shared.resumeDownload(gid: task.gallery.gid)
             }
+            // 强制尝试处理队列 (防止 isRunning 残留为 true 导致队列卡死)
+            await DownloadManager.shared.kickQueue()
             await loadTasks()
         }
     }
