@@ -62,11 +62,23 @@ public enum GalleryListParser {
                 if es.count >= 2 {
                     result.pages = Int(try es[es.count - 2].text().trimmingCharacters(in: .whitespaces)) ?? 0
                 }
-                // 最后一个 td 中的 <a> href → nextPage
+                // 最后一个 td (">" 按钮) 中的 <a> href → nextPage + nextHref
                 if let lastTd = es.last, let a = try lastTd.select("a").first() {
                     let href = try a.attr("href")
+                    if !href.isEmpty {
+                        // ★ 保留完整 href (包含 next=TIMESTAMP 等跳页上下文)
+                        // 确保 loadMore 能通过 nextHref 继续按日期顺序加载
+                        result.nextHref = href
+                    }
                     if let match = href.firstMatch(of: nextPagePattern) {
                         result.nextPage = Int(match.1) ?? 0
+                    }
+                }
+                // 第一个 td ("<" 按钮) 中的 <a> href → prevHref
+                if let firstTd = es.first, let a = try firstTd.select("a").first() {
+                    let href = try a.attr("href")
+                    if !href.isEmpty {
+                        result.prevHref = href
                     }
                 }
             } else if let searchNav = try doc.select(".searchnav").first() {

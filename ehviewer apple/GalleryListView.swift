@@ -1396,24 +1396,30 @@ class GalleryListViewModel {
     func loadMore(mode: GalleryListView.ListMode) async {
         guard !isLoading, hasMore else { return }
 
-        // ★ 优先使用 nextHref 翻页 (收藏夹 + 日期跳转后的 searchnav 分页)
+        // ★ 始终优先使用 nextHref 翻页
+        // ptt 和 searchnav 模式都会提供完整 href (包含 next=TIMESTAMP 等跳页上下文)
+        // 这确保日期跳转后能按日期顺序加载，不会因丢失上下文而循环
         if let nextHref = nextHref {
             isLoading = true
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: nextHref)
-                self.galleries.append(contentsOf: result.galleries)
+
+                // ★ 去重保护: 如果新加载的画廊全部已在列表中，说明分页回绕了
+                let existingGids = Set(self.galleries.map { $0.gid })
+                let newGalleries = result.galleries.filter { !existingGids.contains($0.gid) }
+                if result.galleries.count > 0 && newGalleries.isEmpty {
+                    // 全重复 → 到达尽头，停止加载
+                    self.hasMore = false
+                    self.isLoading = false
+                    return
+                }
+
+                self.galleries.append(contentsOf: newGalleries)
                 self.prevHref = result.prevHref
                 self.nextHref = result.nextHref
                 self.totalPages = result.pages
-                // 判断是否还有更多: href 优先, 否则 nextPage 必须前进
-                if result.nextHref != nil {
-                    self.hasMore = true
-                } else if let np = result.nextPage, np > 0 {
-                    self.hasMore = true
-                    self.currentPage = np - 1 // 同步页码供后续 page-based fallback
-                } else {
-                    self.hasMore = false
-                }
+                // 有 nextHref 才继续
+                self.hasMore = result.nextHref != nil
                 self.isLoading = false
             } catch {
                 if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1426,7 +1432,7 @@ class GalleryListViewModel {
             return
         }
 
-        // Page-based 翻页 (home / search / tag)
+        // Page-based 翻页 fallback (仅在无 href 时使用)
         isLoading = true
         currentPage += 1
         await fetchPage(mode: mode, page: currentPage)
