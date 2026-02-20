@@ -8,6 +8,7 @@
 import SwiftUI
 import EhModels
 import EhDatabase
+import EhSettings
 
 struct QuickSearchView: View {
     @State private var vm = QuickSearchViewModel()
@@ -60,7 +61,7 @@ struct QuickSearchView: View {
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(search.name ?? search.keyword ?? "未命名")
+                            Text(search.name ?? Self.translateKeyword(search.keyword) ?? "未命名")
                                 .font(.body)
                                 .foregroundStyle(.primary)
 
@@ -88,6 +89,117 @@ struct QuickSearchView: View {
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif
+    }
+
+    /// 将搜索关键词中的英文标签翻译为中文
+    /// 例: `f:"big breasts$"` → `女性:巨乳`
+    static func translateKeyword(_ keyword: String?) -> String? {
+        guard let keyword = keyword, !keyword.isEmpty else { return nil }
+        let db = EhTagDatabase.shared
+        guard db.isLoaded else { return keyword }
+
+        // 将搜索词拆分为独立的标签/词，逐个翻译后重组
+        // 搜索词格式: `f:"big breasts$"` 或 `artist:name` 或纯文本
+        var result: [String] = []
+        var remaining = keyword.trimmingCharacters(in: .whitespaces)
+
+        while !remaining.isEmpty {
+            remaining = remaining.trimmingCharacters(in: .init(charactersIn: " "))
+            guard !remaining.isEmpty else { break }
+
+            // 尝试匹配 prefix:"tag$" 或 prefix:tag 或 "tag$" 或纯词
+            let translated = extractAndTranslateNextToken(&remaining, db: db)
+            result.append(translated)
+        }
+
+        let joined = result.joined(separator: " ")
+        return joined.isEmpty ? keyword : joined
+    }
+
+    /// 从搜索字符串开头提取并翻译一个标签
+    private static func extractAndTranslateNextToken(_ text: inout String, db: EhTagDatabase) -> String {
+        // 查找 namespace 前缀 (f:, m:, a:, ... 或 female:, male:, ...)
+        var prefix = ""
+        var namespace = ""
+        if let colonIdx = text.firstIndex(of: ":"), colonIdx < text.index(text.startIndex, offsetBy: min(15, text.count)) {
+            let prefixPart = String(text[..<colonIdx])
+            // 检查是否是有效的命名空间前缀
+            let shortPrefix = prefixPart + ":"
+            if EhTagDatabase.prefixToNamespace[shortPrefix] != nil {
+                prefix = shortPrefix
+                namespace = EhTagDatabase.prefixToNamespace[shortPrefix] ?? ""
+                text = String(text[text.index(after: colonIdx)...])
+            } else if EhTagDatabase.namespaceToPrefix[prefixPart] != nil {
+                namespace = prefixPart
+                prefix = EhTagDatabase.namespaceToPrefix[prefixPart] ?? ""
+                text = String(text[text.index(after: colonIdx)...])
+            }
+        }
+
+        // 提取标签内容
+        var tag: String
+        if text.hasPrefix("\"") {
+            // 带引号: 提取到匹配的 " 或 $"
+            text.removeFirst() // 移除开头的 "
+            if let endQuoteIdx = text.firstIndex(of: "\"") {
+                tag = String(text[..<endQuoteIdx])
+                text = String(text[text.index(after: endQuoteIdx)...])
+            } else {
+                tag = text
+                text = ""
+            }
+        } else {
+            // 无引号: 取到下一个空格
+            if let spaceIdx = text.firstIndex(of: " ") {
+                tag = String(text[..<spaceIdx])
+                text = String(text[spaceIdx...])
+            } else {
+                tag = text
+                text = ""
+            }
+        }
+
+        // 清理标签: 去掉尾部 $
+        tag = tag.trimmingCharacters(in: .init(charactersIn: "$"))
+
+        guard !tag.isEmpty else { return prefix.isEmpty ? "" : prefix }
+
+        // 尝试翻译
+        let lookupKey = namespace.isEmpty ? tag : "\(namespace):\(tag)"
+        if let translation = db.getTranslation(lookupKey) {
+            // 翻译命名空间前缀
+            let nsDisplay = translateNamespace(namespace)
+            if nsDisplay.isEmpty {
+                return translation
+            }
+            return "\(nsDisplay):\(translation)"
+        }
+
+        // 无翻译: 返回原始内容
+        if prefix.isEmpty {
+            return tag
+        }
+        return "\(prefix)\(tag)"
+    }
+
+    /// 翻译命名空间为中文
+    private static func translateNamespace(_ namespace: String) -> String {
+        switch namespace {
+        case "female": return "女性"
+        case "male": return "男性"
+        case "artist": return "艺术家"
+        case "cosplayer": return "Coser"
+        case "character": return "角色"
+        case "group": return "团体"
+        case "language": return "语言"
+        case "misc", "": return ""
+        case "mixed": return "混合"
+        case "other": return "其他"
+        case "parody": return "原作"
+        case "reclass": return "重分类"
+        case "rows": return "行名"
+        default: return namespace
+        }
     }
 }
 
@@ -150,12 +262,12 @@ struct QuickSearchDrawerContent: View {
                             onDismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(search.name ?? search.keyword ?? "未命名")
+                                Text(search.name ?? QuickSearchView.translateKeyword(search.keyword) ?? "未命名")
                                     .font(.body)
                                     .foregroundStyle(.primary)
                                 if let keyword = search.keyword, !keyword.isEmpty,
                                    search.name != nil {
-                                    Text(keyword)
+                                    Text(QuickSearchView.translateKeyword(keyword) ?? keyword)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
