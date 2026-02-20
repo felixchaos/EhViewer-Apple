@@ -505,6 +505,7 @@ struct ImageReaderView: View {
                                 .id(spread.id)
                         }
                     }
+                    .scrollTargetLayout()
                 }
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $vm.currentSpreadIndex)
@@ -536,6 +537,7 @@ struct ImageReaderView: View {
                                 .id(idx)
                         }
                     }
+                    .scrollTargetLayout()
                 }
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $vm.lazyCurrentPage)
