@@ -1645,22 +1645,39 @@ private struct SwiftUIZoomableImage: View {
     @ViewBuilder
     private func imageContent(ratio: CGFloat) -> some View {
         if isFullPage {
-            nativeImage(image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(scale)
-                .offset(offset)
-                .clipped()
+            if image.isAnimated {
+                AnimatedImageView(image: image, contentMode: .scaleAspectFit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+            } else {
+                nativeImage(image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+            }
         } else {
-            nativeImage(image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(1.0 / ratio, contentMode: .fit)
-                .scaleEffect(scale)
-                .offset(offset)
-                .clipped()
+            if image.isAnimated {
+                AnimatedImageView(image: image, contentMode: .scaleAspectFit)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1.0 / ratio, contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+            } else {
+                nativeImage(image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1.0 / ratio, contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+            }
         }
     }
 

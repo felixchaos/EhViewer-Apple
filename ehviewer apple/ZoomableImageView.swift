@@ -55,6 +55,10 @@ struct ZoomableImageView: UIViewRepresentable {
         imageView.contentMode = .scaleToFill  // 手动设置 frame，不依赖 contentMode
         imageView.clipsToBounds = false
         imageView.tag = 1001
+        // GIF 动画: UIImageView 原生支持 animated UIImage
+        if image.images != nil {
+            imageView.startAnimating()
+        }
         scrollView.addSubview(imageView)
         context.coordinator.imageView = imageView
         context.coordinator.scrollView = scrollView
@@ -83,6 +87,12 @@ struct ZoomableImageView: UIViewRepresentable {
 
         if imageChanged {
             imageView.image = image
+            // GIF 动画: 切换图片时自动开始/停止动画
+            if image.images != nil {
+                imageView.startAnimating()
+            } else {
+                imageView.stopAnimating()
+            }
             scrollView.zoomScale = scrollView.minimumZoomScale
             scrollView.needsStartPositionApply = true
         }
@@ -478,6 +488,8 @@ struct ZoomableImageView: NSViewRepresentable {
 
         let imageView = NSImageView(image: image)
         imageView.imageScaling = .scaleNone  // 手动控制尺寸，不依赖 AppKit 自动缩放
+        // GIF 动画: NSImageView 设置 animates = true 自动播放
+        imageView.animates = true
         scrollView.documentView = imageView
         context.coordinator.imageView = imageView
         context.coordinator.scrollView = scrollView

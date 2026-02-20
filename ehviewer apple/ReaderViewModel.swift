@@ -200,11 +200,19 @@ class ReaderViewModel {
 
     /// 降采样解码: 用 ImageIO 在解码阶段限制像素尺寸，而非先全量解码再缩放
     /// 一张 15000×20000 JPEG 全量解码 = 1.2GB; 降采样到 4096px 宽 ≈ 40MB
+    /// 对于 GIF 动画: 直接使用 PlatformImage(data:) 保留所有帧，不做降采样
     nonisolated private static func downsampledImage(data: Data) -> PlatformImage? {
         let options: [CFString: Any] = [
             kCGImageSourceShouldCache: false  // 不缓存原始数据
         ]
         guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }
+
+        // GIF 动画检测: 多帧图片直接解码，保留动画帧
+        // CGImageSourceCreateThumbnailAtIndex 只提取第一帧, 会丢失动画
+        let frameCount = CGImageSourceGetCount(source)
+        if frameCount > 1 {
+            return PlatformImage(data: data)
+        }
 
         // 获取原图尺寸
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],

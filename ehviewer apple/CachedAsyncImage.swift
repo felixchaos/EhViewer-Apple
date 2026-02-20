@@ -79,11 +79,20 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     var body: some View {
         Group {
             if let image {
-                #if os(macOS)
-                content(Image(nsImage: image))
-                #else
-                content(Image(uiImage: image))
-                #endif
+                if image.isAnimated {
+                    // GIF 动画: 使用原生 ImageView 播放，SwiftUI Image 不支持动画
+                    #if os(macOS)
+                    AnimatedImageView(image: image, contentMode: .scaleProportionallyUpOrDown)
+                    #else
+                    AnimatedImageView(image: image, contentMode: .scaleAspectFill)
+                    #endif
+                } else {
+                    #if os(macOS)
+                    content(Image(nsImage: image))
+                    #else
+                    content(Image(uiImage: image))
+                    #endif
+                }
             } else if hasFailed {
                 // 加载失败: 点击重试
                 placeholder()
