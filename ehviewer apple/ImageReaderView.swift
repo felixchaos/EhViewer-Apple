@@ -792,8 +792,13 @@ struct ImageReaderView: View {
             let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.4
 
             if cachedImage.isAnimated {
+                #if os(macOS)
+                AnimatedImageView(image: cachedImage, contentMode: .scaleProportionallyUpOrDown)
+                    .frame(width: containerWidth, height: containerWidth * ratio)
+                #else
                 AnimatedImageView(image: cachedImage, contentMode: .scaleAspectFit)
                     .frame(width: containerWidth, height: containerWidth * ratio)
+                #endif
             } else {
                 nativeImage(cachedImage)
                     .resizable()
@@ -1653,11 +1658,19 @@ private struct SwiftUIZoomableImage: View {
     private func imageContent(ratio: CGFloat) -> some View {
         if isFullPage {
             if image.isAnimated {
+                #if os(macOS)
+                AnimatedImageView(image: image, contentMode: .scaleProportionallyUpOrDown)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+                #else
                 AnimatedImageView(image: image, contentMode: .scaleAspectFit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scaleEffect(scale)
                     .offset(offset)
                     .clipped()
+                #endif
             } else {
                 nativeImage(image)
                     .resizable()
@@ -1669,12 +1682,21 @@ private struct SwiftUIZoomableImage: View {
             }
         } else {
             if image.isAnimated {
+                #if os(macOS)
+                AnimatedImageView(image: image, contentMode: .scaleProportionallyUpOrDown)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1.0 / ratio, contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .clipped()
+                #else
                 AnimatedImageView(image: image, contentMode: .scaleAspectFit)
                     .frame(maxWidth: .infinity)
                     .aspectRatio(1.0 / ratio, contentMode: .fit)
                     .scaleEffect(scale)
                     .offset(offset)
                     .clipped()
+                #endif
             } else {
                 nativeImage(image)
                     .resizable()
