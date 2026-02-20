@@ -175,6 +175,16 @@ struct GalleryListView: View {
                 viewModel.syncAdvancedSettings(advancedSearch)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { notification in
+            // 收藏状态同步: 详情页收藏/取消收藏后，列表内对应画廊的收藏标记实时更新，无需刷新
+            guard let userInfo = notification.userInfo,
+                  let gid = userInfo["gid"] as? Int64 else { return }
+            let favorited = userInfo["favorited"] as? Bool ?? false
+            let slot = userInfo["slot"] as? Int ?? -1
+            if let index = viewModel.galleries.firstIndex(where: { $0.gid == gid }) {
+                viewModel.galleries[index].favoriteSlot = favorited ? slot : -1
+            }
+        }
     }
 
     // iPhone 布局
