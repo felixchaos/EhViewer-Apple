@@ -483,6 +483,27 @@ class ReaderViewModel {
         }
     }
 
+    /// 从 NSCache 恢复当前页附近的图片到 Observable 层
+    /// 切换阅读模式 (水平 ↔ 垂直) 时调用，避免已下载的图片因 eviction 被移出
+    /// cachedImages 后需要重新网络下载
+    func restoreCachedImages(around page: Int) {
+        let lo = max(0, page - 5)
+        let hi = min(max(0, totalPages - 1), page + 5)
+        var restored = false
+        for p in lo...hi {
+            if cachedImages[p] == nil {
+                let key = cacheKey(for: p)
+                if let img = Self.imageCache.object(forKey: key) {
+                    cachedImages[p] = img
+                    restored = true
+                }
+            }
+        }
+        if restored {
+            debugLog("[Reader] Restored cached images around page \(page)")
+        }
+    }
+
     // MARK: - Context Switch (画廊切换身份守卫)
 
     /// 身份核对守卫 — 检测是否需要切换画廊上下文
@@ -664,6 +685,13 @@ class ReaderViewModel {
         guard !downloadingImages.contains(index) else { return }
         downloadingImages.insert(index)
         defer { downloadingImages.remove(index) }
+
+        // 立即设置初始进度 0，让 UI 渲染圆形进度条而非纯 spinner
+        await MainActor.run {
+            if self.downloadProgress[index] == nil {
+                self.downloadProgress[index] = 0.0
+            }
+        }
 
         for attempt in 0..<3 {
             do {

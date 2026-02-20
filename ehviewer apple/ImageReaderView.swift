@@ -42,6 +42,10 @@ struct ImageReaderView: View {
     @State private var isZoomed = false
     @State private var showTutorial = false
 
+    // 跳页输入
+    @State private var showJumpPageAlert = false
+    @State private var jumpPageText = ""
+
     // 从设置读取
     @State private var readingDirection: ReadingDirection = .rightToLeft
     @State private var scaleMode: ScaleMode = .fit
@@ -167,6 +171,25 @@ struct ImageReaderView: View {
                 startPosition: $startPosition,
                 autoPageEnabled: $autoPageEnabled
             )
+        }
+        // 跳页输入弹窗
+        .alert("跳转到页码", isPresented: $showJumpPageAlert) {
+            TextField("页码 (1-\(vm.totalPages))", text: $jumpPageText)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+            Button("跳转") {
+                if let page = Int(jumpPageText), page >= 1, page <= vm.totalPages {
+                    goToPage(page - 1) // 0-based
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("输入 1 ~ \(vm.totalPages) 之间的页码")
+        }
+        // 切换阅读模式时从 NSCache 恢复已加载图片，避免重新下载
+        .onChange(of: readingDirection) { _, _ in
+            vm.restoreCachedImages(around: vm.currentPage)
         }
         // 键盘事件 (macOS / iPad 键盘)
         .onKeyPress(.leftArrow) {
@@ -635,13 +658,13 @@ struct ImageReaderView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.white.opacity(0.9))
             }
-        } else if let progress = vm.downloadProgress[index], progress > 0 {
+        } else if let progress = vm.downloadProgress[index], progress >= 0 {
             ZStack {
                 Circle()
                     .stroke(Color.white.opacity(0.3), lineWidth: 3)
                     .frame(width: 48, height: 48)
                 Circle()
-                    .trim(from: 0, to: progress)
+                    .trim(from: 0, to: max(0.01, progress))
                     .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .frame(width: 48, height: 48)
                     .rotationEffect(.degrees(-90))
@@ -770,13 +793,13 @@ struct ImageReaderView: View {
             )
         } else if vm.imageURLs[index] != nil {
             VStack(spacing: 8) {
-                if let progress = vm.downloadProgress[index], progress > 0 {
+                if let progress = vm.downloadProgress[index], progress >= 0 {
                     ZStack {
                         Circle()
                             .stroke(Color.white.opacity(0.3), lineWidth: 3)
                             .frame(width: 48, height: 48)
                         Circle()
-                            .trim(from: 0, to: progress)
+                            .trim(from: 0, to: max(0.01, progress))
                             .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                             .frame(width: 48, height: 48)
                             .rotationEffect(.degrees(-90))
@@ -865,13 +888,13 @@ struct ImageReaderView: View {
                 #endif
             } else if vm.imageURLs[index] != nil {
                 VStack(spacing: 8) {
-                    if let progress = vm.downloadProgress[index], progress > 0 {
+                    if let progress = vm.downloadProgress[index], progress >= 0 {
                         ZStack {
                             Circle()
                                 .stroke(Color.white.opacity(0.3), lineWidth: 3)
                                 .frame(width: 48, height: 48)
                             Circle()
-                                .trim(from: 0, to: progress)
+                                .trim(from: 0, to: max(0.01, progress))
                                 .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                 .frame(width: 48, height: 48)
                                 .rotationEffect(.degrees(-90))
@@ -1101,24 +1124,29 @@ struct ImageReaderView: View {
 
             Spacer()
 
-            // 页码显示 (双页模式标注 spread)
-            Group {
-                if vm.isDoublePageEnabled, let currentIdx = vm.currentSpreadIndex, currentIdx < vm.spreads.count {
-                    let spread = vm.spreads[currentIdx]
-                    if let sec = spread.secondaryPage {
-                        Text("\(spread.primaryPage + 1)-\(sec + 1) / \(vm.totalPages)")
+            // 页码显示 (双页模式标注 spread) — 点击可跳页
+            Button {
+                jumpPageText = "\(vm.currentPage + 1)"
+                showJumpPageAlert = true
+            } label: {
+                Group {
+                    if vm.isDoublePageEnabled, let currentIdx = vm.currentSpreadIndex, currentIdx < vm.spreads.count {
+                        let spread = vm.spreads[currentIdx]
+                        if let sec = spread.secondaryPage {
+                            Text("\(spread.primaryPage + 1)-\(sec + 1) / \(vm.totalPages)")
+                        } else {
+                            Text("\(spread.primaryPage + 1) / \(vm.totalPages)")
+                        }
                     } else {
-                        Text("\(spread.primaryPage + 1) / \(vm.totalPages)")
+                        Text("\(vm.currentPage + 1) / \(vm.totalPages)")
                     }
-                } else {
-                    Text("\(vm.currentPage + 1) / \(vm.totalPages)")
                 }
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
             }
-            .font(.subheadline.monospacedDigit())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
 
             Spacer()
 
@@ -1272,11 +1300,15 @@ struct ImageReaderView: View {
                     .disabled(isRTL ? isLastPage : isFirstPage)
                     .opacity((isRTL ? isLastPage : isFirstPage) ? 0.25 : 0.8)
 
-                    Divider().frame(height: 20).overlay(Color.white.opacity(0.2))
+                    // 自定义分割线 (替代 Divider 避免超出 Capsule)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 1, height: 20)
 
-                    // 中央: 页码 + 点击切换工具栏
+                    // 中央: 页码 + 点击跳页
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { showOverlay.toggle() }
+                        jumpPageText = "\(vm.currentPage + 1)"
+                        showJumpPageAlert = true
                     } label: {
                         Text("\(vm.currentPage + 1) / \(vm.totalPages)")
                             .font(.system(size: 12, weight: .medium).monospacedDigit())
@@ -1284,7 +1316,10 @@ struct ImageReaderView: View {
                             .frame(minWidth: 64, maxHeight: 40)
                     }
 
-                    Divider().frame(height: 20).overlay(Color.white.opacity(0.2))
+                    // 自定义分割线
+                    Rectangle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 1, height: 20)
 
                     // 右侧 / 下一页按钮
                     Button {
