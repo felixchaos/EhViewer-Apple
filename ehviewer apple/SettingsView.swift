@@ -917,6 +917,20 @@ struct SettingsView: View {
                 }
             }
 
+            // 检查更新 (对齐 Android Settings -> 检查更新)
+            Button {
+                AppUpdateChecker.shared.checkManually()
+            } label: {
+                HStack {
+                    Text("检查更新")
+                    Spacer()
+                    if AppUpdateChecker.shared.isChecking {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(AppUpdateChecker.shared.isChecking)
+
             Button("源代码") {
                 openURL(URL(string: "https://github.com/felixchaos/EhViewer-Apple")!)
             }
@@ -927,6 +941,42 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $vm.showLogExport) {
             LogExportView()
+        }
+        .onChange(of: vm.gallerySite) { _, _ in
+            // 站点切换通知: 放在 View 层而非 ViewModel.didSet 中
+            // 因为 @Observable 宏使 didSet 在 init() 中也会触发，导致 GalleryListView 误刷新
+            NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
+        }
+        .alert("发现新版本", isPresented: Bindable(AppUpdateChecker.shared).showUpdateAlert) {
+            if let info = AppUpdateChecker.shared.updateAvailable {
+                Button("前往下载") {
+                    openURL(info.downloadURL ?? info.releaseURL)
+                }
+                Button("取消", role: .cancel) {}
+            }
+        } message: {
+            if let info = AppUpdateChecker.shared.updateAvailable {
+                Text("v\(info.version)\n\n\(info.releaseNotes)")
+            }
+        }
+        .alert("检查更新", isPresented: .init(
+            get: {
+                if let err = AppUpdateChecker.shared.checkError {
+                    return err != ""
+                }
+                return false
+            },
+            set: { newValue in
+                if !newValue { AppUpdateChecker.shared.checkError = nil }
+            }
+        )) {
+            Button("确定", role: .cancel) {}
+        } message: {
+            if AppUpdateChecker.shared.checkError == "already_latest" {
+                Text("当前已是最新版本 v\(AppUpdateChecker.shared.currentVersion)")
+            } else {
+                Text(AppUpdateChecker.shared.checkError ?? "")
+            }
         }
     }
 
@@ -1318,7 +1368,12 @@ class SettingsViewModel {
     var showLogin = false
 
     var gallerySite: Int = 0 {
-        didSet { AppSettings.shared.gallerySite = EhSite(rawValue: gallerySite) ?? .eHentai }
+        didSet {
+            let newSite = EhSite(rawValue: gallerySite) ?? .eHentai
+            AppSettings.shared.gallerySite = newSite
+            // ⚠️ 不在 didSet 中发送通知 — @Observable 宏使 didSet 在 init() 中也会触发
+            // 通知改由 SettingsView.body 的 .onChange(of: vm.gallerySite) 发送
+        }
     }
     var listMode: Int = 0 {
         didSet { AppSettings.shared.listMode = ListMode(rawValue: listMode) ?? .list }
@@ -1443,8 +1498,9 @@ class SettingsViewModel {
     #endif
 
     init() {
-        // 从 AppSettings 加载初始值到 stored properties
-        // (didSet 不会在 init 中触发，所以这些赋值不会写回 AppSettings)
+        // 从 AppSettings 加载初始值
+        // ⚠️ @Observable 宏会使 didSet 在 init 中也被触发 (属性变为计算属性)
+        // 因此 didSet 中不应有副作用操作 (如发通知)，仅写回 AppSettings 是安全的 (幂等)
         gallerySite = AppSettings.shared.gallerySite.rawValue
         listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle

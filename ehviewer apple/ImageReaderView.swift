@@ -47,7 +47,7 @@ struct ImageReaderView: View {
     @State private var jumpPageText = ""
 
     // 从设置读取
-    @State private var readingDirection: ReadingDirection = .rightToLeft
+    @State private var readingDirection: ReadingDirection = .topToBottom
     @State private var scaleMode: ScaleMode = .fit
     @State private var startPosition: StartPosition = .topRight
 
@@ -63,8 +63,6 @@ struct ImageReaderView: View {
     @State private var isUpdatingFromScroll = false
     @State private var hasAppliedInitialScroll = false
     @State private var lastScrollChangeTime: Date = .distantPast
-    /// 垂直模式单图缩放状态: 任意图片处于放大状态时禁用 ScrollView 滚动
-    @State private var verticalImageIsZoomed = false
     /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
     @State private var verticalPageInterval: Bool = false
 
@@ -247,21 +245,18 @@ struct ImageReaderView: View {
         #endif
     }
 
-    // MARK: - Ambient Background (模糊氛围背景)
+    // MARK: - Reader Background
 
-    /// 主色调氛围背景 — 使用当前页的 CIAreaAverage 提取色填充未覆盖区域
-    /// Perf: dominantColors 已标记 @ObservationIgnored，读取不会建立观察依赖
-    /// 颜色在翻页时自然更新 (currentPage 变化触发 body 重绘)
+    /// 纯黑背景 — 节省 OLED 屏幕电量，移除 CIAreaAverage 计算
     @ViewBuilder
     private var ambientBackground: some View {
-        let color = vm.dominantColors[vm.currentPage] ?? Color.black
-        color.ignoresSafeArea()
+        Color.black.ignoresSafeArea()
     }
 
     // MARK: - Setup
 
     private func setupReader() {
-        readingDirection = ReadingDirection(rawValue: AppSettings.shared.readingDirection) ?? .rightToLeft
+        readingDirection = ReadingDirection(rawValue: AppSettings.shared.readingDirection) ?? .topToBottom
         scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
         startPosition = StartPosition(rawValue: AppSettings.shared.startPosition) ?? .topRight
         verticalPageInterval = AppSettings.shared.showPageInterval
@@ -707,8 +702,7 @@ struct ImageReaderView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .clipped()
-            // 有图片处于放大状态时禁用滚动，让拖动手势控制平移
-            .scrollDisabled(verticalImageIsZoomed)
+            // Perf: 垂直模式不再使用 SwiftUIZoomableImage，无需 scrollDisabled
             .scrollTargetLayout()
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
@@ -719,8 +713,6 @@ struct ImageReaderView: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
-                        // 有图片处于缩放状态时忽略父级点击 (由 SwiftUIZoomableImage 自行处理)
-                        guard !verticalImageIsZoomed else { return }
                         let timeSinceScroll = Date().timeIntervalSince(lastScrollChangeTime)
                         guard timeSinceScroll > 0.5 else { return }
                         handleTapZone(location: value.location, viewSize: geometry.size)
@@ -746,6 +738,13 @@ struct ImageReaderView: View {
                 vm.currentPage = page
                 lastScrollChangeTime = Date()
                 saveReadingProgress()
+                // Perf: 去抖预加载 — 快速滚动时只处理最终落地页，避免大量并发预加载
+                pageChangeTask?.cancel()
+                pageChangeTask = Task {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms debounce
+                    guard !Task.isCancelled else { return }
+                    await vm.onPageChange(page)
+                }
                 DispatchQueue.main.async {
                     self.isUpdatingFromScroll = false
                 }
@@ -787,12 +786,20 @@ struct ImageReaderView: View {
             .frame(maxWidth: .infinity)
             .frame(height: estimatedHeight)
         } else if let cachedImage = vm.cachedImages[index] {
-            SwiftUIZoomableImage(
-                image: cachedImage,
-                onZoomChanged: { zoomed in
-                    verticalImageIsZoomed = zoomed
-                }
-            )
+            // Perf: 垂直滚动模式使用轻量渲染 — 不加载 SwiftUIZoomableImage 的
+            // GeometryReader + PreferenceKey + 3 套手势识别器，大幅减少 LazyVStack 滑动开销
+            let imgSize = cachedImage.size
+            let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.4
+
+            if cachedImage.isAnimated {
+                AnimatedImageView(image: cachedImage, contentMode: .scaleAspectFit)
+                    .frame(width: containerWidth, height: containerWidth * ratio)
+            } else {
+                nativeImage(cachedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: containerWidth)
+            }
         } else if vm.imageURLs[index] != nil {
             VStack(spacing: 8) {
                 if let progress = vm.downloadProgress[index], progress >= 0 {

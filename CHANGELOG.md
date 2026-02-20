@@ -2,6 +2,29 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.2.1] - 2026-02-20
+
+### 🔧 阅读器体验优化 + ExHentai 修复
+
+#### Bug 修复
+- **修复搜索失效** — `@Observable` 宏使 `didSet` 在 `init()` 中也会触发，导致 `siteChangedNotification` 误刷新列表覆盖搜索结果
+- **修复切换 ExHentai 后重启回退** — 移除 `validateExHentaiAccess()` 对 igneous Cookie 的错误检查，已登录用户可自由切换站点（对齐 Android）
+- **修复 ExHentai 站点切换无效** — `siteBaseURL` 不再依赖 igneous Cookie（鸡生蛋死循环），改为检查登录 Cookie
+- **修复下载进度卡在 0%** — `URLSession.download(for:delegate:)` 不转发进度回调，改用 `bytes(for:)` 流式下载 + 16KB 分块写入
+- **修复纵向滚动阅读器卡顿** — 轻量化图片预处理、100ms 滚动去抖、节流进度更新
+
+#### 新功能
+- **GIF 动图支持** — 阅读器和缩略图支持 GIF 动画播放
+- **应用内检查更新** — 设置页新增「检查更新」，自动/手动检查 GitHub Releases 最新版本
+- **纯黑阅读器背景** — 阅读器背景改为纯黑色，移除 CIAreaAverage 计算
+- **默认纵向滚动** — 阅读方向默认改为从上到下纵向滚动
+
+#### 改进
+- 站点切换后列表自动刷新（对齐 Android 行为）
+- ExHentai 可用提示不再重复弹出（已在 ExHentai 时跳过）
+
+---
+
 ## [1.2.0] - 2026-02-18
 
 ### 🔧 阅读器手势与导航全面修复

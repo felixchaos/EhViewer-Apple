@@ -119,6 +119,7 @@ struct RootView: View {
         .alert("ExHentai 可用", isPresented: $showExHAlert) {
             Button("切换到 ExHentai") {
                 AppSettings.shared.gallerySite = .exHentai
+                NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
             }
             Button("保持 E-Hentai", role: .cancel) {}
         } message: {
@@ -140,11 +141,13 @@ struct RootView: View {
         .alert("ExHentai 访问失效", isPresented: $showSadPandaAlert) {
             Button("重新登录") {
                 AppSettings.shared.gallerySite = .eHentai
+                NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
                 appState.isSignedIn = false
                 flowStep = .login
             }
             Button("切换到 E-Hentai", role: .cancel) {
                 AppSettings.shared.gallerySite = .eHentai
+                NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
             }
         } message: {
             Text("igneous Cookie 已失效 (Sad Panda)，已自动清除。\n请重新登录以恢复 ExHentai 访问权限，或切换到 E-Hentai。")
@@ -289,8 +292,10 @@ struct RootView: View {
 
             if let httpResponse = response as? HTTPURLResponse,
                httpResponse.statusCode == 200, data.count >= 1000 {
-                // ExHentai 可访问 — 提示切换
-                showExHAlert = true
+                // ExHentai 可访问 — 仅当用户尚未选择 ExHentai 时才提示
+                if AppSettings.shared.gallerySite != .exHentai {
+                    showExHAlert = true
+                }
             }
         } catch {
             debugLog("[RootView] ExHentai 检测失败: \(error)")
@@ -440,20 +445,10 @@ final class AppState {
             isSignedIn = newValue  // ★ 仅在值变化时写入，避免 withMutation 触发无效重渲染
         }
 
-        // Fix F1-3: 未登录或无有效 igneous Cookie 时，强制降级到 E-Hentai
+        // Fix F1-3: 未登录时强制降级到 E-Hentai
+        // ⚠️ 已登录用户不再检查 igneous — igneous 仅在首次访问 exhentai.org 后才由服务器种下
+        // 与 Android 行为一致: 已登录即可自由切换到 ExHentai
         if !isSignedIn && AppSettings.shared.gallerySite == .exHentai {
-            AppSettings.shared.gallerySite = .eHentai
-        } else if isSignedIn && AppSettings.shared.gallerySite == .exHentai {
-            validateExHentaiAccess()
-        }
-    }
-
-    /// 检查 ExHentai 访问权限 (igneous cookie)
-    /// 无有效 igneous 时自动降级到 E-Hentai 并提示
-    private func validateExHentaiAccess() {
-        let exCookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
-        let hasIgneous = exCookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
-        if !hasIgneous {
             AppSettings.shared.gallerySite = .eHentai
         }
     }

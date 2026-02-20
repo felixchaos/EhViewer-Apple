@@ -113,17 +113,25 @@ final class GalleryActionService {
     // MARK: - 站点工具
 
     /// 统一站点 URL — 替代分散在 4 个文件中的 getSite() 重复代码
-    /// 包含 ExHentai cookie 验证回退逻辑 (对齐 Android: 检查 igneous cookie)
+    /// 对齐 Android: 尊重用户的站点选择，只要已登录 (有 memberId + passHash) 就允许使用 ExHentai
+    /// ⚠️ 旧逻辑要求 igneous cookie 才放行 ExHentai，但 igneous 只有首次访问 exhentai.org 后才会种下
+    ///    这造成了鸡生蛋的死循环 — 用户无法首次访问 exhentai.org 获取 igneous
+    ///    Sad Panda 检测已在 EhAPI.checkResponse 中处理，access 失败时会自动回退
     static var siteBaseURL: String {
         switch AppSettings.shared.gallerySite {
         case .exHentai:
+            // 检查是否有登录 Cookie (对齐 Android: 只要登录就允许访问 ExHentai)
             let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
-            let hasEX = cookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
-            return hasEX ? "https://exhentai.org/" : "https://e-hentai.org/"
+            let hasAuth = cookies.contains { $0.name == "ipb_member_id" } &&
+                          cookies.contains { $0.name == "ipb_pass_hash" }
+            return hasAuth ? "https://exhentai.org/" : "https://e-hentai.org/"
         case .eHentai:
             return "https://e-hentai.org/"
         }
     }
+
+    /// 站点切换通知 — 切换站点后通知列表刷新
+    static let siteChangedNotification = Notification.Name("gallerySiteChanged")
 }
 
 // MARK: - 通知名称

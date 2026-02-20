@@ -68,6 +68,12 @@ struct EhViewerApp: App {
                 await MainActor.run { debugLog("[EhTagDatabase] Auto-update failed: \(error)") }
             }
         }
+
+        // App 更新检查 (对齐 Android AppUpdater — 启动后延迟 3 秒，24 小时间隔)
+        Task.detached(priority: .background) {
+            try? await Task.sleep(for: .seconds(3))
+            await AppUpdateChecker.shared.checkOnLaunchIfNeeded()
+        }
     }
 
     var body: some Scene {

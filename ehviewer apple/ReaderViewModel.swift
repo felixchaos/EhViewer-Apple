@@ -139,10 +139,7 @@ class ReaderViewModel {
 
     // MARK: - Visual
 
-    /// 每页的主色调 (用于模糊背景填充)
-    /// Perf: @ObservationIgnored — 色调提取在后台完成后写入此字典，
-    /// 但不需要立刻触发 body 重绘，下次翻页时 body 自然读到新值
-    @ObservationIgnored var dominantColors: [Int: Color] = [:]
+    // dominantColors 已移除 — 节省 OLED 电量，使用纯黑背景
 
     // MARK: - Private (不驱动 UI，无需触发 SwiftUI 刷新)
 
@@ -425,50 +422,8 @@ class ReaderViewModel {
         #endif
     }
 
-    // MARK: - Dominant Color (模糊背景主色调提取)
-
-    /// 提取图片平均色用于模糊氛围背景 — CIFilter 在后台线程执行
-    func extractDominantColor(for page: Int) {
-        guard dominantColors[page] == nil, let image = cachedImages[page] else { return }
-
-        Task.detached(priority: .utility) {
-            let color = Self.computeDominantColor(from: image)
-            if let color = color {
-                await MainActor.run { [weak self] in
-                    self?.dominantColors[page] = color
-                }
-            }
-        }
-    }
-
-    /// 纯计算: CIFilter 提取平均色 (nonisolated, 可在任意线程运行)
-    nonisolated private static func computeDominantColor(from image: PlatformImage) -> Color? {
-        #if os(iOS)
-        guard let cgImage = image.cgImage else { return nil }
-        let ciImage = CIImage(cgImage: cgImage)
-        #else
-        guard let tiffData = image.tiffRepresentation,
-              let ciImage = CIImage(data: tiffData) else { return nil }
-        #endif
-
-        guard let filter = CIFilter(name: "CIAreaAverage", parameters: [
-            kCIInputImageKey: ciImage,
-            kCIInputExtentKey: CIVector(cgRect: ciImage.extent)
-        ]),
-        let output = filter.outputImage else { return nil }
-
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        let ctx = CIContext(options: [.workingColorSpace: NSNull()])
-        ctx.render(output, toBitmap: &bitmap, rowBytes: 4,
-                   bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                   format: .RGBA8, colorSpace: nil)
-
-        return Color(
-            red: Double(bitmap[0]) / 255.0,
-            green: Double(bitmap[1]) / 255.0,
-            blue: Double(bitmap[2]) / 255.0
-        ).opacity(0.5)
-    }
+    // MARK: - Dominant Color (已移除)
+    // 平均色计算已移除 — 节省 OLED 电量，使用纯黑背景
 
     // MARK: - Memory Management
 
@@ -561,8 +516,7 @@ class ReaderViewModel {
         // ⚠️ 关键: 清空 NSCache 防止旧画廊图片被复用
         Self.imageCache.removeAllObjects()
 
-        // 视觉
-        dominantColors.removeAll()
+
 
         // 私有状态
         pTokens.removeAll()
@@ -670,9 +624,6 @@ class ReaderViewModel {
 
         await preload(around: page)
 
-        // 提取主色调 (内部已在后台线程执行)
-        extractDominantColor(for: page)
-
         // 释放远处页面
         evictDistantPages(from: page)
     }
@@ -709,18 +660,42 @@ class ReaderViewModel {
                 request.setValue(GalleryActionService.siteBaseURL, forHTTPHeaderField: "Referer")
                 request.timeoutInterval = 60
 
-                // 使用 download(for:delegate:) 追踪下载进度
-                // 相比 bytes(for:) 的 byte-by-byte async 迭代，download task 在底层 C 层处理数据接收，
-                // 仅通过 delegate 回调报告进度，开销极低
-                let progressDelegate = ImageDownloadProgressDelegate { [weak self] progress in
-                    Task { @MainActor [weak self] in
-                        self?.downloadProgress[index] = progress
+                // 使用 bytes(for:) 流式读取 + 手动进度追踪
+                // ⚠️ download(for:delegate:) 的 async 包装不转发 URLSessionDownloadDelegate 的
+                //    didWriteData 回调，导致进度始终为 0 → 直接跳到 100%
+                // bytes(for:) 虽逐字节迭代，但配合 16KB 缓冲区按 chunk 更新进度，开销可控
+                let (asyncBytes, response) = try await Self.session.bytes(for: request)
+                let expectedLength = response.expectedContentLength > 0
+                    ? response.expectedContentLength
+                    : Int64(2_000_000) // 估算 ~2MB
+                var data = Data(capacity: Int(min(expectedLength, 10_000_000)))
+                var received: Int64 = 0
+                var lastReportedProgress: Double = 0.0
+                let chunkSize = 16_384 // 16KB — 每累计一个 chunk 检查是否需要更新进度
+                var buffer = [UInt8]()
+                buffer.reserveCapacity(chunkSize)
+
+                for try await byte in asyncBytes {
+                    buffer.append(byte)
+                    if buffer.count >= chunkSize {
+                        data.append(contentsOf: buffer)
+                        received += Int64(buffer.count)
+                        buffer.removeAll(keepingCapacity: true)
+                        // 每 5% 进度变化更新一次 UI
+                        let progress = min(0.95, Double(received) / Double(expectedLength))
+                        if progress - lastReportedProgress >= 0.05 {
+                            lastReportedProgress = progress
+                            let p = progress
+                            await MainActor.run {
+                                self.downloadProgress[index] = p
+                            }
+                        }
                     }
                 }
-
-                let (tempURL, _) = try await Self.session.download(for: request, delegate: progressDelegate)
-                let data = try Data(contentsOf: tempURL)
-                try? FileManager.default.removeItem(at: tempURL)
+                // 处理剩余不足一个 chunk 的数据
+                if !buffer.isEmpty {
+                    data.append(contentsOf: buffer)
+                }
 
                 // 下载完成 → 标记 100%，让用户看到从进度到解码的过渡
                 await MainActor.run {
@@ -752,14 +727,14 @@ class ReaderViewModel {
                     return
                 }
             } catch is CancellationError {
-                await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
+                await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
                 return
             } catch let urlError as URLError where urlError.code == .cancelled {
-                await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
+                await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
                 return
             } catch {
                 if Task.isCancelled {
-                    await MainActor.run { self.downloadProgress.removeValue(forKey: index) }
+                    await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
                     return
                 }
                 debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
@@ -950,47 +925,5 @@ class ReaderViewModel {
 
         if let pt = pTokens[page] { return pt }
         throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "pToken not found"])
-    }
-}
-
-// MARK: - Download Progress Delegate
-
-/// 用于 download(for:delegate:) 的进度追踪代理
-/// 通过 URLSessionDownloadDelegate 回调监听下载进度，避免 byte-by-byte async 迭代的高开销
-private final class ImageDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let onProgress: @Sendable (Double) -> Void
-    private var lastUpdate = Date.distantPast
-    /// 典型漫画图片大小估值 (~2MB)，用于服务器不返回 Content-Length 时的进度估算
-    private static let estimatedImageSize: Int64 = 2_000_000
-
-    init(onProgress: @escaping @Sendable (Double) -> Void) {
-        self.onProgress = onProgress
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {
-        // download(for:) 内部处理文件，此处留空
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        let now = Date()
-        // 第一次回调立即放行，后续每 100ms 节流一次
-        let isFirstUpdate = (lastUpdate == Date.distantPast)
-        guard isFirstUpdate || now.timeIntervalSince(lastUpdate) >= 0.1 else { return }
-        lastUpdate = now
-
-        let progress: Double
-        if totalBytesExpectedToWrite > 0 {
-            // 服务器返回了 Content-Length
-            progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        } else {
-            // Content-Length 未知 (chunked transfer) → 用估算值，上限 95% 防止预判完成
-            let estimated = downloadTask.response?.expectedContentLength ?? -1
-            let denominator = estimated > 0 ? estimated : Self.estimatedImageSize
-            progress = min(0.95, Double(totalBytesWritten) / Double(denominator))
-        }
-        onProgress(progress)
     }
 }

@@ -186,6 +186,10 @@ struct GalleryListView: View {
                 viewModel.galleries[index].favoriteSlot = favorited ? slot : -1
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
+            // 站点切换后清除缓存并重新加载 (对齐 Android: 切换站点 → 刷新列表)
+            viewModel.refresh(mode: mode)
+        }
     }
 
     // iPhone 布局

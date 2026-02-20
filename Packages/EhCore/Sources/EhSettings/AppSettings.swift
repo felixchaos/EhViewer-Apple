@@ -342,7 +342,7 @@ public final class AppSettings: @unchecked Sendable {
     // MARK: - 阅读器
     @ObservationIgnored
     public var readingDirection: Int {
-        get { _defaults.object(forKey: "reading_direction") as? Int ?? 1 }
+        get { _defaults.object(forKey: "reading_direction") as? Int ?? 2 }
         set { _defaults.set(newValue, forKey: "reading_direction") }
     }
 
