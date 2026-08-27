@@ -43,6 +43,9 @@ struct GalleryDetailView: View {
     @State private var showRatingSheet = false
     @State private var showAllPreviews = false
     @State private var showFavoritePicker = false
+    @State private var showArchive = false
+    @State private var showTorrents = false
+    @State private var showCellularWarning = false
 
     /// 标签点击导航动作 — 在 Split/三栏布局中将标签列表推入左侧栏
     @Environment(\.tagNavigationAction) private var tagNavigationAction
@@ -58,6 +61,7 @@ struct GalleryDetailView: View {
                 Divider()
                 actionBar
                 Divider()
+                resourceBar
 
                 if vm.isLoading {
                     ProgressView("加载详情...")
@@ -162,6 +166,29 @@ struct GalleryDetailView: View {
             )
             .presentationDetents([.height(200)])
         }
+        .confirmationDialog(
+            "当前是移动网络",
+            isPresented: $showCellularWarning,
+            titleVisibility: .visible
+        ) {
+            Button("仍然下载") {
+                Haptics.impact()
+                Task { await vm.startDownload(gallery: gallery) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这本共 \(vm.detail?.info.pages ?? gallery.pages) 页，下载会消耗蜂窝数据。可以在设置里关掉这个提醒。")
+        }
+        .sheet(isPresented: $showArchive) {
+            if let archiveUrl = vm.detail?.archiveUrl, !archiveUrl.isEmpty {
+                ArchiveDownloadView(gid: gallery.gid, token: gallery.token, archiveUrl: archiveUrl)
+            }
+        }
+        .sheet(isPresented: $showTorrents) {
+            if let torrentUrl = vm.detail?.torrentUrl, !torrentUrl.isEmpty {
+                TorrentListView(gid: gallery.gid, token: gallery.token, torrentUrl: torrentUrl)
+            }
+        }
     }
 
     // MARK: - Header
@@ -174,7 +201,7 @@ struct GalleryDetailView: View {
             } placeholder: {
                 Color(.secondarySystemBackground)
             }
-            .frame(width: 120, height: 168)
+            .frame(width: coverSize.width, height: coverSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 6) {
@@ -236,6 +263,56 @@ struct GalleryDetailView: View {
         .padding()
     }
 
+    /// 详情页封面尺寸 (对齐 Android Settings.KEY_DETAIL_SIZE)
+    private var coverSize: CGSize {
+        AppSettings.shared.detailSize == 1
+            ? CGSize(width: 160, height: 224)
+            : CGSize(width: 120, height: 168)
+    }
+
+    // MARK: - 资源入口 (归档 / 种子)
+
+    /// 归档与种子放主操作栏下面单独一行 —— 它们不是每本都有，
+    /// 塞进上面那排会让四个常用操作被挤窄
+    @ViewBuilder
+    private var resourceBar: some View {
+        let archiveUrl = vm.detail?.archiveUrl
+        let torrentUrl = vm.detail?.torrentUrl
+        let torrentCount = vm.detail?.torrentCount ?? 0
+        let hasArchive = !(archiveUrl ?? "").isEmpty
+        let hasTorrent = !(torrentUrl ?? "").isEmpty && torrentCount > 0
+
+        if hasArchive || hasTorrent {
+            HStack(spacing: 10) {
+                if hasArchive {
+                    resourceChip(icon: "archivebox", title: "归档 / H@H") {
+                        showArchive = true
+                    }
+                }
+                if hasTorrent {
+                    resourceChip(icon: "arrow.down.doc", title: "种子 (\(torrentCount))") {
+                        showTorrents = true
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            Divider()
+        }
+    }
+
+    private func resourceChip(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.footnote)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+    }
+
     // MARK: - Action Bar
 
     private var actionBar: some View {
@@ -287,6 +364,9 @@ struct GalleryDetailView: View {
                         previewSet: vm.detail?.previewSet,
                         initialPage: nil
                     )
+                } else if GalleryActionService.shared.shouldWarnAboutCellular {
+                    // 移动网络下先问一句，整本下载很容易吃掉几百 MB
+                    showCellularWarning = true
                 } else {
                     Haptics.impact()
                     Task { await vm.startDownload(gallery: gallery) }
@@ -768,6 +848,12 @@ class GalleryDetailViewModel {
 
             // 2) 存入缓存 (对标 Android: EhApplication.getGalleryDetailCache().put(result.gid, result))
             GalleryCache.shared.putDetail(result)
+
+            // 3) 标签落库 —— 下载列表的"按标签搜索"靠这张表
+            //    (对齐 Android: 详情加载后写 GalleryTagsDao)
+            if !result.tags.isEmpty {
+                try? EhDatabase.shared.saveGalleryTags(gid: gid, groups: result.tags)
+            }
 
             // 查询下载状态
             let dlState = await DownloadManager.shared.getTaskState(gid: gid)

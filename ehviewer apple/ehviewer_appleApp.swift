@@ -53,6 +53,10 @@ struct EhViewerApp: App {
 
         // 请求通知权限并设置下载监听器
         Task { @MainActor in
+            // 把本地设置同步成服务端的 uconfig Cookie
+            // (图片分辨率 / 排除语言 / 排除命名空间 / 默认分类 / 预览尺寸都靠它生效)
+            EhConfigSync.apply()
+
             _ = await DownloadNotificationService.shared.requestAuthorization()
 
             // 注册下载通知桥接器

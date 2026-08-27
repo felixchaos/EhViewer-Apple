@@ -48,9 +48,7 @@ struct SettingsView: View {
         Form {
             accountSection
             siteSection
-            #if DEBUG
             filterSection
-            #endif
             displaySection
             favoritesSection
             networkSection
@@ -257,21 +255,19 @@ struct SettingsView: View {
                 }
             }
 
-            // 我的标签 (对齐 Android: my_tags)
-            Button {
-                let site = AppSettings.shared.gallerySite
-                let url = site == .exHentai
-                    ? "https://exhentai.org/mytags"
-                    : "https://e-hentai.org/mytags"
-                openURL(URL(string: url)!)
-            } label: {
-                HStack {
-                    Text("我的标签")
-                    Spacer()
-                    Image(systemName: "arrow.up.right.square")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            // 账号资料 + 图片配额 (对齐 Android GetProfileScene)
+            NavigationLink("账号资料与配额") {
+                ProfileView()
+            }
+
+            // 我的标签 (对齐 Android MyTagsActivity) —— 原生页面，不再跳浏览器
+            NavigationLink("我的标签") {
+                MyTagsView()
+            }
+
+            // 站内公告 (对齐 Android NewsScene)
+            NavigationLink("站内公告") {
+                EhNewsView()
             }
 
             Picker("列表模式", selection: $vm.listMode) {
@@ -280,16 +276,14 @@ struct SettingsView: View {
                 Text("网格").tag(2)
             }
 
-            // TODO: Connect to Logic — detailSize 未被 GalleryDetailView 读取
-            #if DEBUG
-            Picker("详情页大小", selection: Binding(
+            // 详情页封面大小 (对齐 Android Settings.KEY_DETAIL_SIZE)
+            Picker("详情页封面", selection: Binding(
                 get: { AppSettings.shared.detailSize },
                 set: { AppSettings.shared.detailSize = $0 }
             )) {
                 Text("常规").tag(0)
                 Text("大号").tag(1)
             }
-            #endif
 
             Toggle("显示日文标题", isOn: $vm.showJpnTitle)
 
@@ -347,35 +341,38 @@ struct SettingsView: View {
                 FilterView()
             }
 
-            // TODO: Connect to Logic — cellularNetworkWarning 未被网络层检查
-            #if DEBUG
-            Toggle("移动网络提醒", isOn: Binding(
+            // 移动网络提醒 (对齐 Android Settings.KEY_CELLULAR_NETWORK_WARNING)
+            Toggle("移动网络下载前提醒", isOn: Binding(
                 get: { AppSettings.shared.cellularNetworkWarning },
                 set: { AppSettings.shared.cellularNetworkWarning = $0 }
             ))
-            #endif
         }
     }
 
     // MARK: - Filter / Search (对齐 Android: 默认分类/排除标签命名空间/排除语言)
-    // TODO: Connect to Logic — defaultCategories/excludedTagNamespaces/excludedLanguages 未作为 URL 参数发送
-    #if DEBUG
+    // 这三项是服务端配置，通过 uconfig Cookie 下发 —— 改完立即重新同步
     private var filterSection: some View {
-        Section("搜索过滤") {
+        Section {
             NavigationLink("默认搜索分类") {
                 defaultCategoriesView
+                    .onDisappear { EhConfigSync.apply() }
             }
 
             NavigationLink("排除的标签命名空间") {
                 excludedNamespacesView
+                    .onDisappear { EhConfigSync.apply() }
             }
 
             NavigationLink("排除的语言") {
                 excludedLanguagesView
+                    .onDisappear { EhConfigSync.apply() }
             }
+        } header: {
+            Text("搜索过滤")
+        } footer: {
+            Text("保存在 E-Hentai 账号的服务端配置里，对网页端同样生效。")
         }
     }
-    #endif
 
     // MARK: - Network
 
@@ -387,13 +384,15 @@ struct SettingsView: View {
 
             Toggle("内置 Hosts", isOn: $vm.builtInHosts)
 
-            // TODO: Connect to Logic — builtExHosts 未被 EhDNS 读取
-            #if DEBUG
             Toggle("内置 ExH Hosts", isOn: Binding(
                 get: { AppSettings.shared.builtExHosts },
                 set: { AppSettings.shared.builtExHosts = $0 }
             ))
-            #endif
+
+            // 自定义 Hosts (对齐 Android HostsActivity)
+            NavigationLink("自定义 Hosts") {
+                HostsView()
+            }
             
             // 网络诊断按钮
             Button {
@@ -448,37 +447,26 @@ struct SettingsView: View {
                 Text("历史").tag(5)
             }
 
-            // TODO: Connect to Logic — showGalleryPages 未被列表视图读取
-            #if DEBUG
             Toggle("显示画廊页数", isOn: Binding(
                 get: { AppSettings.shared.showGalleryPages },
                 set: { AppSettings.shared.showGalleryPages = $0 }
             ))
-            #endif
 
             Toggle("显示评论区", isOn: Binding(
                 get: { AppSettings.shared.showGalleryComment },
                 set: { AppSettings.shared.showGalleryComment = $0 }
             ))
 
-            // TODO: Connect to Logic — showGalleryRating 未被详情页读取(评分始终显示)
-            #if DEBUG
             Toggle("显示评分", isOn: Binding(
                 get: { AppSettings.shared.showGalleryRating },
                 set: { AppSettings.shared.showGalleryRating = $0 }
             ))
-            #endif
 
-            // TODO: Connect to Logic — showReadProgress 未被列表视图读取
-            #if DEBUG
             Toggle("显示阅读进度", isOn: Binding(
                 get: { AppSettings.shared.showReadProgress },
                 set: { AppSettings.shared.showReadProgress = $0 }
             ))
-            #endif
 
-            // TODO: Connect to Logic — thumbSize 未被列表/图片视图读取
-            #if DEBUG
             Picker("缩略图大小", selection: Binding(
                 get: { AppSettings.shared.thumbSize },
                 set: { AppSettings.shared.thumbSize = $0 }
@@ -487,26 +475,24 @@ struct SettingsView: View {
                 Text("中").tag(1)
                 Text("大").tag(2)
             }
-            #endif
 
-            // TODO: Connect to Logic — thumbResolution 未被任何代码读取
-            #if DEBUG
+            // 缩略图分辨率 —— 走 uconfig Cookie (tp)
             Picker("缩略图分辨率", selection: Binding(
                 get: { AppSettings.shared.thumbResolution },
-                set: { AppSettings.shared.thumbResolution = $0 }
+                set: {
+                    AppSettings.shared.thumbResolution = $0
+                    EhConfigSync.apply()
+                }
             )) {
                 Text("普通").tag(0)
                 Text("高清").tag(1)
             }
-            #endif
 
-            // TODO: Connect to Logic — fixThumbUrl 未被图片加载代码读取
-            #if DEBUG
+            // 已接入: GalleryListView 读取并传给 GalleryRow
             Toggle("修复缩略图链接", isOn: Binding(
                 get: { AppSettings.shared.fixThumbUrl },
                 set: { AppSettings.shared.fixThumbUrl = $0 }
             ))
-            #endif
 
             // 大屏幕列表布局 (对齐 Android: 全宽单列表布局选项)
             Picker("宽屏布局", selection: Binding(
@@ -643,7 +629,6 @@ struct SettingsView: View {
                 set: { AppSettings.shared.showPageInterval = $0 }
             ))
 
-            // TODO: Connect to Logic — volumePage/reverseVolumePage 未被 ImageReaderView 读取
             #if DEBUG && os(iOS)
             Toggle("音量键翻页", isOn: Binding(
                 get: { AppSettings.shared.volumePage },
@@ -676,13 +661,22 @@ struct SettingsView: View {
             // 自动翻页间隔 (对齐 Android Settings.KEY_AUTO_PAGE_INTERVAL)
             Stepper("自动翻页间隔: \(vm.autoPageInterval)s", value: $vm.autoPageInterval, in: 1...60)
 
-            // TODO: Connect to Logic — colorFilter/colorFilterColor 未被 ImageReaderView 读取
-            #if DEBUG
+            // 色彩滤镜 (对齐 Android Settings.KEY_COLOR_FILTER)
             Toggle("色彩滤镜 (护眼)", isOn: Binding(
                 get: { AppSettings.shared.colorFilter },
                 set: { AppSettings.shared.colorFilter = $0 }
             ))
-            #endif
+
+            if AppSettings.shared.colorFilter {
+                Picker("滤镜强度", selection: Binding(
+                    get: { AppSettings.shared.colorFilterColor },
+                    set: { AppSettings.shared.colorFilterColor = $0 }
+                )) {
+                    Text("轻").tag(0x14000000)
+                    Text("中").tag(0x20000000)
+                    Text("强").tag(0x40000000)
+                }
+            }
         }
     }
 
@@ -713,23 +707,33 @@ struct SettingsView: View {
             // 下载延迟 (对齐 Android Settings.KEY_DOWNLOAD_DELAY)
             Stepper("下载延迟: \(vm.downloadDelay) ms", value: $vm.downloadDelay, in: 0...2000, step: 100)
 
-            // TODO: Connect to Logic — imageResolution 未作为请求参数发送
-            #if DEBUG
+            // 图片分辨率 —— 走 uconfig Cookie (xr)，改完立即同步
             Picker("图片分辨率", selection: Binding(
                 get: { AppSettings.shared.imageResolution },
-                set: { AppSettings.shared.imageResolution = $0 }
+                set: {
+                    AppSettings.shared.imageResolution = $0
+                    EhConfigSync.apply()
+                }
             )) {
                 ForEach(ImageResolution.allCases) { resolution in
                     Text(resolution.displayName).tag(resolution)
                 }
             }
-            #endif
 
             // 下载原图 (对齐 Android Settings.KEY_DOWNLOAD_ORIGIN_IMAGE)
             Toggle("下载原始图片", isOn: Binding(
                 get: { AppSettings.shared.downloadOriginImage },
                 set: { AppSettings.shared.downloadOriginImage = $0 }
             ))
+
+            // 阅读时同步下载 (对齐 Android 上游 2026-06-16 sync_download_while_reading)
+            Toggle("阅读时同步下载", isOn: Binding(
+                get: { AppSettings.shared.syncDownloadWhileReading },
+                set: { AppSettings.shared.syncDownloadWhileReading = $0 }
+            ))
+            Text("浏览未下载的画廊时，把看过的图片顺手存进下载目录")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             #if os(iOS)
             // 灵动岛 (Live Activity) 下载进度显示
@@ -739,13 +743,6 @@ struct SettingsView: View {
             ))
             #endif
 
-            // TODO: Connect to Logic — mediaScan 是 Android 概念，iOS 无意义
-            #if DEBUG
-            Toggle("媒体扫描", isOn: Binding(
-                get: { AppSettings.shared.mediaScan },
-                set: { AppSettings.shared.mediaScan = $0 }
-            ))
-            #endif
 
             // 恢复下载项目 (对齐 Android: restore_download_items)
             Button {
@@ -871,13 +868,11 @@ struct SettingsView: View {
             // 历史记录容量 (对齐 Android Settings.KEY_HISTORY_INFO_SIZE)
             Stepper("历史记录上限: \(vm.historyInfoSize)", value: $vm.historyInfoSize, in: 100...2000, step: 100)
 
-            // TODO: Connect to Logic — saveParseErrorBody 未被解析器读取
-            #if DEBUG
-            Toggle("保存解析错误", isOn: Binding(
+            // 解析失败时把原始 HTML 存进日志目录，方便反馈问题
+            Toggle("保存解析错误现场", isOn: Binding(
                 get: { AppSettings.shared.saveParseErrorBody },
                 set: { AppSettings.shared.saveParseErrorBody = $0 }
             ))
-            #endif
 
             // 导出数据 (对齐 Android: export_data)
             Button("导出数据") {
@@ -1738,7 +1733,9 @@ class SettingsViewModel {
                 guard fm.fileExists(atPath: ehviewerFile.path) else { continue }
 
                 // 读取 SpiderInfo 以获取 gid/token/pages
-                guard let spiderInfo = SpiderInfoFile.read(from: dir) else { continue }
+                // 只要头部字段 —— 这里会遍历整个下载目录，逐本解析上万条 pToken 纯属浪费
+                // (对齐上游 2026-08-21「添加读取画廊信息头的功能」)
+                guard let spiderInfo = SpiderInfoFile.readHeader(from: dir) else { continue }
                 guard spiderInfo.gid > 0, !spiderInfo.token.isEmpty else { continue }
 
                 // 跳过已在数据库中的

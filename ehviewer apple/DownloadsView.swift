@@ -45,6 +45,10 @@ struct DownloadsView: View {
     // MARK: - 单项删除确认 (Fix: 从 Row 移至父视图，避免 Timer 刷新销毁 @State)
     @State private var deletingTaskGid: Int64? = nil
     @State private var showSingleDeleteConfirm = false
+    // 分享 (issue #2)
+    @State private var isExporting = false
+    @State private var exportError: String?
+    @State private var exportedZip: ExportedArchive?
 
     // MARK: - 标签管理
     @State private var showNewLabelAlert = false
@@ -96,7 +100,7 @@ struct DownloadsView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .searchable(text: $searchText, prompt: "搜索下载")
+            .searchable(text: $searchText, prompt: "搜索标题或标签")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     mainToolbarMenu
@@ -384,6 +388,18 @@ struct DownloadsView: View {
 
     // MARK: - 过滤后的任务列表
 
+    /// 打包并唤起系统分享 (issue #2)
+    private func shareGallery(_ gallery: GalleryInfo) async {
+        isExporting = true
+        defer { isExporting = false }
+        do {
+            let url = try await GalleryArchiveExporter.exportZip(for: gallery)
+            exportedZip = ExportedArchive(url: url)
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
     private var filteredTasks: [DownloadTask] {
         var tasks = vm.tasks
 
@@ -412,10 +428,22 @@ struct DownloadsView: View {
             tasks = tasks.filter { $0.state == DownloadManager.stateFailed }
         }
 
-        // 搜索过滤
-        if !searchText.isEmpty {
-            tasks = tasks.filter {
-                $0.gallery.bestTitle.localizedCaseInsensitiveContains(searchText)
+        // 搜索过滤 —— 标题 + 标签，多个词按 AND
+        // (对齐上游 2026-04-20「修复了已下载项目的按标签搜索功能」:
+        //  以空格拆词，每个词都要命中，标签支持 `female:xxx` 这种带命名空间的写法)
+        let terms = searchText
+            .split(whereSeparator: { $0 == " " || $0 == "\u{3000}" })
+            .map { String($0).lowercased() }
+            .filter { !$0.isEmpty }
+
+        if !terms.isEmpty {
+            tasks = tasks.filter { task in
+                let title = task.gallery.bestTitle.lowercased()
+                let tags = EhDatabase.shared.searchableTags(gid: task.gallery.gid)
+                    .map { $0.lowercased() }
+                return terms.allSatisfy { term in
+                    title.contains(term) || tags.contains { $0.contains(term) }
+                }
             }
         }
 
@@ -667,6 +695,8 @@ struct DownloadsView: View {
                             } onRequestDelete: {
                                 deletingTaskGid = task.gallery.gid
                                 showSingleDeleteConfirm = true
+                            } onShare: {
+                                Task { await shareGallery(task.gallery) }
                             }
                         }
                     }
@@ -687,6 +717,8 @@ struct DownloadsView: View {
                         } onRequestDelete: {
                             deletingTaskGid = task.gallery.gid
                             showSingleDeleteConfirm = true
+                        } onShare: {
+                            Task { await shareGallery(task.gallery) }
                         }
                     }
                     .buttonStyle(.plain)
@@ -694,6 +726,35 @@ struct DownloadsView: View {
             }
         }
         .listStyle(.plain)
+        .overlay {
+            if isExporting {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("正在打包…").font(.footnote).foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .alert("分享失败", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("好") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
+        .sheet(item: $exportedZip) { archive in
+            #if os(iOS)
+            ShareSheet(items: [archive.url])
+            #else
+            // macOS: 直接在 Finder 里定位打包好的 zip
+            Color.clear.onAppear {
+                NSWorkspace.shared.activateFileViewerSelecting([archive.url])
+                exportedZip = nil
+            }
+            #endif
+        }
         #if os(iOS)
         .fullScreenCover(item: $readerGallery) { gallery in
             ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages)
@@ -857,6 +918,7 @@ struct DownloadTaskRow: View {
     let onPause: () -> Void
     let onResume: () -> Void
     let onRequestDelete: () -> Void   // 请求删除 (由父视图处理确认)
+    let onShare: () -> Void           // 打包为 zip 并分享 (issue #2)
 
     var body: some View {
         HStack(spacing: 12) {
@@ -949,6 +1011,15 @@ struct DownloadTaskRow: View {
                     onResume()
                 } label: {
                     Label("继续", systemImage: "play")
+                }
+            }
+
+            // 分享 (issue #2: 打包成 zip 交给系统分享)
+            if task.state == DownloadManager.stateFinish {
+                Button {
+                    onShare()
+                } label: {
+                    Label("分享 (打包为 zip)", systemImage: "square.and.arrow.up")
                 }
             }
 

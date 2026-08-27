@@ -112,6 +112,11 @@ struct CachedGalleryListResult {
     let hasMore: Bool
     let nextPage: Int?
     let totalPages: Int? // 对齐 Android: GalleryListResult.pages
+    /// 分页游标 (对齐 Android ContentHelper.prevHref/nextHref)
+    /// ⚠️ 必须一起缓存: 只恢复列表而不恢复游标，"加载更多"会沿用上一个模式残留的
+    ///    nextHref 或退回 page=N 分页，导致列表重复/循环
+    let prevHref: String?
+    let nextHref: String?
 }
 
 private final class GalleryListResultWrapper: NSObject {

@@ -10,31 +10,58 @@ public struct SpiderInfoFile: Sendable {
 
     // MARK: - 读取
 
+    /// 单个 .ehviewer 文件的读取上限 —— 超过就认为文件损坏，避免整本读进内存
+    /// (对齐上游 2026-04-02「修复 SpiderInfo 读取时的 OOM 风险」+
+    ///  2026-03-06「为 IOUtils.readAsciiLine 添加最大长度限制」)
+    /// 正常文件 = 8 行头 + 每页一行 pToken，万页画廊也只有几百 KB
+    public static let maxFileSize = 8 * 1024 * 1024
+
+    /// 头部字段的行数上限 (VERSION + startPage + gid + token + mode + previewPages + previewPerPage + pages)
+    private static let headerLineCount = 8
+
     /// 从画廊目录读取 SpiderInfo
     /// - Parameter directory: 画廊下载目录
     /// - Returns: 解析后的 SpiderInfo，失败返回 nil
     public static func read(from directory: URL) -> SpiderInfo? {
-        let fileURL = directory.appendingPathComponent(filename)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return nil
-        }
+        read(fileURL: directory.appendingPathComponent(filename))
+    }
 
-        do {
-            let content = try String(contentsOf: fileURL, encoding: .utf8)
-            return SpiderInfo.deserialize(from: content)
-        } catch {
-            print("[SpiderInfoFile] Failed to read: \(error)")
-            return nil
-        }
+    /// 只读取头部字段 (startPage / gid / token / pages)，不加载 pTokenMap
+    ///
+    /// 下载列表只需要 startPage 显示"读到第几页"，却要为每一项解析整张 pToken 表；
+    /// 上游 2026-08-21「添加读取画廊信息头的功能」为此单独拆了 readHeader。
+    /// ⚠️ 这样得到的对象 pTokenMap 是空的，**不要**再写回磁盘，否则会把 pToken 全部抹掉。
+    public static func readHeader(from directory: URL) -> SpiderInfo? {
+        let fileURL = directory.appendingPathComponent(filename)
+        guard let content = readContent(at: fileURL) else { return nil }
+        // 只保留头部若干行再解析，避免为了一个 startPage 建出上万条 pToken
+        let head = content
+            .split(separator: "\n", maxSplits: headerLineCount, omittingEmptySubsequences: false)
+            .prefix(headerLineCount)
+            .joined(separator: "\n")
+        return SpiderInfo.deserialize(from: head)
     }
 
     /// 从 URL 读取 SpiderInfo
     /// - Parameter fileURL: .ehviewer 文件路径
     /// - Returns: 解析后的 SpiderInfo，失败返回 nil
     public static func read(fileURL: URL) -> SpiderInfo? {
+        guard let content = readContent(at: fileURL) else { return nil }
+        return SpiderInfo.deserialize(from: content)
+    }
+
+    /// 带体积上限的文件读取 —— 损坏/超大文件直接放弃，不冒 OOM 风险
+    private static func readContent(at fileURL: URL) -> String? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+           let size = attrs[.size] as? Int, size > maxFileSize {
+            print("[SpiderInfoFile] 文件异常大 (\(size) bytes)，跳过: \(fileURL.lastPathComponent)")
+            return nil
+        }
+
         do {
-            let content = try String(contentsOf: fileURL, encoding: .utf8)
-            return SpiderInfo.deserialize(from: content)
+            return try String(contentsOf: fileURL, encoding: .utf8)
         } catch {
             print("[SpiderInfoFile] Failed to read: \(error)")
             return nil

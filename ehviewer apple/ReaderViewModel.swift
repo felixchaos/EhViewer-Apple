@@ -11,6 +11,7 @@ import EhModels
 import EhSpider
 import EhSettings
 import EhDownload
+import EhAPI
 import CoreImage
 
 #if canImport(UIKit)
@@ -147,6 +148,10 @@ class ReaderViewModel {
     /// 标记 @ObservationIgnored 避免写入时触发冗余 body 重绘
     @ObservationIgnored private var pTokens: [Int: String] = [:]
     @ObservationIgnored private var showKeys: [Int: String] = [:]
+    /// 每页最近一次页面返回的 nl key — 用于跳过挂掉的 H@H 节点 (对齐 Android skipHathKey)
+    @ObservationIgnored private var skipHathKeys: [Int: String] = [:]
+    /// 已经用过的 nl key — 服务器重复返回同一个 key 说明没有别的节点了，不再重试
+    @ObservationIgnored private var usedSkipHathKeys: [Int: Set<String>] = [:]
     @ObservationIgnored private var loadingPages: Set<Int> = []
     @ObservationIgnored private var downloadingImages: Set<Int> = []
     @ObservationIgnored private var downloadDir: URL?
@@ -285,12 +290,6 @@ class ReaderViewModel {
 
     private static let pagesPattern = try! NSRegularExpression(
         pattern: #"(\d+)\s*pages?"#, options: .caseInsensitive
-    )
-    private static let imgSrcPattern = try! NSRegularExpression(
-        pattern: #"id="img"\s+src="([^"]+)""#
-    )
-    private static let showKeyPattern = try! NSRegularExpression(
-        pattern: #"var showkey\s*=\s*"([^"]+)""#
     )
 
     // MARK: - Double Page Logic
@@ -521,6 +520,8 @@ class ReaderViewModel {
         // 私有状态
         pTokens.removeAll()
         showKeys.removeAll()
+        skipHathKeys.removeAll()
+        usedSkipHathKeys.removeAll()
         loadingPages.removeAll()
         downloadingImages.removeAll()
         downloadDir = nil
@@ -528,18 +529,16 @@ class ReaderViewModel {
 
     // MARK: - Setup (Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，不再信任调用方传入的 Bool)
 
-    /// 检查下载状态并设置本地目录 — 替代旧的硬编码 `isDownloaded` + `gid-token` 路径
-    /// 验证: 数据库状态 == stateFinish AND 磁盘目录存在
+    /// 检查本地下载目录 — 替代旧的硬编码 `isDownloaded` + `gid-token` 路径
+    /// 有下载记录且目录里至少有一张图就启用本地读取，缺失的页由 loadPage 逐页回退网络
     func setupLocalGallery() async {
-        let fullyDownloaded = await DownloadManager.shared.isGalleryFullyDownloaded(gid: gid)
-        if fullyDownloaded,
-           let dir = await DownloadManager.shared.getDownloadedGalleryDirectory(gid: gid) {
-            self.isDownloaded = true
-            self.downloadDir = dir
-        } else {
-            self.isDownloaded = false
-            self.downloadDir = nil
-        }
+        // ★ 不再要求"整本下载完成"才读本地 (对齐 Android SpiderDen: 逐页判断)
+        //   之前只要 isGalleryFullyDownloaded 判错 (下载中断、少一页、目录存在但文件不全)，
+        //   整本都会退回网络加载 —— 表现为"下载完了还是很慢 / 断网完全打不开" (issue #8 问题二)
+        //   loadPage 里本地文件缺失时仍会逐页回退网络，因此这里放宽是安全的
+        let dir = await DownloadManager.shared.localGalleryDirectory(gid: gid)
+        self.downloadDir = dir
+        self.isDownloaded = dir != nil
     }
 
     func extractPTokens(from previewSet: PreviewSet) {
@@ -640,8 +639,10 @@ class ReaderViewModel {
             }
             return
         }
-        guard let urlString = imageURLs[index], let url = URL(string: urlString) else { return }
+        guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
         guard !downloadingImages.contains(index) else { return }
+        // 可变: 换 H@H 节点后 URL 会变 (对齐 Android SpiderQueen 的 nl= 重试)
+        var url = initialURL
         downloadingImages.insert(index)
         defer { downloadingImages.remove(index) }
 
@@ -652,7 +653,8 @@ class ReaderViewModel {
             }
         }
 
-        for attempt in 0..<3 {
+        let maxAttempts = 4
+        for attempt in 0..<maxAttempts {
             do {
                 var request = URLRequest(url: url)
                 request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -708,6 +710,9 @@ class ReaderViewModel {
                 }.value
 
                 if let img = img {
+                    // 阅读时同步下载 (对齐 Android 上游 sync_download_while_reading)
+                    await syncDownloadIfEnabled(index: index, data: data, url: url)
+
                     let cost = Self.decodedCost(of: img)
                     let cacheKey = self.cacheKey(for: index)
                     Self.imageCache.setObject(img, forKey: cacheKey, cost: cost)
@@ -738,7 +743,38 @@ class ReaderViewModel {
                     return
                 }
                 debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
-                if attempt < 2 {
+
+                // ★ 兜底 1: 改走 EhAPI 的域名前置直连回退
+                //   TLS 握手失败 / DNS 解析失败时裸 session 永远失败 (issue #6)
+                if Self.shouldFallbackToEhAPI(error) {
+                    if let data = try? await EhAPI.shared.fetchImageData(
+                        url: url.absoluteString,
+                        referer: GalleryActionService.siteBaseURL
+                    ), !data.isEmpty,
+                       let img = await Task.detached(priority: .userInitiated, operation: {
+                           Self.downsampledImage(data: data)
+                       }).value {
+                        Self.imageCache.setObject(img, forKey: self.cacheKey(for: index), cost: Self.decodedCost(of: img))
+                        await MainActor.run {
+                            self.cachedImages[index] = img
+                            self.errorPages.remove(index)
+                            self.downloadProgress.removeValue(forKey: index)
+                            self.evictDistantPages(from: self.currentPage)
+                        }
+                        return
+                    }
+                }
+
+                if Task.isCancelled { return }
+
+                // ★ 兜底 2: 换一个 H@H 节点 (对齐 Android SpiderQueen 的 nl= 重试)
+                //   节点掉线 / 证书异常时，同一个 URL 重试多少次都没用，必须换节点
+                if attempt >= 1, let newURL = await switchHathNode(index) {
+                    url = newURL
+                    continue
+                }
+
+                if attempt < maxAttempts - 1 {
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
                     if Task.isCancelled { return }
                     continue
@@ -749,6 +785,81 @@ class ReaderViewModel {
                     self.downloadProgress.removeValue(forKey: index)
                 }
             }
+        }
+    }
+
+    /// 阅读时同步下载 — 浏览未下载的画廊时把看过的图片顺手存进下载目录
+    ///
+    /// 对齐 Android 上游 2026-06-16「添加"阅读时同步下载"功能」。
+    /// Android 是在 SpiderDen 的写管道里分流；Apple 端阅读器自己下图，所以挂在这里。
+    /// 已经在读本地文件 (isDownloaded) 时不重复写。
+    private func syncDownloadIfEnabled(index: Int, data: Data, url: URL) async {
+        guard AppSettings.shared.syncDownloadWhileReading else { return }
+        guard !isDownloaded else { return }          // 本地已有整本，无需再存
+        guard !url.isFileURL else { return }         // 读的就是本地文件
+        guard let info = GalleryCache.shared.getDetail(gid: gid)?.info else { return }
+
+        // 扩展名优先用图片 URL 上的，拿不到就按数据头猜
+        var ext = "." + url.pathExtension.lowercased()
+        if url.pathExtension.isEmpty { ext = Self.imageExtension(for: data) }
+
+        await DownloadManager.shared.saveWhileReading(
+            gallery: info, pageIndex: index, data: data, extension: ext
+        )
+    }
+
+    /// 按文件头判断图片扩展名 (对齐 SpiderDen.detectImageExtension)
+    private static func imageExtension(for data: Data) -> String {
+        guard data.count >= 12 else { return ".jpg" }
+        let b = [UInt8](data.prefix(12))
+        if b[0] == 0xFF, b[1] == 0xD8, b[2] == 0xFF { return ".jpg" }
+        if b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 { return ".png" }
+        if b[0] == 0x47, b[1] == 0x49, b[2] == 0x46 { return ".gif" }
+        if b[8] == 0x57, b[9] == 0x45, b[10] == 0x42, b[11] == 0x50 { return ".webp" }
+        return ".jpg"
+    }
+
+    /// 换一个 H@H 节点重新获取图片 URL — 对齐 Android SpiderQueen 的 `?nl=<skipHathKey>` 重试
+    ///
+    /// E-Hentai 把图片分发到用户自建的 H@H 节点上，某个节点掉线 / 证书过期 / 被墙时，
+    /// 该页会一直下载失败。带上 nl= 参数重新请求页面，服务器就会换一个节点。
+    /// 这是"检索和预览都正常、点进阅读加载不出图片"最常见的原因之一 (issue #6)。
+    private func switchHathNode(_ index: Int) async -> URL? {
+        guard let key = skipHathKeys[index], !key.isEmpty else { return nil }
+        var used = usedSkipHathKeys[index] ?? []
+        // 同一个 key 再次出现 → 服务器已经没有别的节点可分配 (对齐 Android leakSkipHathKey)
+        guard !used.contains(key), used.count < 3 else { return nil }
+        used.insert(key)
+        usedSkipHathKeys[index] = used
+
+        guard let pToken = pTokens[index] else { return nil }
+        let site = GalleryActionService.siteBaseURL
+        var pageUrl = "\(site)s/\(pToken)/\(gid)-\(index + 1)"
+        pageUrl += pageUrl.contains("?") ? "&nl=\(key)" : "?nl=\(key)"
+
+        guard let result = try? await EhAPI.shared.getGalleryPage(url: pageUrl),
+              !result.imageUrl.isEmpty,
+              let newURL = URL(string: result.imageUrl) else { return nil }
+
+        skipHathKeys[index] = result.skipHathKey
+        if let showKey = result.showKey { showKeys[index] = showKey }
+        GalleryCache.shared.putImageURL(result.imageUrl, gid: gid, page: index)
+        await MainActor.run { self.imageURLs[index] = result.imageUrl }
+        debugLog("[Reader] Page \(index): switched H@H node → \(newURL.host ?? "?")")
+        return newURL
+    }
+
+    /// 是否值得改走 EhAPI 的域名前置回退 (对应 EhAPI.shouldTryDirectFallback)
+    private static func shouldFallbackToEhAPI(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .secureConnectionFailed, .cannotConnectToHost, .cannotFindHost,
+             .dnsLookupFailed, .timedOut, .networkConnectionLost,
+             .serverCertificateUntrusted, .serverCertificateHasBadDate,
+             .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid:
+            return true
+        default:
+            return false
         }
     }
 
@@ -817,34 +928,30 @@ class ReaderViewModel {
                 pageUrl = "\(site)s/\(pToken)/\(gid)-\(index + 1)"
             }
 
-            guard let url = URL(string: pageUrl) else { return }
-
-            var request = URLRequest(url: url)
-            request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                             forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 15
-
-            let (data, _) = try await Self.session.data(for: request)
-            let html = String(data: data, encoding: .utf8) ?? ""
-
-            if let m = Self.imgSrcPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-               let r = Range(m.range(at: 1), in: html) {
-                let imgUrl = String(html[r])
-                GalleryCache.shared.putImageURL(imgUrl, gid: gid, page: index)
-                await MainActor.run {
-                    self.imageURLs[index] = imgUrl
-                    self.errorPages.remove(index)
-                }
-            } else {
+            // ★ 统一走 EhAPI (对齐 Android EhEngine.getGalleryPage):
+            //   Cookie 清洁 + 速率限制 + 自动重试 + 域名前置直连回退,
+            //   不再用裸 URLSession 直连 —— 那会在 DNS 污染/SNI 拦截时直接 TLS 失败 (issue #6)
+            //   同时用 GalleryPageParser 解析, 图片 URL 中的 &amp; 等实体会被正确反转义
+            let result = try await EhAPI.shared.getGalleryPage(url: pageUrl)
+            let imgUrl = result.imageUrl
+            guard !imgUrl.isEmpty else {
                 debugLog("[Reader] Failed to extract image URL from page HTML for page \(index)")
+                // 抓不到图片 URL 通常意味着 EH 改了页面结构，留个现场
+                if let html = try? await EhAPI.shared.fetchHTML(url: pageUrl) {
+                    LogManager.shared.saveParseErrorBody(html, context: "gallery-page-\(gid)-\(index + 1)")
+                }
                 await MainActor.run { _ = self.errorPages.insert(index) }
                 return
             }
-
-            if let m = Self.showKeyPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-               let r = Range(m.range(at: 1), in: html) {
-                showKeys[index] = String(html[r])
+            GalleryCache.shared.putImageURL(imgUrl, gid: gid, page: index)
+            await MainActor.run {
+                self.imageURLs[index] = imgUrl
+                self.errorPages.remove(index)
             }
+            if let key = result.showKey {
+                showKeys[index] = key
+            }
+            skipHathKeys[index] = result.skipHathKey
         } catch is CancellationError {
             return
         } catch let urlError as URLError where urlError.code == .cancelled {
@@ -868,6 +975,7 @@ class ReaderViewModel {
         }
         Self.imageCache.removeObject(forKey: cacheKey(for: index))
         pTokens.removeValue(forKey: index)
+        usedSkipHathKeys.removeValue(forKey: index)
         GalleryCache.shared.removeImageURL(gid: gid, page: index)
         loadingPages.remove(index)
         await loadPageWithRetry(index)
@@ -904,13 +1012,8 @@ class ReaderViewModel {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"])
         }
 
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                         forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 15
-
-        let (data, _) = try await Self.session.data(for: request)
-        let html = String(data: data, encoding: .utf8) ?? ""
+        // 同样走 EhAPI 的回退链路, 不再裸连 (issue #6)
+        let html = try await EhAPI.shared.fetchHTML(url: url.absoluteString)
 
         let range = NSRange(html.startIndex..., in: html)
         let matches = Self.pTokenUrlPattern.matches(in: html, range: range)

@@ -558,6 +558,65 @@ public final class EhDatabase: Sendable {
         }
     }
 
+    /// 把详情页解析出的标签组存进 galleryTags 表
+    ///
+    /// 这张表和 Android 的 GalleryTagsDao 对应，是"下载列表按标签搜索"的数据来源。
+    /// 以前建了表却没人写，所以搜索只能匹配标题。
+    public func saveGalleryTags(gid: Int64, groups: [GalleryTagGroup]) throws {
+        var record = GalleryTagsRecord(gid: gid)
+        record.createTime = Date()
+        record.updateTime = Date()
+
+        for group in groups {
+            // 每个命名空间的标签用逗号拼一行，和 Android 的存法一致
+            let joined = group.tags.joined(separator: ",")
+            switch group.groupName.lowercased() {
+            case "artist":     record.artist = joined
+            case "cosplayer":  record.cosplayer = joined
+            case "character":  record.character = joined
+            case "female":     record.female = joined
+            case "group":      record.group = joined
+            case "language":   record.language = joined
+            case "male":       record.male = joined
+            case "misc":       record.misc = joined
+            case "mixed":      record.mixed = joined
+            case "other":      record.other = joined
+            case "parody":     record.parody = joined
+            case "reclass":    record.reclass = joined
+            default:           break
+            }
+        }
+        record.rows = groups.map { "\($0.groupName):\($0.tags.joined(separator: ","))" }
+            .joined(separator: ";")
+
+        try insertGalleryTags(record)
+    }
+
+    /// 某本画廊的全部标签 (扁平化，含 `命名空间:标签` 和裸标签两种形式)
+    /// 供下载列表按标签搜索使用
+    public func searchableTags(gid: Int64) -> [String] {
+        guard let record = try? getGalleryTags(gid: gid) else { return [] }
+        var result: [String] = []
+        let namespaced: [(String, String?)] = [
+            ("artist", record.artist), ("cosplayer", record.cosplayer),
+            ("character", record.character), ("female", record.female),
+            ("group", record.group), ("language", record.language),
+            ("male", record.male), ("misc", record.misc),
+            ("mixed", record.mixed), ("other", record.other),
+            ("parody", record.parody), ("reclass", record.reclass),
+        ]
+        for (namespace, value) in namespaced {
+            guard let value, !value.isEmpty else { continue }
+            for tag in value.split(separator: ",") {
+                let t = tag.trimmingCharacters(in: .whitespaces)
+                guard !t.isEmpty else { continue }
+                result.append(t)
+                result.append("\(namespace):\(t)")
+            }
+        }
+        return result
+    }
+
     public func insertGalleryTags(_ record: GalleryTagsRecord) throws {
         try dbQueue.write { db in
             try record.save(db)

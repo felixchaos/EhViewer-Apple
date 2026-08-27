@@ -19,6 +19,14 @@ struct GalleryCommentsView: View {
     let hasMore: Bool
     
     @State private var vm = GalleryCommentsViewModel()
+    @State private var composing: CommentComposeTarget?
+
+    /// 未登录时不显示发表入口 —— 点了也只会拿到服务端的拒绝
+    private var canComment: Bool { AppSettings.shared.isLogin }
+
+    private var galleryUrl: String {
+        "\(GalleryActionService.siteBaseURL)g/\(gid)/\(token)/"
+    }
     
     var body: some View {
         ScrollView {
@@ -62,6 +70,30 @@ struct GalleryCommentsView: View {
         .onAppear {
             vm.setInitialComments(initialComments, hasMore: hasMore)
         }
+        .toolbar {
+            if canComment {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        composing = CommentComposeTarget(comment: nil)
+                    } label: {
+                        Label("发表评论", systemImage: "square.and.pencil")
+                    }
+                }
+            }
+        }
+        .sheet(item: $composing) { target in
+            CommentComposerView(
+                gid: gid,
+                token: token,
+                galleryUrl: galleryUrl,
+                editing: target.comment,
+                apiUid: apiUid,
+                apiKey: apiKey,
+                onPosted: { list in
+                    vm.setInitialComments(list.comments, hasMore: list.hasMore)
+                }
+            )
+        }
     }
     
     // MARK: - 单条评论
@@ -95,9 +127,21 @@ struct GalleryCommentsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.primary)
             
-            // 投票按钮
-            if comment.voteUpAble || comment.voteDownAble {
+            // 投票 / 编辑
+            if comment.voteUpAble || comment.voteDownAble || comment.editable {
                 HStack(spacing: 16) {
+                    // editable 由服务端下发 —— 只有自己的评论才有
+                    if comment.editable {
+                        Button {
+                            composing = CommentComposeTarget(comment: comment)
+                        } label: {
+                            Label("编辑", systemImage: "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
                     if comment.voteUpAble {
                         Button {
                             Task {

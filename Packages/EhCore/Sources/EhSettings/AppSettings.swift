@@ -80,6 +80,14 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "download_delay") }
     }
 
+    /// 阅读时同步下载 — 浏览未下载的画廊时，把看过的图片顺手存进下载目录
+    /// (对齐 Android 上游 2026-06-16 `sync_download_while_reading`，默认关闭)
+    @ObservationIgnored
+    public var syncDownloadWhileReading: Bool {
+        get { _defaults.bool(forKey: "sync_download_while_reading") }
+        set { _defaults.set(newValue, forKey: "sync_download_while_reading") }
+    }
+
     @ObservationIgnored
     public var downloadTimeout: Int {
         get { _defaults.object(forKey: "download_timeout") as? Int ?? 60 }

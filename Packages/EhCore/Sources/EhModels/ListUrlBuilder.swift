@@ -196,6 +196,19 @@ public struct ListUrlBuilder: Sendable, Codable {
         }
     }
 
+    // MARK: - 关键词清洗
+
+    /// 去掉搜索词里的换行符 (对齐上游 2026-03-02 / 2026-03-14「搜索时过滤文本中的换行符」)
+    ///
+    /// 从别处粘贴标签时很容易带进 \r / \n。上游一开始替换成空格，后来改成**直接删除** ——
+    /// 因为多余的空格会被 E-Hentai 当成词分隔符，把 `artist:foo` 这类语法拆断。
+    /// 注意 `trimmingCharacters(in: .whitespaces)` 并不会去掉换行，必须显式处理。
+    public static func sanitizeKeyword(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\r", with: "")
+           .replacingOccurrences(of: "\n", with: "")
+           .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - 构建 URL (对应 Android build())
 
     public func build(site: EhSite = .eHentai) -> String {
@@ -214,7 +227,7 @@ public struct ListUrlBuilder: Sendable, Codable {
             }
 
             // 关键词
-            if let kw = keyword?.trimmingCharacters(in: .whitespaces), !kw.isEmpty {
+            if let kw = keyword.map(Self.sanitizeKeyword), !kw.isEmpty {
                 if let encoded = kw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
                     params.append("f_search=\(encoded)")
                 }
@@ -258,7 +271,8 @@ public struct ListUrlBuilder: Sendable, Codable {
             return baseUrl + "?" + params.joined(separator: "&")
 
         case .uploader:
-            let encoded = keyword?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+            let encoded = keyword.map(Self.sanitizeKeyword)?
+                .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
             var url = EhURL.host(for: site) + "uploader/" + encoded
             if pageIndex > 0 {
                 url += "/\(pageIndex)"
@@ -266,7 +280,8 @@ public struct ListUrlBuilder: Sendable, Codable {
             return url
 
         case .tag:
-            let encoded = keyword?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+            let encoded = keyword.map(Self.sanitizeKeyword)?
+                .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
             var url = EhURL.host(for: site) + "tag/" + encoded
             if pageIndex > 0 {
                 url += "/\(pageIndex)"
@@ -279,7 +294,8 @@ public struct ListUrlBuilder: Sendable, Codable {
                 url += "page=\(pageIndex)&"
             }
             url += "f_search="
-            if let kw = keyword?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            if let kw = keyword.map(Self.sanitizeKeyword)?
+                .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
                 url += kw
             }
             return url

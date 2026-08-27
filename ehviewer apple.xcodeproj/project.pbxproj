@@ -68,6 +68,8 @@
 		DC4A078B2F3DA21800717C38 /* Exceptions for "ehviewer apple" folder in "ehviewer apple" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
+				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 				Info.plist,
 			);
@@ -76,6 +78,8 @@
 		DC8DF28F2F408402005EFEC2 /* Exceptions for "ehviewer apple" folder in "ehviewer appleTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
+				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 			);
 			target = DC4A07782F3DA21800717C38 /* ehviewer appleTests */;

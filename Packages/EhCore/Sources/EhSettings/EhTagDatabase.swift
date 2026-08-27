@@ -183,6 +183,41 @@ public final class EhTagDatabase: @unchecked Sendable {
         }
     }
 
+    /// 列出某个命名空间下的标签 (供标签选择器按分组浏览)
+    ///
+    /// 内部索引的 key 本来就是 `namespace:tag`，按前缀取区间即可。
+    /// - Parameters:
+    ///   - namespace: 如 "female" / "artist"
+    ///   - filter: 可选的关键词过滤，中英文都会匹配
+    public func tags(inNamespace namespace: String, filter: String = "", limit: Int = 300)
+        -> [(chinese: String, english: String)] {
+        queue.sync {
+            guard _isLoaded else { return [] }
+            let prefix = namespace.lowercased() + ":"
+            let lowered = filter.lowercased()
+
+            var results: [(chinese: String, english: String)] = []
+            let startIdx = _lowerBound(for: prefix)
+            for i in startIdx..<_sortedKeys.count {
+                guard results.count < limit else { break }
+                let key = _sortedKeys[i]
+                guard key.hasPrefix(prefix) else { break }
+                if !lowered.isEmpty {
+                    guard key.contains(lowered) || _sortedLcValues[i].contains(lowered) else { continue }
+                }
+                results.append((chinese: _sortedValues[i], english: key))
+            }
+            return results
+        }
+    }
+
+    /// 索引里实际存在标签的命名空间 (按 namespaceToPrefix 的顺序)
+    public func availableNamespaces() -> [String] {
+        let ordered = ["female", "male", "mixed", "artist", "group", "parody",
+                       "character", "cosplayer", "language", "other", "reclass", "misc"]
+        return ordered.filter { !tags(inNamespace: $0, limit: 1).isEmpty }
+    }
+
     /// 将 "namespace:tag" 格式的标签转为搜索关键词格式
     /// (对齐 Android SearchBar.TagSuggestion.rebuildKeyword + wrapTagKeyword)
     /// 例: "artist:some name" → "a:\"some name$\""

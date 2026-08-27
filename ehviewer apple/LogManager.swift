@@ -8,6 +8,7 @@
 
 import Foundation
 import os.log
+import EhSettings
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -100,6 +101,22 @@ public final class LogManager: Sendable {
     // MARK: - 文件管理
 
     /// 获取所有日志文件 URL (用于导出)
+    /// 解析失败时保存原始 HTML，方便复现和反馈
+    /// (对齐 Android Settings.KEY_SAVE_PARSE_ERROR_BODY)
+    /// 只在设置开启时落盘 —— 页面 HTML 可能几百 KB，默认不留
+    public func saveParseErrorBody(_ body: String, context: String) {
+        guard AppSettings.shared.saveParseErrorBody, !body.isEmpty else { return }
+
+        let safeContext = context.replacingOccurrences(of: "/", with: "_")
+        let stamp = Int(Date().timeIntervalSince1970)
+        let file = logDirectory.appendingPathComponent("parse-error-\(safeContext)-\(stamp).html")
+
+        // 单份最多 1MB，避免异常页面把缓存目录撑爆
+        let capped = body.count > 1_000_000 ? String(body.prefix(1_000_000)) : body
+        try? capped.write(to: file, atomically: true, encoding: .utf8)
+        warning("解析失败，已保存现场: \(file.lastPathComponent)", category: "Parser")
+    }
+
     public func allLogFiles() -> [URL] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else {

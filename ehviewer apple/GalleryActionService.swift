@@ -91,6 +91,13 @@ final class GalleryActionService {
         await DownloadManager.shared.startDownload(gallery: gallery)
     }
 
+    /// 当前是否在计费网络上，且用户开了"移动网络下载前提醒"
+    /// (对齐 Android Settings.KEY_CELLULAR_NETWORK_WARNING)
+    var shouldWarnAboutCellular: Bool {
+        guard AppSettings.shared.cellularNetworkWarning else { return false }
+        return NetworkReachability.isConstrainedOrCellular
+    }
+
     // MARK: - 分享/复制
 
     /// 获取画廊 URL

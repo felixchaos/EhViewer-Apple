@@ -21,15 +21,23 @@ struct GalleryListView: View {
 
     enum ListMode {
         case home
+        /// 订阅标签列表 (/watched) —— 对齐 Android SubscriptionsScene
+        case subscription
         case popular
         case search(keyword: String)
         case tag(keyword: String)
         case favorites(slot: Int)
+
+        var isSubscription: Bool {
+            if case .subscription = self { return true }
+            return false
+        }
     }
 
     @State private var viewModel = GalleryListViewModel()
     @State private var showQuickSearch = false
     @State private var showAdvancedSearch = false
+    @State private var showTagSelector = false
     @State private var advancedSearch = AdvancedSearchState()
     @State private var selectedQuickSearch: QuickSearchRecord?
     @State private var selectedGallery: GalleryInfo?
@@ -244,6 +252,11 @@ struct GalleryListView: View {
             .sheet(isPresented: $showAdvancedSearch) {
                 AdvancedSearchView(state: advancedSearch)
             }
+            .sheet(isPresented: $showTagSelector) {
+                TagSelectorView { keyword in
+                    viewModel.appendSearchKeyword(keyword)
+                }
+            }
             .onChange(of: selectedQuickSearch) { _, newValue in
                 if let search = newValue {
                     viewModel.applyQuickSearch(search)
@@ -314,6 +327,11 @@ struct GalleryListView: View {
         .sheet(isPresented: $showAdvancedSearch) {
             AdvancedSearchView(state: advancedSearch)
         }
+        .sheet(isPresented: $showTagSelector) {
+            TagSelectorView { keyword in
+                viewModel.appendSearchKeyword(keyword)
+            }
+        }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
                 viewModel.applyQuickSearch(search)
@@ -349,6 +367,7 @@ struct GalleryListView: View {
     private var navigationTitle: String {
         switch mode {
         case .home: return AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
+        case .subscription: return "订阅"
         case .popular: return "热门"
         case .search(let kw): return "搜索: \(kw)"
         case .tag: return "标签搜索"  // 对齐 Android: 标签关键字显示在搜索框而非标题
@@ -508,6 +527,11 @@ struct GalleryListView: View {
         .sheet(isPresented: $showAdvancedSearch) {
             AdvancedSearchView(state: advancedSearch)
         }
+        .sheet(isPresented: $showTagSelector) {
+            TagSelectorView { keyword in
+                viewModel.appendSearchKeyword(keyword)
+            }
+        }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
                 viewModel.applyQuickSearch(search)
@@ -568,6 +592,16 @@ struct GalleryListView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // 标签选择器 (对齐 Android 上游 TagSelectorActivity)
+            // 省得用户手打 f:"big breasts$" 这种语法
+            Button {
+                showTagSelector = true
+            } label: {
+                Image(systemName: "tag")
+                    .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
 
             // 搜索选项按钮 (始终可见, 对齐 Android AddDeleteDrawable)
             Button {
@@ -893,18 +927,35 @@ struct GalleryListView: View {
         }
     }
 
+    /// 当前错误是不是 IP 封禁 (issue #1: 以前这种情况只显示一片空白)
+    private var isIPBanned: Bool {
+        viewModel.errorMessage?.contains("临时封禁") == true
+    }
+
     private var errorView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "wifi.exclamationmark")
+            Image(systemName: isIPBanned ? "hand.raised.slash" : "wifi.exclamationmark")
                 .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isIPBanned ? .orange : .secondary)
             Text(viewModel.errorMessage ?? "加载失败")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
+            // IP 封禁 —— 换节点是唯一有效动作，单独给一组提示
+            if isIPBanned {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("这是 E-Hentai 的限制，与 App 无关", systemImage: "info.circle")
+                    Label("换一个 VPN 节点通常立即恢复", systemImage: "arrow.triangle.2.circlepath")
+                    Label("同一节点被多人共用时最容易触发", systemImage: "person.2")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 32)
+            }
+
             // 网络提示
-            if let msg = viewModel.errorMessage,
+            if let msg = viewModel.errorMessage, !isIPBanned,
                msg.contains("超时") || msg.contains("timed out") || msg.contains("连接") || msg.contains("域名") || msg.contains("DNS") {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("请确认 VPN / 代理已开启", systemImage: "lock.shield")
@@ -961,6 +1012,29 @@ struct GalleryRow: View {
 
     @Environment(\.responsiveLayout) private var layout
 
+    // 列表显示开关 (对齐 Android Settings: SHOW_GALLERY_PAGES / RATING / READ_PROGRESS / THUMB_SIZE)
+    private let showPages = AppSettings.shared.showGalleryPages
+    private let showRating = AppSettings.shared.showGalleryRating
+    private let showProgress = AppSettings.shared.showReadProgress
+    private let thumbScale = GalleryRow.scale(for: AppSettings.shared.thumbSize)
+
+    /// 缩略图大小: 0 小 / 1 中 / 2 大
+    private static func scale(for size: Int) -> CGFloat {
+        switch size {
+        case 0:  return 0.8
+        case 2:  return 1.25
+        default: return 1.0
+        }
+    }
+
+    /// 已读到第几页 —— 只有开了"显示阅读进度"才去查
+    private var readProgress: Int? {
+        guard showProgress, gallery.pages > 0 else { return nil }
+        // 存的是 0-based 页索引，展示时 +1
+        let index = UserDefaults.standard.integer(forKey: "reading_progress_\(gallery.gid)")
+        return index > 0 ? index + 1 : nil
+    }
+
     /// 对齐 Android EhUrl.getFixedThumbUrl: 修复缩略图 CDN 域名不可达问题
     /// 开启时将 ehgt.org / gt0-3.ehgt.org 替换为当前站点的缩略图前缀
     private var thumbURL: URL? {
@@ -987,7 +1061,8 @@ struct GalleryRow: View {
             } placeholder: {
                 Color(.secondarySystemBackground)
             }
-            .frame(width: layout.galleryThumbnailSize.width, height: layout.galleryThumbnailSize.height)
+            .frame(width: layout.galleryThumbnailSize.width * thumbScale,
+                   height: layout.galleryThumbnailSize.height * thumbScale)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             // 信息区 (对齐 Android RelativeLayout 右侧元素)
@@ -1013,7 +1088,9 @@ struct GalleryRow: View {
                 // 底部区域 — 评分 + 图标行 (对齐 Android rating + LinearLayout)
                 HStack {
                     // 评分星星 (对齐 Android SimpleRatingView: above category)
-                    SimpleRatingView(rating: gallery.rating)
+                    if showRating {
+                        SimpleRatingView(rating: gallery.rating)
+                    }
 
                     Spacer(minLength: 4)
 
@@ -1029,9 +1106,16 @@ struct GalleryRow: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Text("\(gallery.pages)P")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        if let readProgress {
+                            Text("读至 \(readProgress)")
+                                .font(.caption2)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        if showPages {
+                            Text("\(gallery.pages)P")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -1134,8 +1218,9 @@ class GalleryListViewModel {
         searchHistory = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
     }
 
-    func addSearchToHistory(_ text: String) {
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+    func addSearchToHistory(_ rawText: String) {
+        let text = ListUrlBuilder.sanitizeKeyword(rawText)
+        guard !text.isEmpty else { return }
         var history = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
         history.removeAll { $0 == text }
         history.insert(text, at: 0)
@@ -1187,6 +1272,14 @@ class GalleryListViewModel {
     }
 
     /// 应用搜索建议到搜索文本
+    /// 把标签选择器选中的关键词接到搜索框末尾
+    func appendSearchKeyword(_ keyword: String) {
+        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        // 已经有这个标签就不重复追加
+        guard !trimmed.contains(keyword) else { return }
+        searchText = trimmed.isEmpty ? keyword : trimmed + " " + keyword
+    }
+
     func applySuggestion(_ suggestion: String) {
         searchText = EhTagDatabase.applySuggestion(to: searchText, suggestion: suggestion)
         suggestions = []
@@ -1211,22 +1304,30 @@ class GalleryListViewModel {
         print("[EhVM] loadGalleries: START mode=\(mode)")
 
         currentMode = mode
-        
+
+        // ★ 换模式/换筛选条件时必须丢弃上一次的分页游标，
+        //   否则"加载更多"会用别的列表的 nextHref 继续翻页 (issue #8 问题一)
+        prevHref = nil
+        nextHref = nil
+        currentPage = 0
+
         // 先查缓存 (空结果不视为有效缓存 — 可能是之前网络失败)
-        let cacheKey = Self.cacheKey(for: mode, page: 0)
+        let cacheKey = self.cacheKey(for: mode, page: 0)
         if let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
            !cached.galleries.isEmpty {
             print("[EhVM] loadGalleries: CACHE HIT \(cached.galleries.count) galleries")
             galleries = cached.galleries
             hasMore = cached.hasMore
             totalPages = cached.totalPages ?? 0
+            // 游标随缓存一起恢复，保证继续翻页接的是这一页的下一页
+            prevHref = cached.prevHref
+            nextHref = cached.nextHref
             currentCacheKey = cacheKey
             return
         }
 
         isLoading = true
         errorMessage = nil
-        currentPage = 0
         currentCacheKey = cacheKey
 
         Task {
@@ -1271,18 +1372,25 @@ class GalleryListViewModel {
         currentMode = mode
         errorMessage = nil
         currentPage = 0
-        let cacheKey = Self.cacheKey(for: mode, page: 0)
+        prevHref = nil
+        nextHref = nil
+        let cacheKey = self.cacheKey(for: mode, page: 0)
         currentCacheKey = cacheKey
         await fetchPage(mode: mode, page: 0)
     }
 
     func search() {
+        // 粘贴进来的搜索词常带 \r\n，会把 `artist:foo` 之类的语法拆断
+        // (对齐上游 2026-03-02 / 03-14「搜索时过滤文本中的换行符」)
+        searchText = ListUrlBuilder.sanitizeKeyword(searchText)
         guard !searchText.isEmpty else { return }
         addSearchToHistory(searchText)
         galleries = []
         isLoading = true
         errorMessage = nil
         currentPage = 0
+        prevHref = nil
+        nextHref = nil
         // 清除高级搜索参数
         currentAdvanceSearch = -1
         currentMinRating = -1
@@ -1298,6 +1406,7 @@ class GalleryListViewModel {
 
     /// 带高级搜索参数的搜索 (对齐 Android AdvanceSearchTable → ListUrlBuilder)
     func searchWithAdvanced(_ state: AdvancedSearchState) {
+        searchText = ListUrlBuilder.sanitizeKeyword(searchText)
         if !searchText.isEmpty { addSearchToHistory(searchText) }
         currentAdvanceSearch = state.advanceSearchValue
         currentMinRating = state.minRatingValue
@@ -1312,6 +1421,8 @@ class GalleryListViewModel {
             isLoading = true
             errorMessage = nil
             currentPage = 0
+            prevHref = nil
+            nextHref = nil
             Task {
                 await fetchPage(mode: .home, page: 0)
             }
@@ -1322,6 +1433,8 @@ class GalleryListViewModel {
         isLoading = true
         errorMessage = nil
         currentPage = 0
+        prevHref = nil
+        nextHref = nil
         Task {
             await fetchPage(mode: .search(keyword: searchText), page: 0)
         }
@@ -1342,6 +1455,8 @@ class GalleryListViewModel {
             isLoading = true
             errorMessage = nil
             currentPage = 0
+            prevHref = nil
+            nextHref = nil
             Task {
                 await fetchPage(mode: .search(keyword: searchText), page: 0)
             }
@@ -1354,6 +1469,8 @@ class GalleryListViewModel {
             isLoading = true
             errorMessage = nil
             currentPage = 0
+            prevHref = nil
+            nextHref = nil
             Task {
                 await fetchPage(mode: .home, page: 0)
             }
@@ -1377,6 +1494,8 @@ class GalleryListViewModel {
         isLoading = true
         errorMessage = nil
         currentPage = 0
+        prevHref = nil
+        nextHref = nil
 
         // 构建带有分类和评分过滤的搜索
         Task {
@@ -1421,8 +1540,18 @@ class GalleryListViewModel {
             let result = try await EhAPI.shared.getGalleryList(url: urlComponents.url!.absoluteString)
 
             self.galleries = result.galleries
+            // ★ 记录分页游标: 快速搜索的 URL 是这里现拼的，
+            //   不记下来 loadMore 会退回 page=N 分页并按 mode 重新拼 URL → 加载到别的列表
+            self.prevHref = result.prevHref
+            self.nextHref = result.nextHref
+            self.totalPages = result.pages
             // ★ 防止分页回绕: nextPage 必须 > 0 才有下一页 (E-Hentai 末页 ptt ">" 链接回 page=0)
-            self.hasMore = (result.nextPage ?? 0) > 0 || result.nextHref != nil
+            if result.pages < 0 {
+                self.hasMore = result.nextHref != nil
+            } else {
+                self.hasMore = (result.nextPage ?? 0) > 0
+                if !self.hasMore { self.nextHref = nil }
+            }
             self.isLoading = false
         } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1459,8 +1588,14 @@ class GalleryListViewModel {
                 self.prevHref = result.prevHref
                 self.nextHref = result.nextHref
                 self.totalPages = result.pages
-                // 有 nextHref 才继续
-                self.hasMore = result.nextHref != nil
+                if result.pages < 0 {
+                    // searchnav 模式: 有 #unext 才继续
+                    self.hasMore = result.nextHref != nil
+                } else {
+                    // ptt 模式: 末页的 ">" 会回绕到 page=0，nextHref 同样要丢弃
+                    self.hasMore = (result.nextPage ?? 0) > 0
+                    if !self.hasMore { self.nextHref = nil }
+                }
                 self.isLoading = false
             } catch {
                 if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1511,6 +1646,8 @@ class GalleryListViewModel {
         isLoading = true
         errorMessage = nil
         currentPage = 0
+        prevHref = nil
+        nextHref = nil
         currentMode = mode
         
         Task {
@@ -1526,6 +1663,8 @@ class GalleryListViewModel {
         isLoading = true
         errorMessage = nil
         currentPage = 0
+        prevHref = nil
+        nextHref = nil
         currentMode = mode
         
         Task {
@@ -1604,10 +1743,16 @@ class GalleryListViewModel {
         } else {
             let site = AppSettings.shared.gallerySite
             switch mode {
-            case .home:
+            case .home, .subscription:
                 var builder = ListUrlBuilder()
-                builder.mode = .normal
+                builder.mode = mode.isSubscription
+                    ? .subscription
+                    : (ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal)
                 builder.category = currentCategory
+                builder.advanceSearch = currentAdvanceSearch
+                builder.minRating = currentMinRating
+                builder.pageFrom = currentPageFrom
+                builder.pageTo = currentPageTo
                 baseUrl = builder.build(site: site)
             case .search(let keyword):
                 var builder = ListUrlBuilder()
@@ -1666,8 +1811,12 @@ class GalleryListViewModel {
         switch mode {
         case .home:
             var builder = ListUrlBuilder()
-            builder.mode = .normal
+            builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
             builder.category = currentCategory
+            builder.advanceSearch = currentAdvanceSearch
+            builder.minRating = currentMinRating
+            builder.pageFrom = currentPageFrom
+            builder.pageTo = currentPageTo
             baseUrl = builder.build(site: site)
         case .search(let keyword):
             var builder = ListUrlBuilder()
@@ -1759,11 +1908,29 @@ class GalleryListViewModel {
             let urlString: String
 
             switch mode {
-            case .home:
+            case .subscription:
+                // 订阅列表: /watched，只出带订阅标签的新画廊
                 var builder = ListUrlBuilder()
-                builder.mode = .normal
+                builder.mode = .subscription
                 builder.pageIndex = page
                 builder.category = currentCategory
+                builder.advanceSearch = currentAdvanceSearch
+                builder.minRating = currentMinRating
+                builder.pageFrom = currentPageFrom
+                builder.pageTo = currentPageTo
+                urlString = builder.build(site: site)
+            case .home:
+                // ★ 首页同样要带上高级搜索参数 (对齐 Android GalleryListScene:
+                //   无关键字时也用同一个 ListUrlBuilder，f_sr/f_srdd 等不会被丢弃)
+                //   之前这里只传 category，导致"最低评分 / 页数范围 / 订阅搜索"在无关键字时全部失效
+                var builder = ListUrlBuilder()
+                builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
+                builder.pageIndex = page
+                builder.category = currentCategory
+                builder.advanceSearch = currentAdvanceSearch
+                builder.minRating = currentMinRating
+                builder.pageFrom = currentPageFrom
+                builder.pageTo = currentPageTo
                 urlString = builder.build(site: site)
             case .popular:
                 urlString = EhURL.popularUrl(for: site)
@@ -1820,13 +1987,16 @@ class GalleryListViewModel {
             } else if case .favorites = mode {
                 // 收藏夹使用 href-based 翻页
                 self.hasMore = result.nextHref != nil
-            } else if result.nextHref != nil {
-                // searchnav 模式 (日期跳转后) 用 nextHref
-                self.hasMore = true
+            } else if result.pages < 0 {
+                // searchnav 模式 (解析器置 pages = -1): 只能靠 #unext 判断
+                self.hasMore = result.nextHref != nil
             } else {
                 // ptt 分页: nextPage 必须 > 当前 page 才有下一页
-                // E-Hentai 末页 ptt ">" 链接回 page=0 → nextPage=0 → 不再加载
+                // E-Hentai 末页 ptt ">" 链接会回绕到 page=0，
+                // 此时 nextHref 也是回绕链接，必须一并丢弃 ——
+                // 否则 loadMore 会优先用它翻回第一页，表现为"列表从头循环" (issue #8 问题一)
                 self.hasMore = (result.nextPage ?? 0) > page
+                if !self.hasMore { self.nextHref = nil }
             }
             
             self.isLoading = false
@@ -1834,13 +2004,15 @@ class GalleryListViewModel {
 
             // 缓存第一页结果
             if page == 0 {
-                let cacheKey = Self.cacheKey(for: mode, page: 0)
+                let cacheKey = self.cacheKey(for: mode, page: 0)
                 GalleryCache.shared.putListResult(
                     CachedGalleryListResult(
                         galleries: self.galleries,
                         hasMore: self.hasMore,
                         nextPage: result.nextPage,
-                        totalPages: self.totalPages
+                        totalPages: self.totalPages,
+                        prevHref: result.prevHref,
+                        nextHref: result.nextHref
                     ),
                     forKey: cacheKey
                 )
@@ -1857,14 +2029,21 @@ class GalleryListViewModel {
         }
     }
 
+    /// 当前生效的筛选条件签名 — 参与缓存 key，
+    /// 否则改了分类/最低评分后仍会命中旧的未过滤缓存
+    private var filterSignature: String {
+        "\(currentSearchMode.rawValue)|\(currentCategory)|\(currentAdvanceSearch)|\(currentMinRating)|\(currentPageFrom)-\(currentPageTo)"
+    }
+
     /// 生成缓存 key
-    private static func cacheKey(for mode: GalleryListView.ListMode, page: Int) -> String {
+    private func cacheKey(for mode: GalleryListView.ListMode, page: Int) -> String {
         switch mode {
-        case .home: return "home:\(page)"
+        case .home: return "home:\(filterSignature):\(page)"
+        case .subscription: return "watched:\(filterSignature):\(page)"
         case .popular: return "popular:\(page)"
-        case .search(let kw): return "search:\(kw):\(page)"
+        case .search(let kw): return "search:\(kw):\(filterSignature):\(page)"
         case .tag(let kw): return "tag:\(kw):\(page)"
-        case .favorites(let slot): return "fav:\(slot):\(page)"
+        case .favorites(let slot): return "fav:\(slot):\(favSearchKeyword ?? ""):\(page)"
         }
     }
 }

@@ -1,274 +1,181 @@
 # EhViewer-Apple
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-brightgreen" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-1.2.1-brightgreen" alt="Version"/>
   <img src="https://img.shields.io/badge/platform-iOS%2026%2B%20%7C%20macOS%2026%2B-blue" alt="Platform"/>
   <img src="https://img.shields.io/badge/swift-6.0-orange" alt="Swift 6.0"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
 
-EhViewer-Apple 是一款适用于 iOS 和 macOS 的 [E-Hentai](https://e-hentai.org) / [ExHentai](https://exhentai.org) 画廊浏览客户端，使用 SwiftUI 原生构建。
+用 SwiftUI 重写的 [E-Hentai](https://e-hentai.org) / [ExHentai](https://exhentai.org) 画廊客户端，支持 iPhone、iPad 和 Mac。
 
-> **致敬**: 本项目灵感来源于 Android 端的 [EhViewer](https://github.com/Ehviewer-Overhauled/Ehviewer) 和 [EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ)，感谢原作者的出色工作。
-
----
-
-## 📢 v1.1.0 — 首个正式 Release
-
-首个多平台发布版本，提供 iPhone / iPad / Mac 安装包。
-
-### 🔧 Bug 修复
-- 修复左右翻页手势丢失 — ZoomableScrollView 初始化正确禁用内层滚动
-- 修复标签搜索列表点击画廊导航循环和错乱
-- 修复启动页面设置无法反映到 iPhone 底部导航栏
-- 修复热门列表点击画廊报错
-- 修复启动页面 Picker 下拉菜单无法点击（AppSettings.launchPage 改为 Observable）
-- 修复 HistoryView 重复注册 navigationDestination 警告
-- 修复 ReaderViewModel Main actor isolation 构建错误
-
-### 🏗 架构改进
-- NavigationLink 统一采用 value-based API，消除导航栈冲突
-- Tab.bottomTabs 改为动态计算属性，启动页自动替换底部栏位置
-- maxDecodePixelSize 改用固定保守值，避免非主线程访问 UIApplication
-
-### 🔒 并发安全 (继承 v1.0.1 审计)
-- **SpiderDen** — 静态可变状态用 `NSLock` 保护
-- **DownloadManager.SpiderInfoUpdater** — 迁移为 `actor`
-- **GalleryDetailViewModel** — 标注 `@MainActor`
-- **AppSettings** — UI 属性改用 `access / withMutation` 正确触发 `@Observable`
-
-### 🧠 内存优化
-- NSCache 容量根据设备物理内存自适应 (80–400 MB)
-- 翻页时主动驱逐远距离页面
+功能与交互对齐 Android 端的 [EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ)，网络层、解析器、下载引擎均为对照其实现重写，而非套壳。
 
 ---
 
-## 📢 v1.0.0 版本说明
+## 安装
 
-首个正式版本，包含以下核心功能与优化：
+**本项目没有 TestFlight，也不会上架 App Store。** 内容形态不符合审核指南，请不要等待邀请。
 
-- **完整的画廊浏览体验** — 首页热门、最新、搜索、标签浏览
-- **高级搜索** — 分类筛选、关键词、标签、评分过滤、页码范围
-- **原生阅读器** — 横向翻页 / 纵向滚动，支持双指缩放，流畅手势翻页
-- **下载管理** — 后台下载、断点续传、标签分组、进度通知
-- **收藏同步** — 云端收藏夹 + 本地收藏，支持多文件夹管理
-- **多层缓存** — 内存 + 磁盘缓存，大幅提升二次加载速度
-- **安全保护** — Face ID / Touch ID / 密码锁，隐私无忧
-- **多平台原生** — iPhone / iPad / Mac 全平台适配
+| 方式 | 平台 | 有效期 | 说明 |
+|------|------|--------|------|
+| Ad-Hoc 分发 | iPhone / iPad | 1 年 | 需要把设备 UDID 登记进描述文件，然后用 Safari 打开 `itms-services://` 链接安装 |
+| Xcode 自签 | iPhone / iPad | 免费账号 7 天，付费账号 1 年 | 见下文「从源码构建」 |
+| 公证 DMG | Mac | 1 年 | 已公证，不会触发 Gatekeeper 警告 |
 
-## ✨ 功能特性
+已发布的安装包见 [Releases](../../releases)。
 
-- 🔍 **画廊浏览** — 支持热门、最新、收藏、排行榜等多种浏览方式
-- 🔎 **高级搜索** — 分类筛选、关键词、标签搜索、快速搜索收藏
-- 📖 **阅读器** — 横向翻页 / 纵向滚动，支持缩放、手势操作
-- ⬇️ **下载管理** — 后台下载、断点续传、通知提醒
-- ⭐ **收藏管理** — 多文件夹收藏同步
-- 🔐 **安全保护** — Face ID / Touch ID / 密码锁
-- 🌐 **网络优化** — Domain Fronting 回退、DNS over HTTPS
-- 🖥️ **多平台** — iOS / iPadOS / macOS 原生体验
+### 只有 Windows 怎么办
 
-## 📦 项目结构
+签名和打包必须在 macOS 上完成，Windows 无法自行构建。可选路径：
 
-```
-EhViewer-Apple/
-├── ehviewer apple/              # 主 App 目标
-│   ├── *View.swift              # SwiftUI 视图层
-│   ├── ehviewer_appleApp.swift  # App 入口
-│   └── Assets.xcassets/         # 资源文件
-├── Packages/                    # Swift Package 模块化架构
-│   ├── EhCore/                  # 核心模型、数据库、设置
-│   │   ├── EhModels/            #   数据模型
-│   │   ├── EhDatabase/          #   GRDB 数据库
-│   │   └── EhSettings/          #   全局配置
-│   ├── EhNetwork/               # 网络层
-│   │   ├── EhAPI/               #   API 请求引擎
-│   │   ├── EhCookie/            #   Cookie 管理
-│   │   └── EhDNS/               #   DNS 与域名前置
-│   ├── EhParser/                # HTML/JSON 解析器
-│   ├── EhSpider/                # 图片抓取引擎
-│   ├── EhDownload/              # 下载管理器
-│   └── EhUI/                    # 可复用 UI 组件
-└── ehviewer apple.xcodeproj/    # Xcode 工程文件
-```
+- 用已发布的 Ad-Hoc 包安装，前提是你的设备 UDID 已被登记（在 issue 里提供 UDID 即可）
+- iOS 16 及以下可以用巨魔（TrollStore）安装未签名 IPA，但本项目最低要求 iOS 26，暂不适用
+- 借一台 Mac 完成一次自签，有效期 7 天到 1 年不等
 
-## 🛠️ 环境要求
+---
 
-| 项目 | 最低版本 |
-|------|---------|
+## 功能
+
+**浏览与搜索**：首页、热门、排行榜、订阅标签列表；高级搜索支持分类、评分下限、页数范围与命名空间；标签选择器可按分组浏览并自动拼装搜索语法；标签中文翻译由 EhTagDatabase 提供。
+
+**阅读器**：横向翻页与纵向滚动，双页排版（iPad / Mac），双指缩放，点击分区翻页，GIF 动图，键盘与外置蓝牙翻页器，音量键翻页，护眼色彩滤镜。
+
+**下载**：后台下载、断点续传、标签分组、通知与灵动岛进度、阅读时同步下载、按标题或标签搜索、打包为 zip 分享。
+
+**账号**：网页登录、Cookie 粘贴登录、访客浏览；收藏夹云端同步；评论发表与编辑；图片配额查看与重置；我的标签管理。
+
+**资源**：归档下载与 H@H 派发、种子列表、站内公告。
+
+**网络容灾**：内置 IP 表与自定义 Hosts、域名前置回退、DNS over HTTPS、H@H 节点自动切换。
+
+---
+
+## 环境要求
+
+| 项目 | 版本 |
+|------|------|
 | Xcode | 26.0+ |
 | Swift | 6.0 |
-| iOS | 26.0+ |
+| iOS / iPadOS | 26.0+ |
 | macOS | 26.0+ |
 
-## 🚀 快速开始
+系统要求较高是因为代码大量使用了 Swift 6 严格并发与 iOS 26 的 SwiftUI API（`@Observable`、`scrollPosition`、`ContentUnavailableView` 等）。降低最低版本需要成规模的重写，目前没有计划。
 
-### 1. 克隆仓库
+---
+
+## 从源码构建
 
 ```bash
 git clone https://github.com/felixchaos/EhViewer-Apple.git
-cd EhViewer-Apple
-```
-
-### 2. 打开项目
-
-```bash
+cd "EhViewer-Apple/ehviewer apple"
 open "ehviewer apple.xcodeproj"
 ```
 
-### 3. 构建运行 (Mac)
+首次打开会自动解析 Swift Package 依赖，可能需要几分钟。
 
-在 Xcode 中选择 **My Mac** 作为目标设备，按 `⌘R` 运行。
+### 在 Mac 上运行
 
-> **注意**: Swift Package 依赖会在首次打开时自动解析，请确保网络畅通。
+选择 `ehviewer apple` scheme，目标设备选 **My Mac**，按 `⌘R`。
 
-### 4. 安装到 iPhone / iPad
+### 安装到 iPhone / iPad
 
-将应用安装到 iOS 真机需要以下步骤：
+需要一个 Apple ID（免费即可）和一根数据线。
 
-#### 前置条件
+1. 用数据线连接设备，在设备上选择「信任此电脑」
+2. Xcode → **Settings → Accounts**，添加你的 Apple ID
+3. 选中项目 → **Signing & Capabilities**，Team 选你的账号
+4. Bundle Identifier 改成唯一值（例如 `com.yourname.ehviewer`），否则会和他人冲突
+5. 目标设备选你的设备，按 `⌘R`
 
-1. **Apple ID** — 免费 Apple ID 即可（无需付费开发者账号）
-2. **Xcode 16.0+** — 从 Mac App Store 安装
-3. **USB 数据线** — 用于连接 iPhone/iPad（首次需要有线连接）
+首次安装后，设备上前往 **设置 → 通用 → VPN 与设备管理**，信任你的开发者描述文件。
 
-#### 配置签名
+免费账号签名的应用 **7 天后失效**，需要重新连接 Mac 安装。付费账号（$99/年）为 1 年。
 
-1. 打开 Xcode，进入菜单 **Xcode → Settings → Accounts**
-2. 点击左下角 **+**，选择 **Apple ID**，登录你的 Apple ID
-3. 在项目导航器中选择 **ehviewer apple** 项目（蓝色图标）
-4. 选择 **Signing & Capabilities** 标签页
-5. 勾选 **Automatically manage signing**
-6. 在 **Team** 下拉菜单中选择你的 Apple ID 对应的团队（通常是 `你的名字 (Personal Team)`）
-7. 如果 **Bundle Identifier** 冲突，修改为唯一值，例如 `com.yourname.ehviewer`
+### 构建 macOS 分发包
 
-#### 构建安装
+`distribute_mac.sh` 会完成签名、公证、打包全流程，产出一个可直接分发、不触发 Gatekeeper 警告的 `.dmg`。需要付费开发者账号。
 
-1. 用 USB 线将 iPhone/iPad 连接到 Mac
-2. 在设备上弹出的 **"信任此电脑"** 对话框中选择 **信任**
-3. 在 Xcode 顶部工具栏的设备列表中选择你的 iPhone/iPad
-4. 按 `⌘R` 构建并安装
+**准备 App 专用密码** — 公证服务不接受 Apple ID 登录密码：
 
-#### 首次安装注意事项
+1. 登录 [appleid.apple.com](https://appleid.apple.com/) → **登录和安全 → App 专用密码**
+2. 生成一个（标签随意，如 `ehviewer-notarize`）
+3. 记下形如 `xxxx-xxxx-xxxx-xxxx` 的密码，**只会显示一次**
 
-- **设备信任**: 首次安装后需要在 iPhone/iPad 上前往 **设置 → 通用 → VPN与设备管理**，找到你的开发者描述文件并点击 **信任**
-- **免费账号限制**: 免费 Apple ID 签名的应用有效期为 **7 天**，到期后需要重新连接 Mac 用 Xcode 重新安装
-- **无线调试**: 首次有线连接成功后，可在 Xcode 中启用无线调试（**Window → Devices and Simulators**，勾选 **Connect via network**）
+**查找 Team ID** — 在 [developer.apple.com/account](https://developer.apple.com/account) 的 Membership Details 里，是一串 10 位字母数字。或者：
 
-### 5. 构建 macOS 分发安装包（Developer ID 签名 + 公证）
-
-如果你拥有 Apple Developer 付费账号（$99/年），可以使用 `distribute_mac.sh` 脚本构建一个**已公证、无安全警告、有效期约1年**的 `.dmg` 安装包，直接分发给其他用户。
-
-#### 5.1 获取 App 专用密码 (App-Specific Password)
-
-Apple 公证服务要求使用 App 专用密码（而非你的 Apple ID 登录密码）：
-
-1. 访问 [appleid.apple.com](https://appleid.apple.com/)，使用 Apple ID 登录
-2. 进入 **登录和安全 → App 专用密码**（或直接访问 [appleid.apple.com/account/manage/section/security](https://appleid.apple.com/account/manage/section/security)）
-3. 点击 **生成 App 专用密码**
-4. 输入一个标签名（如 `ehviewer-notarize`），点击 **创建**
-5. 记录生成的密码（格式如 `xxxx-xxxx-xxxx-xxxx`），**此密码只显示一次**
-
-#### 5.2 查找 Team ID
-
-1. 访问 [developer.apple.com/account](https://developer.apple.com/account)
-2. 在页面上方找到 **Membership Details**
-3. **Team ID** 是一个 10 位字母数字组合（如 `HWZEUNLCY6`）
-
-或者在终端中执行：
 ```bash
-# 列出 Keychain 中所有 Developer ID 证书及 Team ID
 security find-identity -v -p codesigning | grep "Developer ID"
 ```
 
-#### 5.3 确保已安装 Developer ID 证书
+**确认证书** — Xcode → **Settings → Accounts → Manage Certificates**，确保有 **Developer ID Application**，没有就点左下角 `+` 创建。
 
-1. 打开 Xcode → **Settings → Accounts**
-2. 选择你的 Apple ID → 点击 **Manage Certificates**
-3. 如果没有 **Developer ID Application** 证书，点击左下角 **+** 创建
-4. 证书会自动下载到 Keychain
-
-#### 5.4 配置环境变量
-
-在项目根目录创建 `.env` 文件（已加入 `.gitignore`，不会被提交）：
+**配置凭据** — 在仓库根目录建 `.env`（已在 `.gitignore` 中）：
 
 ```bash
-# .env
 APPLE_ID=your-email@example.com
 TEAM_ID=HWZEUNLCY6
 APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
 ```
 
-或者直接导出环境变量：
-```bash
-export APPLE_ID="your-email@example.com"
-export TEAM_ID="HWZEUNLCY6"
-export APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-```
-
-#### 5.5 运行构建脚本
+**运行**：
 
 ```bash
-cd "ehviewer apple"   # 进入包含 .xcodeproj 的目录
+cd "ehviewer apple"
 ./distribute_mac.sh
 ```
 
-脚本会自动完成以下流程：
-1. **Archive** — Release 模式编译项目
-2. **导出 .app** — 使用 Developer ID 方式导出
-3. **深度签名** — Hardened Runtime + Timestamp
-4. **创建 DMG** — 带 Applications 快捷方式的安装镜像
-5. **Apple 公证** — 提交至 Apple 服务器并等待审核通过
-6. **植入票据** — Staple 公证票据到 DMG
+脚本依次执行 Release 归档、Developer ID 导出、Hardened Runtime 深度签名、创建 DMG、提交 Apple 公证并等待结果、植入公证票据。完成后 `.dmg` 在 `build/` 目录下。
 
-完成后在 `build/` 目录下生成 `EhViewer-Apple-1.0.0.dmg`。
-
-> **签名有效期**: Developer ID Application 证书有效期为 **1 年**（从证书创建日起算）。到期前在 Xcode 中续签证书，重新运行脚本即可。
-
-## 📱 截图
-
-<!-- 
-TODO: 添加 App 截图
-<p align="center">
-  <img src="screenshots/home.png" width="200"/>
-  <img src="screenshots/reader.png" width="200"/>
-  <img src="screenshots/download.png" width="200"/>
-</p>
--->
-
-*截图即将添加*
-
-## 🤝 参与贡献
-
-欢迎贡献代码！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解贡献流程。
-
-简要步骤：
-
-1. Fork 本仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'feat: 添加某个功能'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
-## 📋 更新日志
-
-查看 [CHANGELOG.md](CHANGELOG.md) 了解版本历史和更新内容。
-
-## 📄 开源协议
-
-本项目基于 [Apache License 2.0](LICENSE) 协议开源 — 查看 [LICENSE](LICENSE) 文件获取详细信息。
-
-## 🙏 致谢
-
-- [EhViewer](https://github.com/Ehviewer-Overhauled/Ehviewer) — Android 端 EhViewer
-- [EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ) — Android 端中文增强版
-- [GRDB.swift](https://github.com/groue/GRDB.swift) — SQLite 数据库工具包
-
-## ⚠️ 免责声明
-
-本项目仅供学习和技术交流使用。用户应遵守当地法律法规，开发者不对使用本软件产生的任何后果承担责任。
+Developer ID 证书有效期 1 年，到期在 Xcode 里续签后重新运行即可。
 
 ---
 
-<p align="center">
-  <sub>使用 ❤️ 和 SwiftUI 构建</sub>
-</p>
+## 项目结构
+
+App 层只放视图，业务逻辑全部下沉到 `Packages/` 下的本地 Swift Package，各模块可独立编译和测试。
+
+```
+EhViewer-Apple/
+├── ehviewer apple/              # 主 App：SwiftUI 视图层
+├── Packages/
+│   ├── EhCore/
+│   │   ├── EhModels/            # 数据模型、URL 构建器
+│   │   ├── EhDatabase/          # GRDB 持久化
+│   │   └── EhSettings/          # 全局配置、标签数据库
+│   ├── EhNetwork/
+│   │   ├── EhAPI/               # 请求引擎，对照 Android EhEngine
+│   │   ├── EhCookie/            # Cookie 管理
+│   │   └── EhDNS/               # 内置 Hosts 与域名前置
+│   ├── EhParser/                # HTML / JSON 解析器
+│   ├── EhSpider/                # 图片抓取与本地存储
+│   ├── EhDownload/              # 下载队列
+│   └── EhUI/                    # 复用组件
+└── ehviewer apple.xcodeproj/
+```
+
+跑测试：
+
+```bash
+xcodebuild test -project "ehviewer apple.xcodeproj" -scheme "ehviewer apple" \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+```
+
+---
+
+## 参与贡献
+
+提 issue 时请附上设备型号、系统版本和复现步骤；如果是网络问题，说明你的代理方式会更好定位。
+
+提 PR 前请确认 iOS 和 macOS 两个目标都能编译，并跑通测试。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+---
+
+## 其他
+
+- 更新记录见 [CHANGELOG.md](CHANGELOG.md)
+- 开源协议 [Apache License 2.0](LICENSE)
+
+致谢 [EhViewer](https://github.com/Ehviewer-Overhauled/Ehviewer)、[EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ) 与 [GRDB.swift](https://github.com/groue/GRDB.swift)。
+
+本项目仅供学习与技术交流。使用者需遵守所在地法律法规，开发者不对使用本软件产生的后果负责。

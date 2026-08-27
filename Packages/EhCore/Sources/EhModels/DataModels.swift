@@ -183,6 +183,40 @@ public struct SpiderInfo: Sendable {
     }
 }
 
+// MARK: - 种子信息 (对应 Android client/data/TorrentInfo.java)
+
+/// 画廊种子条目
+/// 上游 2026-04-30「种子下载列表添加上传时间」把 `Pair<String,String>` 换成了带 posted 的结构体
+public struct TorrentInfo: Sendable, Identifiable, Hashable {
+    public var id: String { url }
+    /// 种子下载地址 (已去掉 `?p=`，保证可再分发)
+    public let url: String
+    /// 种子文件名
+    public let name: String
+    /// 上传时间 (页面上的 "Posted:" 字段)，解析不到时为空串
+    public let posted: String
+
+    public init(url: String, name: String, posted: String = "") {
+        self.url = url
+        self.name = name
+        self.posted = posted
+    }
+}
+
+// MARK: - 可编辑评论 (对应 Android client/parser/GetEditCommentParser.Result)
+
+/// `geteditcomment` API 返回的评论原文
+public struct EditableComment: Sendable {
+    public let id: Int64
+    /// 评论原始文本 (含 BBCode，不是渲染后的 HTML)
+    public let comment: String
+
+    public init(id: Int64, comment: String) {
+        self.id = id
+        self.comment = comment
+    }
+}
+
 // MARK: - 浏览历史
 
 public struct HistoryInfo: Identifiable, Sendable, Codable {

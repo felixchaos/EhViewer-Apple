@@ -71,6 +71,17 @@ struct ImageReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    #if os(macOS)
+    /// macOS 键盘焦点 — `.onKeyPress` 需要视图先获得焦点
+    /// (iOS 不能这么做: 程序化聚焦会弹出软键盘，见 KeyCommandCatcher)
+    @FocusState private var isReaderFocused: Bool
+    #endif
+
+    #if os(iOS)
+    /// 音量键 / 媒体模式翻页器
+    @State private var volumePageTurner = VolumeKeyPageTurner()
+    #endif
+
     // 点击区域比例 (左右各 30%，中间 40% 用于工具栏)
     private let tapZoneRatio: CGFloat = 0.30
     /// 纵向边缘死区比例 (上下各 20%，防止误触)
@@ -189,13 +200,39 @@ struct ImageReaderView: View {
         .onChange(of: readingDirection) { _, _ in
             vm.restoreCachedImages(around: vm.currentPage)
         }
-        // 键盘事件 (macOS / iPad 键盘)
+        // 键盘 / 外置翻页器
+        //
+        // iOS 走 UIKit responder chain (KeyCommandCatcher):
+        //   之前用的是 SwiftUI `.focusable()` + `@FocusState`，但在 iOS 上程序化聚焦
+        //   一个普通视图会被系统当成文本输入，切换阅读方向时直接弹出软键盘，
+        //   而且 SwiftUI 的焦点手势会和阅读器内部的点击手势抢事件。
+        // macOS 上 `.focusable()` 没有这些副作用，继续用 onKeyPress。
+        #if os(iOS)
+        .background {
+            KeyCommandCatcher { action in
+                handleReaderKey(action)
+            }
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+        }
+        #else
+        .focusable()
+        .focused($isReaderFocused)
+        .onAppear { isReaderFocused = true }
+        .onChange(of: showSettings) { _, isShowing in
+            if !isShowing { isReaderFocused = true }
+        }
+        .onChange(of: showJumpPageAlert) { _, isShowing in
+            if !isShowing { isReaderFocused = true }
+        }
+        // ⚠️ 方向键的含义要和点击区域一致: 左键 = 左侧点击区
+        //    (RTL 下左边是"下一页")。原来这里是反的，和 handleTapZone / Android 都对不上
         .onKeyPress(.leftArrow) {
-            handleKeyNavigation(forward: readingDirection != .rightToLeft)
+            handleKeyNavigation(forward: readingDirection == .rightToLeft)
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            handleKeyNavigation(forward: readingDirection == .rightToLeft)
+            handleKeyNavigation(forward: readingDirection != .rightToLeft)
             return .handled
         }
         .onKeyPress(.space) {
@@ -207,6 +244,7 @@ struct ImageReaderView: View {
             return .handled
         }
         .onKeyPress(.upArrow) {
+            // 竖向滚动模式交给 ScrollView 自己滚动
             if readingDirection == .topToBottom { return .ignored }
             goToPreviousPage()
             return .handled
@@ -216,7 +254,6 @@ struct ImageReaderView: View {
             goToNextPage()
             return .handled
         }
-        #if os(macOS)
         .onKeyPress(.pageUp) {
             goToPreviousPage()
             return .handled
@@ -233,7 +270,20 @@ struct ImageReaderView: View {
             goToPage(vm.totalPages - 1)
             return .handled
         }
+        .onKeyPress(.return) {
+            goToNextPage()
+            return .handled
+        }
         #endif
+        // 色彩滤镜 (对齐 Android GalleryActivity 的 colorFilter 叠加层)
+        // 盖在所有内容之上、不吃手势；关掉时完全不参与渲染
+        .overlay {
+            if colorFilterOverlay != nil {
+                colorFilterOverlay
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+        }
         #if os(iOS)
         // 边缘侧滑返回 — 仅在工具栏可见时启用，避免与翻页手势冲突
         .overlay {
@@ -243,6 +293,19 @@ struct ImageReaderView: View {
             }
         }
         #endif
+    }
+
+    /// 护眼滤镜色 —— 设置里存的是 ARGB 整数 (对齐 Android colorFilterColor)
+    private var colorFilterOverlay: Color? {
+        guard AppSettings.shared.colorFilter else { return nil }
+        let argb = AppSettings.shared.colorFilterColor
+        let a = Double((argb >> 24) & 0xFF) / 255.0
+        let r = Double((argb >> 16) & 0xFF) / 255.0
+        let g = Double((argb >> 8) & 0xFF) / 255.0
+        let b = Double(argb & 0xFF) / 255.0
+        guard a > 0 else { return nil }
+        // 默认值 0x20000000 是半透明黑，直接压暗屏幕
+        return Color(red: r, green: g, blue: b).opacity(a)
     }
 
     // MARK: - Reader Background
@@ -268,6 +331,13 @@ struct ImageReaderView: View {
         UIDevice.current.isBatteryMonitoringEnabled = true
         if AppSettings.shared.customScreenLightness {
             setScreenBrightness(CGFloat(AppSettings.shared.screenLightness) / 100.0)
+        }
+        // 音量键翻页 (媒体模式的外置翻页器) — 对齐 Android volume_page 设置
+        if AppSettings.shared.volumePage {
+            volumePageTurner.start(
+                onNext: { goToNextPage() },
+                onPrevious: { goToPreviousPage() }
+            )
         }
         #endif
 
@@ -299,6 +369,7 @@ struct ImageReaderView: View {
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = false
         UIDevice.current.isBatteryMonitoringEnabled = false
+        volumePageTurner.stop()
         #endif
         timeTimer?.invalidate()
         autoPageTask?.cancel()
@@ -410,6 +481,23 @@ struct ImageReaderView: View {
     }
 
     // MARK: - Navigation
+
+    #if os(iOS)
+    /// 把硬件按键映射成翻页动作 —— 方向键要按当前阅读方向解释
+    private func handleReaderKey(_ action: ReaderKeyAction) {
+        switch action {
+        case .previousPage: goToPreviousPage()
+        case .nextPage:     goToNextPage()
+        case .firstPage:    goToPage(0)
+        case .lastPage:     goToPage(vm.totalPages - 1)
+        case .dismiss:      dismiss()
+        case .arrowLeft:    handleKeyNavigation(forward: readingDirection == .rightToLeft)
+        case .arrowRight:   handleKeyNavigation(forward: readingDirection != .rightToLeft)
+        case .arrowUp:      goToPreviousPage()
+        case .arrowDown:    goToNextPage()
+        }
+    }
+    #endif
 
     private func handleKeyNavigation(forward: Bool) {
         if forward { goToNextPage() } else { goToPreviousPage() }

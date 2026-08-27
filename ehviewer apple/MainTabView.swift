@@ -25,6 +25,7 @@ struct MainTabView: View {
 
     enum Tab: String, CaseIterable {
         case home = "首页"
+        case subscription = "订阅"
         case popular = "热门"
         case toplist = "排行榜"
         case favorites = "收藏"
@@ -36,6 +37,7 @@ struct MainTabView: View {
         var icon: String {
             switch self {
             case .home: return "house"
+            case .subscription: return "bell"
             case .popular: return "flame"
             case .toplist: return "chart.bar"
             case .favorites: return "heart"
@@ -210,6 +212,8 @@ struct MainTabView: View {
         switch tab {
         case .home:
             GalleryListView(mode: .home, selection: $selectedGallery)
+        case .subscription:
+            GalleryListView(mode: .subscription, selection: $selectedGallery)
         case .popular:
             GalleryListView(mode: .popular, selection: $selectedGallery)
         case .toplist:
@@ -234,6 +238,8 @@ struct MainTabView: View {
         switch tab {
         case .home:
             GalleryListView(mode: .home)
+        case .subscription:
+            GalleryListView(mode: .subscription)
         case .popular:
             GalleryListView(mode: .popular)
         case .toplist:

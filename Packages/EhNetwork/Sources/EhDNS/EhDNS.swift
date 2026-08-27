@@ -64,7 +64,27 @@ public final class EhDNS: @unchecked Sendable {
         case aliDNS = "https://dns.alidns.com/dns-query"
     }
 
-    private init() {}
+    /// 自定义 hosts 的持久化位置
+    private static let userHostsKey = "user_hosts"
+
+    private init() {
+        // 自定义 hosts 之前只存在内存里，重启就没了 —— 从 UserDefaults 恢复
+        if let stored = UserDefaults.standard.dictionary(forKey: Self.userHostsKey) as? [String: [String]] {
+            userHosts = stored
+        }
+    }
+
+    /// 当前所有自定义 hosts (供设置界面展示)
+    public func allUserHosts() -> [String: [String]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return userHosts
+    }
+
+    private func persistUserHosts() {
+        // 已在 lock 内调用
+        UserDefaults.standard.set(userHosts, forKey: Self.userHostsKey)
+    }
 
     // MARK: - 解析
 
@@ -96,6 +116,10 @@ public final class EhDNS: @unchecked Sendable {
 
     /// 强制解析 — 无视 isEnabled 设置，直接从内置 Hosts 解析
     /// 用于: VPN 代理 503 回退时，绕过 HTTP 代理同时使用真实 IP (非 fake-ip)
+    private static func isExHentaiHost(_ host: String) -> Bool {
+        host == "exhentai.org" || host.hasSuffix(".exhentai.org")
+    }
+
     public func forceResolve(host: String) -> [String] {
         // 用户自定义优先
         lock.lock()
@@ -105,6 +129,12 @@ public final class EhDNS: @unchecked Sendable {
             return ips.shuffled()  // 对齐 Android: Collections.shuffle()
         }
         // 回退到内置
+        // ExHentai 的内置 IP 单独由 builtExHosts 控制 (对齐 Android 的两个独立开关):
+        // 这批 IP 变动比主站频繁，写死的表过期时反而会挡住能正常解析的用户，
+        // 所以默认关闭，由用户在设置里显式打开
+        if Self.isExHentaiHost(host), !AppSettings.shared.builtExHosts {
+            return []
+        }
         if let ips = Self.builtInHosts[host], !ips.isEmpty {
             return ips.shuffled()  // 对齐 Android: Collections.shuffle()
         }
@@ -144,18 +174,21 @@ public final class EhDNS: @unchecked Sendable {
     public func setUserHost(_ host: String, ips: [String]) {
         lock.lock()
         userHosts[host] = ips
+        persistUserHosts()
         lock.unlock()
     }
 
     public func removeUserHost(_ host: String) {
         lock.lock()
         userHosts.removeValue(forKey: host)
+        persistUserHosts()
         lock.unlock()
     }
 
     public func clearUserHosts() {
         lock.lock()
         userHosts.removeAll()
+        persistUserHosts()
         lock.unlock()
     }
 

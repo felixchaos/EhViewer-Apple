@@ -306,9 +306,14 @@ public actor EhAPI {
         }
 
         let site = AppSettings.shared.gallerySite
+        // ★ 列表页永远取最新数据 (对齐 Android OkHttp: HTML 请求不走缓存)
+        //   URLCache 对无缓存头的 HTML 会启用启发式过期, 下拉刷新/翻页可能拿到旧页面,
+        //   表现为"列表不断重复同样的画廊" (issue #8 问题一)
+        //   注意: 响应仍然会写入 URLCache, 离线回退 offlineCacheFallback 不受影响
         let request = EhRequestBuilder.buildGetRequest(
             url: requestUrl,
-            referer: EhURL.referer(for: site)
+            referer: EhURL.referer(for: site),
+            cachePolicy: .reloadIgnoringLocalCacheData
         )
 
         let (data, response) = try await sanitizedData(for: request)
@@ -713,10 +718,48 @@ public actor EhAPI {
         return try GalleryListParser.parseTopList(body)
     }
 
+    // MARK: - 可编辑评论 (对应 Android getEditComment, JSON API: geteditcomment)
+
+    /// 取回自己某条评论的**原始文本** (含 BBCode)
+    /// 上游 2026-07-30 新增 —— 编辑评论前必须先调它，
+    /// 否则拿列表里渲染过的 HTML 去编辑会丢掉 BBCode 标记
+    public func getEditComment(
+        apiUid: Int64, apiKey: String,
+        gid: Int64, token: String, commentId: Int64
+    ) async throws -> EditableComment {
+        let site = AppSettings.shared.gallerySite
+        guard let url = URL(string: EhURL.apiUrl(for: site)) else {
+            throw EhError.invalidUrl
+        }
+
+        let jsonBody: [String: Any] = [
+            "method": "geteditcomment",
+            "apiuid": apiUid,
+            "apikey": apiKey,
+            "gid": gid,
+            "token": token,
+            "comment_id": commentId,
+        ]
+
+        let jsonData = try JSONSerialization.data(withJSONObject: jsonBody)
+        let detailUrl = EhURL.galleryDetailUrl(gid: gid, token: token, site: site)
+        let request = EhRequestBuilder.buildPostJSONRequest(
+            url: url,
+            json: jsonData,
+            referer: detailUrl,
+            origin: EhURL.origin(for: site)
+        )
+
+        let (data, response) = try await sanitizedData(for: request)
+        try checkResponse(response, data: data)
+
+        return try GetEditCommentParser.parse(data)
+    }
+
     // MARK: - 种子 API (对应 Android getTorrentList)
 
     /// 获取种子列表 (对应 Android getTorrentList)
-    public func getTorrentList(url: String, gid: Int64, token: String) async throws -> [(String, String)] {
+    public func getTorrentList(url: String, gid: Int64, token: String) async throws -> [TorrentInfo] {
         guard let requestUrl = URL(string: url) else {
             throw EhError.invalidUrl
         }
@@ -787,6 +830,43 @@ public actor EhAPI {
 
         let body = String(data: data, encoding: .utf8) ?? ""
         return try GalleryPageParser.parse(body)
+    }
+
+    // MARK: - 通用 HTML / 图片获取 (供阅读器使用)
+
+    /// 通用 HTML 获取 — 走与其它接口完全相同的链路:
+    /// Cookie 清洁 → 速率限制 → 自动重试 → 域名前置直连回退 → 离线缓存回退
+    ///
+    /// ⚠️ 阅读器以前用裸 URLSession 直接抓 `/s/` 页面，绕过了上面所有回退逻辑，
+    ///    因此在 DNS 污染 / SNI 拦截的网络下"列表和预览正常、点进阅读就报 TLS 错误"
+    ///    (issue #6)。凡是需要自行解析 HTML 的场景都应走这里。
+    public func fetchHTML(url: String, referer: String? = nil) async throws -> String {
+        guard let requestUrl = URL(string: url) else {
+            throw EhError.invalidUrl
+        }
+        let site = AppSettings.shared.gallerySite
+        let request = EhRequestBuilder.buildGetRequest(
+            url: requestUrl,
+            referer: referer ?? EhURL.referer(for: site)
+        )
+        let (data, response) = try await sanitizedData(for: request)
+        try checkResponse(response, data: data, requestUrl: url)
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// 图片数据获取 — 图片专用 session (不跟随重定向) + 域名前置回退
+    /// 用作阅读器流式下载失败 (TLS 握手失败 / DNS 解析失败等) 时的兜底
+    public func fetchImageData(url: String, referer: String? = nil, timeout: TimeInterval = 60) async throws -> Data {
+        guard let requestUrl = URL(string: url) else {
+            throw EhError.invalidUrl
+        }
+        var request = EhRequestBuilder.buildGetRequest(url: requestUrl, referer: referer)
+        request.timeoutInterval = timeout
+        let (data, response) = try await noRedirectData(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw EhError.httpError(http.statusCode, "")
+        }
+        return data
     }
 
     // MARK: - 以图搜图 (对应 Android imageSearch)
@@ -1109,6 +1189,24 @@ public actor EhAPI {
     private static let sadPandaType = "image/gif"
     private static let sadPandaLength = "9615"
 
+    /// 从页面正文里识别 IP 封禁，并尽量带出解封倒计时
+    /// 典型文案: "Your IP address has been temporarily banned for excessive pageloads
+    ///           ... Expires in 3 hours and 12 minutes"
+    nonisolated static func parseIPBan(from body: String) -> String? {
+        let lowered = body.lowercased()
+        guard lowered.contains("your ip address has been temporarily banned")
+                || lowered.contains("temporarily banned from")
+                || lowered.contains("banned for excessive pageloads") else {
+            return nil
+        }
+
+        // 带上剩余时间，用户才知道要等多久
+        if let range = body.range(of: #"[Ee]xpires? in[^.<]*"#, options: .regularExpression) {
+            return String(body[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
+    }
+
     private func checkResponse(_ response: URLResponse, data: Data, requestUrl: String? = nil) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw EhError.networkError("Invalid response")
@@ -1129,6 +1227,12 @@ public actor EhAPI {
         // Kokomade 检测
         if body.contains("https://exhentai.org/img/kokomade.jpg") {
             throw EhError.kokomade
+        }
+
+        // IP 封禁检测 —— 页面是 200，正文才有提示，必须显式识别
+        // 否则解析器只会得到 0 条画廊，用户看到的是一片空白 (issue #1)
+        if let banMessage = Self.parseIPBan(from: body) {
+            throw EhError.ipBanned(banMessage)
         }
 
         // ExHentai 空 body / igneous 错误 (对应 Android EhEngine.java getGalleryList 中的检测)
@@ -1251,6 +1355,9 @@ public enum EhError: LocalizedError, Sendable {
     case galleryUnavailable
     /// 服务端错误消息 (从 <div class="d"> 提取)
     case serverError(String)
+    /// IP 被临时封禁 (对应 Android EhEngine 的 "temporarily banned" 检测)
+    /// 服务端返回的是正常 200 页面，不特判就会解析出 0 条画廊、界面一片空白
+    case ipBanned(String)
 
     public var errorDescription: String? {
         switch self {
@@ -1269,6 +1376,10 @@ public enum EhError: LocalizedError, Sendable {
         case .pining: return "该画廊已被删除 (pining for the fjords)"
         case .galleryUnavailable: return "该画廊不可用"
         case .serverError(let msg): return msg
+        case .ipBanned(let detail):
+            return detail.isEmpty
+                ? "当前 IP 被 E-Hentai 临时封禁。换一个 VPN 节点，或等待封禁自动解除。"
+                : "当前 IP 被 E-Hentai 临时封禁（\(detail)）。换一个 VPN 节点，或等待解除。"
         }
     }
 
