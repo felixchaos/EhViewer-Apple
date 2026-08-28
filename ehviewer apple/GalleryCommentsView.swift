@@ -100,32 +100,41 @@ struct GalleryCommentsView: View {
     
     private func commentRow(_ comment: GalleryComment) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            // 头部：用户名、时间、分数
-            HStack {
+            // 头部：用户名、上传者徽标、时间、分数
+            HStack(spacing: 8) {
                 Text(comment.user)
-                    .font(.subheadline.bold())
-                
-                Spacer()
-                
-                Text(comment.time, style: .date)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                
-                if comment.score != 0 {
-                    Text(comment.score > 0 ? "+\(comment.score)" : "\(comment.score)")
-                        .font(.caption)
-                        .foregroundStyle(comment.score > 0 ? .green : .red)
+                    .font(EhFont.body.weight(.semibold))
+                    .foregroundStyle(EhColor.label)
+
+                // 上传者本人的评论单独标出来：同一串评论里，作者的说明
+                // （补图、修正、致歉）和读者的闲聊分量完全不同。
+                // 服务端不单独下发标记，但上传者评论的 id 固定为 0（也因此不可投票）。
+                if comment.id == 0 {
+                    Text("上传者")
+                        .font(EhFont.footnote.weight(.semibold))
+                        .foregroundStyle(EhColor.onAccentFill)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(comment.score > 0 ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .background(Capsule().fill(EhColor.accentFill))
+                }
+
+                Spacer(minLength: 4)
+
+                Text(comment.time, style: .date)
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.tertiaryLabel)
+
+                if comment.score != 0 {
+                    Text(comment.score > 0 ? "+\(comment.score)" : "\(comment.score)")
+                        .font(EhFont.mono(12, weight: .semibold))
+                        .foregroundStyle(comment.score > 0 ? EhColor.success : EhColor.danger)
                 }
             }
-            
+
             // 评论内容 (HTML 转纯文本，完整显示)
             Text(comment.comment.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
-                .font(.subheadline)
-                .foregroundStyle(.primary)
+                .font(EhFont.body)
+                .foregroundStyle(EhColor.label)
             
             // 投票 / 编辑
             if comment.voteUpAble || comment.voteDownAble || comment.editable {

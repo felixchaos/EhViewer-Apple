@@ -30,13 +30,26 @@ struct TagSelectorView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if namespaces.isEmpty {
-                    ContentUnavailableView {
-                        Label("标签数据库还没下载", systemImage: "tag.slash")
-                    } description: {
-                        Text("到「设置 → 更新标签翻译数据库」下载后即可使用。")
-                    }
+                    EhStateView(kind: .empty(
+                        symbol: "tag.slash",
+                        title: "标签数据库还没下载",
+                        message: "到「设置 → 更新标签翻译数据库」下载后即可使用。"
+                    ))
                 } else {
                     namespacePicker
+                    // 实时拼装出最终会进搜索框的查询串。
+                    // 标签语法（namespace:"tag$"）不是所有人都清楚，
+                    // 勾选时直接把结果摆出来，比事后到搜索框里去猜要好。
+                    if !picked.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text(picked.joined(separator: " "))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(EhColor.accent)
+                                .padding(.horizontal, EhSpacing.page)
+                        }
+                        .frame(height: 30)
+                        .background(EhColor.accentWash)
+                    }
                     Divider()
                     tagGrid
                 }
@@ -51,7 +64,7 @@ struct TagSelectorView: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("加入 (\(picked.count))") {
+                    Button("加入搜索 (\(picked.count))") {
                         picked.forEach(onPick)
                         dismiss()
                     }

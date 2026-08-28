@@ -89,19 +89,35 @@ struct ProfileView: View {
                 let total = Double(quota.totalLimit)
                 let ratio = min(1, max(0, used / total))
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("已用")
-                        Spacer()
-                        Text("\(quota.currentUsed) / \(quota.totalLimit)")
-                            .font(.body.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    // 大数字给「还剩多少」而不是「已用多少」：
+                    // 用户真正要判断的是「今天还能不能接着看」
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(quota.totalLimit - quota.currentUsed)")
+                            .font(EhFont.display)
+                            .foregroundStyle(ratio > 0.9 ? EhColor.danger : EhColor.label)
+                        Text("剩余 / 共 \(quota.totalLimit)")
+                            .font(EhFont.meta)
+                            .foregroundStyle(EhColor.tertiaryLabel)
                     }
-                    ProgressView(value: ratio)
-                        // 快满了变色 —— 超了就是 509，看不了图
-                        .tint(ratio > 0.9 ? .red : (ratio > 0.7 ? .orange : .accentColor))
+
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(EhColor.fill)
+                        GeometryReader { geo in
+                            Capsule()
+                                // 快满了变色 —— 超了就是 509，看不了图
+                                .fill(ratio > 0.9 ? EhColor.danger
+                                      : (ratio > 0.7 ? EhColor.warning : EhColor.accentFill))
+                                .frame(width: geo.size.width * ratio)
+                        }
+                    }
+                    .frame(height: 6)
+
+                    Text("今日已用 \(quota.currentUsed)")
+                        .font(EhFont.meta)
+                        .foregroundStyle(EhColor.secondaryLabel)
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, 6)
 
                 if quota.resetCost > 0 {
                     Button {

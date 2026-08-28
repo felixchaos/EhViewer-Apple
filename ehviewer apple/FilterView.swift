@@ -105,20 +105,24 @@ struct FilterRow: View {
     let onToggle: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: EhSpacing.row) {
             VStack(alignment: .leading, spacing: 4) {
+                // 规则用等宽字体：过滤规则常含通配符与冒号，
+                // 比例字体下 `l` `1` `I` 这类字符难以核对
                 Text(filter.text ?? "")
-                    .font(.body)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(filter.enable ? EhColor.label : EhColor.tertiaryLabel)
 
                 Text(filterModeText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(EhFont.footnote)
+                    .foregroundStyle(EhColor.secondaryLabel)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Toggle("", isOn: .constant(filter.enable))
                 .labelsHidden()
+                .tint(EhColor.accentFill)
                 .onChange(of: filter.enable) { _, _ in
                     onToggle()
                 }
