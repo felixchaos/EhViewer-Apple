@@ -27,10 +27,10 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-info()    { echo "${CYAN}[INFO]${NC} $*" }
-success() { echo "${GREEN}[✔]${NC} $*" }
-warn()    { echo "${YELLOW}[⚠]${NC} $*" }
-fail()    { echo "${RED}[✘]${NC} $*" >&2; exit 1 }
+info()    { echo "${CYAN}[INFO]${NC} $*"; }
+success() { echo "${GREEN}[✔]${NC} $*"; }
+warn()    { echo "${YELLOW}[⚠]${NC} $*"; }
+fail()    { echo "${RED}[✘]${NC} $*" >&2; exit 1; }
 
 # ─────────────────────────── 项目常量 ───────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -74,7 +74,9 @@ check_prerequisites() {
     # Xcode
     command -v xcodebuild &>/dev/null || fail "未找到 xcodebuild，请安装 Xcode"
     local xcode_ver
-    xcode_ver=$(xcodebuild -version | head -1)
+    # 用 sed 取首行而非 head：head 读满即关管道，上游会吃到 SIGPIPE，
+    # 在 set -o pipefail 下足以让整个脚本以 141 退出。sed 会读完整个流。
+    xcode_ver=$(xcodebuild -version | sed -n '1p')
     info "  $xcode_ver"
 
     # codesign
@@ -90,7 +92,7 @@ check_prerequisites() {
 
     # Developer ID Application 证书
     local cert_name
-    cert_name=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 || true)
+    cert_name=$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" || true)
     if [[ -z "$cert_name" ]]; then
         fail "Keychain 中未找到 \"Developer ID Application\" 证书。\n请在 Xcode → Settings → Accounts → 管理证书 中创建，或从 developer.apple.com 下载安装。"
     fi
@@ -261,7 +263,7 @@ notarize_dmg() {
 
         # 提取 submission ID 并查询日志
         local sub_id
-        sub_id=$(grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" "$log_file" | head -1 || true)
+        sub_id=$(grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" "$log_file" | sed -n '1p' || true)
         if [[ -n "$sub_id" ]]; then
             info "Submission ID: $sub_id"
             xcrun notarytool log "$sub_id" \
