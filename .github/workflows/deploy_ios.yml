@@ -171,10 +171,14 @@ jobs:
           cat "$EXPORT_OPTIONS"
 
       # ─── 5. Archive ─────────────────────────────────────────
+      # 归档阶段不签名，签名全部推迟到导出阶段。
+      #
+      # 原因：自动签名在归档时只做**开发**签名，任何 Apple Distribution 的
+      # 指定都会被判为 "conflicting provisioning settings"；而把签名设置
+      # 全局传给 xcodebuild 又会波及 SPM 依赖（GRDB 不支持描述文件）。
+      # 导出阶段带 API 密钥做自动签名，主 App 与 widget 的描述文件由
+      # Xcode 一并创建并签出，两个问题同时消失。
       - name: Archive
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           xcodebuild archive \
             -project "$PROJECT" \
@@ -182,12 +186,8 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm_cache" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO
 
           echo "✅ Archive complete"
