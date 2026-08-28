@@ -219,3 +219,17 @@ enum EhAppTheme: Int, CaseIterable, Identifiable {
         }
     }
 }
+
+// MARK: - 阅读器配色
+
+/// 阅读器工具条的颜色。**不跟随明暗模式**。
+///
+/// 阅读器底色恒为纯黑，工具条却在用跟随主题的 EhColor：浅色模式下
+/// 黑画面上贴着亮白面板、深色文字，对比刺眼且与画面完全不搭。
+/// 这里全部固定成「深色底 + 浅色字」。
+enum EhReaderChrome {
+    static let label = Color.white.opacity(0.95)
+    static let secondaryLabel = Color.white.opacity(0.65)
+    static let tertiaryLabel = Color.white.opacity(0.42)
+    static let fill = Color.white.opacity(0.14)
+}

@@ -151,6 +151,26 @@ extension View {
         }
     }
 
+    /// 阅读器专用玻璃：永远是深色。
+    ///
+    /// 阅读器的底色恒为纯黑（省 OLED 电，也不跟画面抢注意力），
+    /// 而 ehGlass 跟随系统明暗——浅色模式下就变成黑底上贴几块亮白面板，
+    /// 亮度差刺眼，而且和画面完全不搭。这里不跟随主题。
+    func ehReaderGlass(cornerRadius: CGFloat) -> some View {
+        self.background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Rectangle().fill(Color.black.opacity(0.55))
+            }
+            .environment(\.colorScheme, .dark)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+            }
+        }
+    }
+
     /// 卡面容器
     func ehCard(cornerRadius: CGFloat = EhRadius.group) -> some View {
         self.background {

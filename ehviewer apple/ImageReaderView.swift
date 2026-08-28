@@ -1257,20 +1257,20 @@ struct ImageReaderView: View {
                 Button(action: { dismiss() }) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(EhColor.label)
+                        .foregroundStyle(EhReaderChrome.label)
                 }
 
                 if let title = readerTitle {
                     Text(title)
                         .font(EhFont.caption)
-                        .foregroundStyle(EhColor.label)
+                        .foregroundStyle(EhReaderChrome.label)
                         .lineLimit(1)
                         .frame(maxWidth: 150, alignment: .leading)
                 }
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
-            .ehGlass(cornerRadius: 19)
+            .ehReaderGlass(cornerRadius: 19)
 
             Spacer(minLength: 8)
 
@@ -1280,20 +1280,20 @@ struct ImageReaderView: View {
             HStack(spacing: 14) {
                 Button { showPageGrid = true } label: {
                     Image(systemName: "square.grid.2x2")
-                        .foregroundStyle(EhColor.label)
+                        .foregroundStyle(EhReaderChrome.label)
                 }
 
                 // 齿轮。这里原来画的是 sun.max，点开却是整个阅读设置面板——
                 // 图标承诺的是亮度，打开的是设置。
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape")
-                        .foregroundStyle(EhColor.label)
+                        .foregroundStyle(EhReaderChrome.label)
                 }
             }
             .font(.system(size: 15, weight: .medium))
             .padding(.horizontal, 14)
             .frame(height: 38)
-            .ehGlass(cornerRadius: 19)
+            .ehReaderGlass(cornerRadius: 19)
         }
         .padding(.horizontal, EhSpacing.page)
         .padding(.top, 50)
@@ -1327,7 +1327,7 @@ struct ImageReaderView: View {
             HStack(spacing: EhSpacing.row) {
                 Text(pageIndicatorText)
                     .font(EhFont.mono(13, weight: .semibold))
-                    .foregroundStyle(EhColor.label)
+                    .foregroundStyle(EhReaderChrome.label)
                     .frame(minWidth: 44, alignment: .leading)
 
                 // 拖动期间只更新本地 state，不碰 vm.currentPage。
@@ -1361,7 +1361,7 @@ struct ImageReaderView: View {
 
                 Text("\(vm.totalPages)")
                     .font(EhFont.mono(13))
-                    .foregroundStyle(EhColor.tertiaryLabel)
+                    .foregroundStyle(EhReaderChrome.tertiaryLabel)
             }
 
             // 四个模式块：双页 / 方向 / 自动翻页 / 护眼。
@@ -1382,7 +1382,7 @@ struct ImageReaderView: View {
             }
         }
         .padding(EhSpacing.page)
-        .ehGlass(cornerRadius: EhRadius.card)
+        .ehReaderGlass(cornerRadius: EhRadius.card)
         .padding(.horizontal, EhSpacing.page)
         // 阅读器整屏忽略安全区（图要铺满），底栏就得自己把 Home Indicator
         // 的高度让出来，否则最后一排按钮被屏幕底边切掉——这条在带
@@ -1411,12 +1411,12 @@ struct ImageReaderView: View {
         } label: {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isOn ? EhColor.onAccentFill : EhColor.secondaryLabel)
+                .foregroundStyle(isOn ? EhColor.onAccentFill : EhReaderChrome.label)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background {
                     RoundedRectangle(cornerRadius: EhRadius.smallControl, style: .continuous)
-                        .fill(isOn ? EhColor.accentFill : EhColor.fill)
+                        .fill(isOn ? EhColor.accentFill : EhReaderChrome.fill)
                 }
         }
         .buttonStyle(.plain)
