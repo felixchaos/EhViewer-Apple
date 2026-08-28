@@ -151,8 +151,15 @@ jobs:
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
+            <!-- 用 App Store 类型签名，因为这类描述文件不含设备列表。
+                 Ad-Hoc 描述文件会把已登记设备的 UDID 明文嵌进 IPA，
+                 公开发布等于公开这些设备标识。用户拿到包后会用自己的
+                 Apple ID 重签，原签名本就会被剥掉，类型不影响可用性。 -->
             <key>method</key>
-            <string>release-testing</string>
+            <string>app-store-connect</string>
+            <!-- 只产出本地文件，绝不上传到 App Store Connect -->
+            <key>destination</key>
+            <string>export</string>
             <key>teamID</key>
             <string>HWZEUNLCY6</string>
             <key>compileBitcode</key>
