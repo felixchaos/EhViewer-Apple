@@ -24,6 +24,8 @@
 
 安装包见 [Releases](../../releases)。iPhone 和 iPad 用的是同一个通用包。
 
+> 完整的安装步骤、签名工具直达链接与常见卡点，见 **[Wiki：安装与签名](../../wiki/Installation)**。
+
 ### Mac
 
 DMG 已用 Developer ID 签名并通过 Apple 公证，票据已植入，断网也能正常安装，不会出现
@@ -190,13 +192,17 @@ xcodebuild test -project "ehviewer apple.xcodeproj" -scheme "ehviewer apple" \
 
 提 issue 时请附上设备型号、系统版本和复现步骤；如果是网络问题，说明你的代理方式会更好定位。
 
+**当前界面是过渡性的**，未来会重做，见[路线图](../../wiki/Roadmap)。对界面的具体意见（哪一屏别扭、哪个操作路径太绕）在这个阶段尤其有价值。
+
 提 PR 前请确认 iOS 和 macOS 两个目标都能编译，并跑通测试。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
 ## 其他
 
+- 文档见 [Wiki](../../wiki)：[安装与签名](../../wiki/Installation)、[路线图](../../wiki/Roadmap)、[架构说明](../../wiki/Architecture)
 - 更新记录见 [CHANGELOG.md](CHANGELOG.md)
+- 安全问题请勿开公开 issue，走[私密漏洞报告](../../security/advisories/new)，详见 [SECURITY.md](SECURITY.md)
 - 开源协议 [Apache License 2.0](LICENSE)
 
 致谢 [EhViewer](https://github.com/Ehviewer-Overhauled/Ehviewer)、[EhViewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ) 与 [GRDB.swift](https://github.com/groue/GRDB.swift)。
