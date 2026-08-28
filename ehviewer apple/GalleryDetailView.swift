@@ -44,6 +44,8 @@ struct GalleryDetailView: View {
     @State private var showAllPreviews = false
     @State private var showFavoritePicker = false
     @State private var showArchive = false
+    /// 归档与种子合并后的资源入口 sheet
+    @State private var showResourceSheet = false
     @State private var showTorrents = false
     @State private var showCellularWarning = false
 
@@ -60,8 +62,8 @@ struct GalleryDetailView: View {
                 headerSection
                 Divider()
                 actionBar
+                    .padding(.vertical, 10)
                 Divider()
-                resourceBar
 
                 if vm.isLoading {
                     ProgressView("加载详情...")
@@ -86,6 +88,8 @@ struct GalleryDetailView: View {
             }
         }
         #if os(iOS)
+        // 详情是沉浸式页面：底部浮条会盖住预览网格，且这一屏没有平级切换的需要
+        .ehHidesTabBar()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(horizontalSizeClass == .compact ? .hidden : .automatic, for: .navigationBar)
         .overlay(alignment: .topLeading) {
@@ -179,6 +183,7 @@ struct GalleryDetailView: View {
         } message: {
             Text("这本共 \(vm.detail?.info.pages ?? gallery.pages) 页，下载会消耗蜂窝数据。可以在设置里关掉这个提醒。")
         }
+        .sheet(isPresented: $showResourceSheet) { resourceSheet }
         .sheet(isPresented: $showArchive) {
             if let archiveUrl = vm.detail?.archiveUrl, !archiveUrl.isEmpty {
                 ArchiveDownloadView(gid: gallery.gid, token: gallery.token, archiveUrl: archiveUrl)
@@ -195,72 +200,68 @@ struct GalleryDetailView: View {
 
     private var headerSection: some View {
         HStack(alignment: .top, spacing: 14) {
-            // 封面
-            CachedAsyncImage(url: URL(string: gallery.thumb ?? "")) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color(.secondarySystemBackground)
-            }
-            .frame(width: coverSize.width, height: coverSize.height)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            EhCoverThumbnail(
+                url: gallery.thumb,
+                size: coverSize,
+                category: gallery.category,
+                cornerRadius: 8
+            )
 
-            VStack(alignment: .leading, spacing: 6) {
-                // 根据设置显示日文/中文或英文标题 (对齐 Android EhUtils.getSuitableTitle)
-                Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
-                    .font(.headline)
-                    .lineLimit(4)
-
-                if let uploader = gallery.uploader {
-                    Text(uploader)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-
-                // 分类标签
+            VStack(alignment: .leading, spacing: 5) {
+                // 分类从填充方块改为小字：详情页封面已经带了分类色条，
+                // 再来一个实心方块是同一信息说两遍
                 Text(gallery.category.name)
-                    .font(.caption.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(gallery.category.color)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(gallery.category.color)
 
-                // 评分 (可点击)
-                HStack(spacing: 4) {
-                    ForEach(0..<5) { i in
-                        Image(systemName: ratingIcon(index: i, rating: vm.displayRating ?? gallery.rating))
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                    Text(String(format: "%.2f", vm.displayRating ?? gallery.rating))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .onTapGesture {
-                    if vm.canRate {
-                        showRatingSheet = true
-                    }
+                Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
+                    .font(EhFont.title)
+                    .foregroundStyle(EhColor.label)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let uploader = gallery.uploader, !uploader.isEmpty {
+                    Text(uploader + (gallery.posted.map { " · " + $0 } ?? ""))
+                        .font(EhFont.meta)
+                        .foregroundStyle(EhColor.secondaryLabel)
+                        .lineLimit(1)
                 }
 
-                // 详情信息
-                if let lang = vm.language {
-                    Label(lang, systemImage: "globe")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 12) {
-                    Label("\(gallery.pages) 页", systemImage: "doc")
-                    if let size = vm.size {
-                        Label(size, systemImage: "internaldrive")
+                Spacer(minLength: 4)
+
+                // 评分放大成主要信息：这是详情页最常被扫的一个数字
+                Button {
+                    if vm.canRate { showRatingSheet = true }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(String(format: "%.2f", vm.displayRating ?? gallery.rating))
+                            .font(EhFont.rating)
+                            .foregroundStyle(EhColor.accent)
+                        Text(ratingSuffix)
+                            .font(EhFont.meta)
+                            .foregroundStyle(EhColor.tertiaryLabel)
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .disabled(!vm.canRate)
+
+                HStack(spacing: EhSpacing.row) {
+                    Text("\(gallery.pages) 页")
+                    if let size = vm.size { Text(size) }
+                    if let lang = vm.language { Text(lang) }
+                }
+                .font(EhFont.mono(12))
+                .foregroundStyle(EhColor.secondaryLabel)
             }
         }
-        .padding()
+        .padding(EhSpacing.page)
+    }
+
+    private var ratingSuffix: String {
+        if let count = vm.detail?.ratingCount, count > 0 {
+            return "/ 5 · \(count) 评分"
+        }
+        return "/ 5"
     }
 
     /// 详情页封面尺寸 (对齐 Android Settings.KEY_DETAIL_SIZE)
@@ -275,50 +276,107 @@ struct GalleryDetailView: View {
     /// 归档与种子放主操作栏下面单独一行 —— 它们不是每本都有，
     /// 塞进上面那排会让四个常用操作被挤窄
     @ViewBuilder
-    private var resourceBar: some View {
-        let archiveUrl = vm.detail?.archiveUrl
-        let torrentUrl = vm.detail?.torrentUrl
+    private var resourceSheet: some View {
         let torrentCount = vm.detail?.torrentCount ?? 0
-        let hasArchive = !(archiveUrl ?? "").isEmpty
-        let hasTorrent = !(torrentUrl ?? "").isEmpty && torrentCount > 0
+        let hasArchive = !(vm.detail?.archiveUrl ?? "").isEmpty
+        let hasTorrent = !(vm.detail?.torrentUrl ?? "").isEmpty && torrentCount > 0
 
-        if hasArchive || hasTorrent {
-            HStack(spacing: 10) {
-                if hasArchive {
-                    resourceChip(icon: "archivebox", title: "归档 / H@H") {
-                        showArchive = true
-                    }
-                }
+        return NavigationStack {
+            VStack(alignment: .leading, spacing: EhSpacing.section) {
                 if hasTorrent {
-                    resourceChip(icon: "arrow.down.doc", title: "种子 (\(torrentCount))") {
+                    resourceEntry(
+                        symbol: "arrow.down.doc",
+                        title: "种子",
+                        subtitle: "\(torrentCount) 个 · 不消耗配额",
+                        tint: EhColor.success
+                    ) {
+                        showResourceSheet = false
                         showTorrents = true
                     }
                 }
+                if hasArchive {
+                    resourceEntry(
+                        symbol: "archivebox",
+                        title: "归档 / H@H",
+                        subtitle: "消耗图片配额",
+                        tint: EhColor.warning
+                    ) {
+                        showResourceSheet = false
+                        showArchive = true
+                    }
+                }
+
+                Text("种子由其他用户做种，不消耗你的图片配额，但可用性取决于是否有人在线；归档与 H@H 派发由官方提供，稳定但会按图片数量扣除配额。")
+                    .font(EhFont.caption)
+                    .foregroundStyle(EhColor.secondaryLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-            Divider()
+            .padding(EhSpacing.page)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(EhColor.sheetBackground)
+            .navigationTitle("资源下载")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { showResourceSheet = false }
+                }
+            }
         }
+        .presentationDetents([.height(320)])
+        .presentationCornerRadius(EhRadius.sheet)
     }
 
-    private func resourceChip(icon: String, title: String, action: @escaping () -> Void) -> some View {
+    private func resourceEntry(
+        symbol: String, title: String, subtitle: String, tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.footnote)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+            HStack(spacing: EhSpacing.row) {
+                Image(systemName: symbol)
+                    .font(.system(size: 18))
+                    .foregroundStyle(tint)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(EhFont.body).foregroundStyle(EhColor.label)
+                    Text(subtitle).font(EhFont.meta).foregroundStyle(EhColor.secondaryLabel)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(EhColor.tertiaryLabel)
+            }
+            .padding(EhSpacing.page)
+            .ehCard()
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Action Bar
 
+    private var readButtonTitle: String {
+        guard vm.hasReadingProgress else { return "阅读" }
+        // 与列表行读同一个键：存的是 0-based 页索引，展示时 +1
+        let index = UserDefaults.standard.integer(forKey: "reading_progress_\(gallery.gid)")
+        guard index > 0 else { return "继续阅读" }
+        return "继续读 · \(index + 1) 页"
+    }
+
+    private var hasAnyResource: Bool {
+        let hasArchive = !(vm.detail?.archiveUrl ?? "").isEmpty
+        let hasTorrent = !(vm.detail?.torrentUrl ?? "").isEmpty && (vm.detail?.torrentCount ?? 0) > 0
+        return hasArchive || hasTorrent
+    }
+
     private var actionBar: some View {
-        HStack(spacing: 0) {
-            let readTitle = vm.hasReadingProgress ? "继续阅读" : "阅读"
-            actionButton(icon: "book", title: readTitle) {
+        // 四等分的操作栏里，四个动作在视觉上完全等重，但「阅读」的使用频率
+        // 远高于其余三个。改成一个占主导的主按钮加三个方钮，主次一眼可辨。
+        HStack(spacing: 10) {
+            Button {
                 Haptics.tap()
                 // 对齐 Android: 阅读按钮不传 KEY_PAGE，让阅读器自行恢复进度
                 vm.readerLaunchItem = ReaderLaunchItem(
@@ -328,11 +386,17 @@ struct GalleryDetailView: View {
                     previewSet: vm.detail?.previewSet,
                     initialPage: nil
                 )
+            } label: {
+                Label(readButtonTitle, systemImage: "book")
+                    .labelStyle(.titleAndIcon)
             }
-            Divider().frame(height: 32)
-            actionButton(icon: vm.isFavorited ? "heart.fill" : "heart",
-                         title: vm.isFavorited ? "已收藏" : "收藏",
-                         action: {
+            .buttonStyle(EhFilledButtonStyle(height: EhSize.actionButtonHeight))
+            .layoutPriority(1)
+
+            EhSquareIconButton(
+                symbol: vm.isFavorited ? "heart.fill" : "heart",
+                tint: vm.isFavorited ? EhColor.danger : EhColor.label
+            ) {
                 Haptics.impact()
                 if vm.isFavorited {
                     Task { await vm.removeFavorite(gid: gallery.gid, token: gallery.token) }
@@ -346,15 +410,11 @@ struct GalleryDetailView: View {
                         showFavoritePicker = true
                     }
                 }
-            },
-            // 对齐 Android: 长按收藏按钮始终弹出收藏夹选择，即使已设置默认
-            longPressAction: {
-                showFavoritePicker = true
-            })
-            Divider().frame(height: 32)
-            actionButton(icon: vm.downloadIcon,
-                         title: vm.downloadTitle) {
-                // Fix F1-4: 已下载状态 → 打开阅读器，不是重新下载
+            }
+            // 对齐 Android: 长按收藏始终弹出收藏夹选择，即使已设默认
+            .onLongPressGesture { showFavoritePicker = true }
+
+            EhSquareIconButton(symbol: vm.downloadIcon) {
                 if vm.downloadState == DownloadManager.stateFinish {
                     Haptics.tap()
                     vm.readerLaunchItem = ReaderLaunchItem(
@@ -372,29 +432,17 @@ struct GalleryDetailView: View {
                     Task { await vm.startDownload(gallery: gallery) }
                 }
             }
-            Divider().frame(height: 32)
-            actionButton(icon: "square.and.arrow.up", title: "分享") {
-                let site = GalleryActionService.siteBaseURL
-                let urlStr = "\(site)g/\(gallery.gid)/\(gallery.token)/"
-                #if os(iOS)
-                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                      let window = windowScene.windows.first,
-                      let rootVC = window.rootViewController else { return }
-                let activityVC = UIActivityViewController(activityItems: [urlStr], applicationActivities: nil)
-                // iPad 需要 popover
-                if let popover = activityVC.popoverPresentationController {
-                    popover.sourceView = window
-                    popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
-                    popover.permittedArrowDirections = []
+
+            // 归档与种子并进一个「资源下载」sheet：两者都不是每本都有，
+            // 各占一个入口会让常用操作被挤窄，而它们的选择又需要成本对比
+            if hasAnyResource {
+                EhSquareIconButton(symbol: "archivebox") {
+                    Haptics.tap()
+                    showResourceSheet = true
                 }
-                rootVC.present(activityVC, animated: true)
-                #else
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(urlStr, forType: .string)
-                #endif
             }
         }
+        .padding(.horizontal, EhSpacing.page)
         .padding(.vertical, 8)
         .sheet(isPresented: $showFavoritePicker) {
             FavoriteSlotPicker(

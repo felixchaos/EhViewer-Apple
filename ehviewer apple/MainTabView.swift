@@ -147,6 +147,9 @@ struct MainTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .navigateToFavorites)) { _ in
             selectedTab = .favorites
         }
+        // 全局强调色：链接、开关、选中态一次性统一到琥珀，
+        // 不必逐个视图替换散落的 .blue / .accentColor
+        .tint(EhColor.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
             guard let userInfo = notification.userInfo,
                   let gid = userInfo["gid"] as? Int64,
@@ -210,6 +213,9 @@ struct MainTabView: View {
                 )
             }
         }
+        // 全局强调色：链接、开关、选中态一次性统一到琥珀，
+        // 不必逐个视图替换散落的 .blue / .accentColor
+        .tint(EhColor.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
             guard let userInfo = notification.userInfo,
                   let gid = userInfo["gid"] as? Int64,

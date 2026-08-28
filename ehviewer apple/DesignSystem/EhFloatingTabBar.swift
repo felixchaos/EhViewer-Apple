@@ -22,6 +22,25 @@ extension Notification.Name {
     static let ehScrollToTop = Notification.Name("EhScrollToTop")
 }
 
+/// 让被推入的页面声明「这一屏不要底部导航条」。
+///
+/// 系统 TabView 有 `.toolbar(.hidden, for: .tabBar)`，自绘的浮条没有等价物。
+/// 用 preference 从子视图向上传递：详情页、阅读器这类沉浸式页面挂一下即可，
+/// 不需要把状态提到 MainTabView 再层层传下去。
+struct EhHidesTabBarKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
+extension View {
+    /// 在这一屏隐藏底部浮起导航条
+    func ehHidesTabBar(_ hidden: Bool = true) -> some View {
+        preference(key: EhHidesTabBarKey.self, value: hidden)
+    }
+}
+
 struct EhFloatingTabBar<Tab: Hashable>: View {
     struct Item {
         let value: Tab
@@ -88,9 +107,28 @@ extension View {
         selection: Binding<Tab>,
         onReselect: ((Tab) -> Void)? = nil
     ) -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0) {
-            EhFloatingTabBar(items: items, selection: selection, onReselect: onReselect)
-        }
+        modifier(EhFloatingTabBarModifier(items: items, selection: selection, onReselect: onReselect))
+    }
+}
+
+
+private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
+    let items: [EhFloatingTabBar<Tab>.Item]
+    @Binding var selection: Tab
+    var onReselect: ((Tab) -> Void)?
+
+    @State private var isHidden = false
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(EhHidesTabBarKey.self) { isHidden = $0 }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !isHidden {
+                    EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.22), value: isHidden)
     }
 }
 
