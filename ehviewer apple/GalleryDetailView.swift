@@ -1055,10 +1055,13 @@ class GalleryDetailViewModel {
         record.posted = info.posted
         record.uploader = info.uploader
         record.rating = info.rating
+        record.simpleTags = info.simpleTags
+        record.simpleLanguage = info.simpleLanguage
         do {
             try EhDatabase.shared.insertHistory(record)
             // 限制历史记录数量 (对齐 Android Settings.getHistoryInfoSize())
             try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+            NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
         } catch {
             debugLog("Failed to record history: \(error)")
         }

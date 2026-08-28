@@ -306,29 +306,33 @@ struct FavoritesView: View {
                 }
             }
 
-            // 在线收藏
+            // 在线收藏。
+            // 已经有本地收藏时不让它再画一次空状态：没登录的用户会在
+            // 自己的收藏列表下面永远看到一句「这个收藏夹是空的」。
             if embedded, let sel = externalSelection {
-                GalleryListView(mode: .favorites(slot: -1), selection: sel, searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
+                GalleryListView(mode: .favorites(slot: -1), selection: sel,
+                                searchKeyword: searchText.isEmpty ? nil : searchText,
+                                hidesOwnSearchBar: true,
+                                hidesEmptyState: !localFavorites.isEmpty)
             } else {
-                GalleryListView(mode: .favorites(slot: -1), searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
+                GalleryListView(mode: .favorites(slot: -1),
+                                searchKeyword: searchText.isEmpty ? nil : searchText,
+                                hidesOwnSearchBar: true,
+                                hidesEmptyState: !localFavorites.isEmpty)
             }
         }
         .onAppear { loadLocalFavorites() }
+        // 在别处加/取消收藏后要跟着变——此前只有 onAppear 会重新读库，
+        // 从详情页收藏完返回收藏页，列表还是老样子
+        .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { _ in
+            loadLocalFavorites()
+        }
     }
 
     private func localFavoriteRow(_ record: LocalFavoriteRecord) -> some View {
-        // 与首页、下载、历史共用同一个行组件。此前这里是第四份各自的实现，
-        // 分类还画成填充方块、评分是星星，改一次样式要改四处。
-        EhGalleryRow(
-            cover: record.thumb,
-            title: record.title,
-            category: EhCategory(rawValue: record.category),
-            subtitle: record.uploader,
-            // 分类名在封面角标上，不再占元信息行
-            meta: [],
-            rating: record.rating > 0 ? record.rating : nil,
-            trailingText: record.posted
-        )
+        // 与首页、下载、历史共用同一个入口：字段由组件铺开，
+        // 这里不再挑着传，否则又会变成「收藏页只有标题和封面」。
+        EhGalleryRow(gallery: record.toGalleryInfo())
     }
 
     private func loadLocalFavorites() {
@@ -488,6 +492,7 @@ extension LocalFavoriteRecord {
             uploader: uploader,
             rating: rating,
             pages: pages,
+            simpleTags: simpleTags,
             simpleLanguage: simpleLanguage
         )
     }

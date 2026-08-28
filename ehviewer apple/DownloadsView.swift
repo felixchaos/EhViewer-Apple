@@ -176,6 +176,15 @@ struct DownloadsView: View {
             await loadReadingProgress()
             await calculateStorageSizes()
         }
+        // 在别处点了下载要立刻出现在这一页。
+        // 此前只有 .task 会拉一次列表，从首页下载完切过来什么都没有，
+        // 得杀掉进程重进才看得到。
+        .onReceive(NotificationCenter.default.publisher(for: .galleryDownloadChanged)) { _ in
+            Task {
+                await vm.loadTasks()
+                await calculateStorageSizes()
+            }
+        }
     }
 
     // MARK: - 存储空间概览
@@ -964,25 +973,22 @@ struct DownloadTaskRow: View {
 
     var body: some View {
         EhGalleryRow(
-            cover: task.gallery.thumb,
-            title: task.gallery.bestTitle,
-            category: task.gallery.category,
-            language: task.gallery.simpleLanguage,
-            meta: metaItems,
-            readProgress: readProgressFraction,
+            gallery: task.gallery,
+            // 下载状态排在页数、评分这些通用信息前面
+            extraMeta: statusMeta,
             progress: isActive ? downloadProgress : nil,
             progressLabel: isActive ? "\(Int(downloadProgress * 100))%" : nil,
-            thumbnailSize: EhSize.downloadThumbnail
-        ) {
             // 暂停/继续是这一行最常按的东西，此前只能长按出上下文菜单
-            Group {
-                if isActive {
-                    EhRowActionButton(symbol: "pause.fill", size: 28, action: onPause)
-                } else if task.state != DownloadManager.stateFinish {
-                    EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: onResume)
+            accessory: AnyView(
+                Group {
+                    if isActive {
+                        EhRowActionButton(symbol: "pause.fill", size: 28, action: onPause)
+                    } else if task.state != DownloadManager.stateFinish {
+                        EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: onResume)
+                    }
                 }
-            }
-        }
+            )
+        )
         .contentShape(Rectangle())
         .contextMenu {
             // 暂停/恢复
@@ -1062,13 +1068,13 @@ struct DownloadTaskRow: View {
         task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait
     }
 
-    /// 元信息：状态（带颜色）/ 页数 / 体积 / 下载中的已完成页数与速度。
-    /// 状态用颜色表达而非图标 + 灰字——「失败」和「已完成」在一列灰字里
-    /// 几乎分辨不出来。
-    private var metaItems: [EhGalleryRow.MetaItem] {
+    /// 下载页独有的元信息：状态与占用空间。
+    /// 页数/评分/标签这些通用字段由 EhGalleryRow(gallery:) 统一补，
+    /// 不在这里重复——重复的结果就是各页面显示的东西对不上。
+    /// 状态用颜色表达而非灰字：「失败」和「已完成」在一列灰字里分辨不出来。
+    private var statusMeta: [EhGalleryRow.MetaItem] {
         var items: [EhGalleryRow.MetaItem] = [
             .init(statusText, color: statusColor, isMonospaced: false),
-            .init("\(task.gallery.pages) 页"),
         ]
         if let size = storageSize, size > 0 {
             items.append(.init(DownloadsView.formatFileSize(size), color: EhColor.tertiaryLabel))

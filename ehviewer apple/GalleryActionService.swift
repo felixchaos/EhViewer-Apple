@@ -23,31 +23,46 @@ final class GalleryActionService {
 
     // MARK: - 收藏
 
+    /// 快速收藏的三种结局。
+    ///
+    /// 此前这里返回 Bool，把「没设默认收藏夹」和「网络失败」压成了同一个
+    /// false，于是收藏请求失败时界面会弹出收藏夹选择器——用户以为是要选
+    /// 文件夹，选完又失败一次。两件事必须分开。
+    enum QuickFavoriteOutcome {
+        case done
+        case needsPicker
+        case failed
+    }
+
     /// 快速收藏 — 使用默认收藏夹 (对齐 Android: onModifyFavorite with defaultFavSlot)
     /// - 默认 slot >= 0: 直接添加到云端
     /// - 默认 slot == -1: 添加到本地
-    /// - 默认 slot == -2: 返回 false，调用方应弹出选择器
-    /// - Returns: true 表示已执行操作, false 表示需要弹出选择器
-    @discardableResult
-    func quickFavorite(gallery: GalleryInfo) async -> Bool {
+    /// - 默认 slot == -2: 需要弹出选择器
+    func quickFavorite(gallery: GalleryInfo) async -> QuickFavoriteOutcome {
         let defaultSlot = AppSettings.shared.defaultFavSlot
         if defaultSlot >= 0 && defaultSlot <= 9 {
             do {
                 try await addFavorite(gid: gallery.gid, token: gallery.token, slot: defaultSlot)
+                return .done
             } catch {
-                return false
+                return .failed
             }
-            return true
         } else if defaultSlot == -1 {
-            addLocalFavorite(gallery: gallery)
-            return true
+            return addLocalFavorite(gallery: gallery) ? .done : .failed
         }
-        return false // 需要弹出选择器
+        return .needsPicker
     }
 
     /// 添加云端收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
     func addFavorite(gid: Int64, token: String, slot: Int) async throws {
-        try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
+        do {
+            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
+        } catch {
+            // 对齐 Android add_to_favorite_failure
+            EhToast.failure("添加收藏失败")
+            throw error
+        }
+        EhToast.success("已添加至收藏")
         AppSettings.shared.recentFavCat = slot
         NotificationCenter.default.post(name: .galleryFavoriteChanged,
                                         object: nil,
@@ -55,7 +70,8 @@ final class GalleryActionService {
     }
 
     /// 添加本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
-    func addLocalFavorite(gallery: GalleryInfo) {
+    @discardableResult
+    func addLocalFavorite(gallery: GalleryInfo) -> Bool {
         var record = LocalFavoriteRecord(
             gid: gallery.gid, token: gallery.token, title: gallery.bestTitle,
             category: gallery.category.rawValue, pages: gallery.pages, date: Date()
@@ -65,13 +81,19 @@ final class GalleryActionService {
         record.posted = gallery.posted
         record.uploader = gallery.uploader
         record.rating = gallery.rating
+        record.simpleTags = gallery.simpleTags
+        record.simpleLanguage = gallery.simpleLanguage
         do {
             try EhDatabase.shared.insertLocalFavorite(record)
             NotificationCenter.default.post(name: .galleryFavoriteChanged,
                                             object: nil,
                                             userInfo: ["gid": gallery.gid, "favorited": true, "slot": -1])
+            EhToast.success("已添加至本地收藏")
+            return true
         } catch {
             debugLog("[GalleryActionService] Add local favorite failed: \(error)")
+            EhToast.failure("添加收藏失败")
+            return false
         }
     }
 
@@ -87,8 +109,15 @@ final class GalleryActionService {
     // MARK: - 下载
 
     /// 快速下载 (Fix A-1: 已失败/已暂停的任务允许重新启动)
+    ///
+    /// 提示与状态缓存写在这里而不是各调用方：列表、历史、收藏、详情页
+    /// 都会调它，此前只有详情页做了反馈，其余三处点下去屏幕毫无变化。
     func startDownload(gallery: GalleryInfo) async {
         await DownloadManager.shared.startDownload(gallery: gallery)
+        NotificationCenter.default.post(name: .galleryDownloadChanged, object: nil,
+                                        userInfo: ["gid": gallery.gid, "downloading": true])
+        // 对齐 Android added_to_download_list
+        EhToast.success("已添加至下载列表")
     }
 
     /// 当前是否在计费网络上，且用户开了"移动网络下载前提醒"
@@ -146,4 +175,11 @@ final class GalleryActionService {
 extension Notification.Name {
     /// 画廊收藏状态变化 (userInfo: gid, favorited, slot?)
     static let galleryFavoriteChanged = Notification.Name("galleryFavoriteChanged")
+    /// 画廊下载状态变化 (userInfo: gid, downloading)
+    ///
+    /// 此前只有收藏有通知，下载没有：点了下载之后下载页、列表行全都不动，
+    /// 得杀进程重进才看得到。
+    static let galleryDownloadChanged = Notification.Name("galleryDownloadChanged")
+    /// 浏览/阅读历史变化 (userInfo: gid)
+    static let galleryHistoryChanged = Notification.Name("galleryHistoryChanged")
 }

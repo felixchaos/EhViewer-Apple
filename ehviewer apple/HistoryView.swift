@@ -17,6 +17,8 @@ struct HistoryView: View {
     @State private var isSearching = false
     /// 点续读钮时直接开阅读器，不经详情页
     @State private var resumeItem: ReaderLaunchItem?
+    /// 待选收藏夹的画廊（没设默认收藏夹时）
+    @State private var pendingFavorite: GalleryInfo?
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
@@ -40,6 +42,13 @@ struct HistoryView: View {
             }
         }
         .task {
+            vm.loadHistory()
+        }
+        // 阅读器/详情页写入历史后要跟着变——此前切回历史页还是旧的
+        .onReceive(NotificationCenter.default.publisher(for: .galleryHistoryChanged)) { _ in
+            vm.loadHistory()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { _ in
             vm.loadHistory()
         }
     }
@@ -129,6 +138,23 @@ struct HistoryView: View {
             }
         }
         .listStyle(.plain)
+        .sheet(item: $pendingFavorite) { gallery in
+            FavoriteSlotPicker(
+                onSelect: { slot in
+                    pendingFavorite = nil
+                    Task {
+                        if slot == -1 {
+                            GalleryActionService.shared.addLocalFavorite(gallery: gallery)
+                        } else {
+                            try? await GalleryActionService.shared.addFavorite(
+                                gid: gallery.gid, token: gallery.token, slot: slot
+                            )
+                        }
+                    }
+                },
+                onCancel: { pendingFavorite = nil }
+            )
+        }
         #if os(iOS)
         .ehTabBarAutoHide()
         .fullScreenCover(item: $resumeItem) { item in
@@ -150,26 +176,24 @@ struct HistoryView: View {
                         .opacity(0)
 
                     EhGalleryRow(
-                        cover: record.thumb,
-                        title: record.titleJpn ?? record.title,
-                        category: EhCategory(rawValue: record.category),
-                        subtitle: formattedTime(record.date),
-                        readProgress: readProgress(for: record),
-                        thumbnailSize: EhSize.historyThumbnail
-                    ) {
+                        gallery: record.toGalleryInfo(),
+                        // 历史页的第二行放「什么时候看的」而不是上传者——
+                        // 这一页是按时间组织的，上传者在这里没有导航价值
+                        subtitleOverride: formattedTime(record.date),
                         // 历史页最主要的动作就是接着上次读，
                         // 让它有个独立落点而不是只能整行点进详情
-                        EhRowActionButton(symbol: "play.fill") {
-                            resumeItem = ReaderLaunchItem(
-                                gid: record.gid, token: record.token,
-                                pages: record.pages, previewSet: nil,
-                                initialPage: UserDefaults.standard.object(
-                                    forKey: "reading_progress_\(record.gid)"
-                                ) as? Int
-                            )
-                        }
-                    }
-                    .padding(.vertical, 4)
+                        accessory: AnyView(
+                            EhRowActionButton(symbol: "play.fill") {
+                                resumeItem = ReaderLaunchItem(
+                                    gid: record.gid, token: record.token,
+                                    pages: record.pages, previewSet: nil,
+                                    initialPage: UserDefaults.standard.object(
+                                        forKey: "reading_progress_\(record.gid)"
+                                    ) as? Int
+                                )
+                            }
+                        )
+                    )
                 }
                 .overlay(alignment: .bottom) { EhHairline() }
                 .contextMenu {
@@ -181,7 +205,14 @@ struct HistoryView: View {
                     }
 
                     Button {
-                        Task { await GalleryActionService.shared.quickFavorite(gallery: record.toGalleryInfo()) }
+                        // 没设默认收藏夹时要弹选择器——此前这里丢掉了返回值，
+                        // 历史页长按「收藏」和列表页一样毫无反应
+                        let gallery = record.toGalleryInfo()
+                        Task {
+                            if await GalleryActionService.shared.quickFavorite(gallery: gallery) == .needsPicker {
+                                pendingFavorite = gallery
+                            }
+                        }
                     } label: {
                         Label("收藏", systemImage: "heart")
                     }
@@ -228,7 +259,8 @@ extension HistoryRecord {
             title: title, titleJpn: titleJpn, thumb: thumb,
             category: EhCategory(rawValue: category),
             posted: posted, uploader: uploader,
-            rating: rating, pages: pages
+            rating: rating, pages: pages,
+            simpleTags: simpleTags, simpleLanguage: simpleLanguage
         )
     }
 }

@@ -1043,6 +1043,13 @@ class ReaderViewModel {
         max(5, effectivePreloadCount + 2)
     }
 
+    /// 这一页的图片已经在手上了吗（Observable 层或 NSCache 里）。
+    /// 预加载的取舍全看它——问「URL 有没有」是问错了问题。
+    func isImageReady(_ index: Int) -> Bool {
+        if cachedImages[index] != nil { return true }
+        return Self.imageCache.object(forKey: cacheKey(for: index)) != nil
+    }
+
     /// 预加载 —— 方向感知 + 由近及远
     ///
     /// 相比原来的固定窗口有三点改进:
@@ -1062,8 +1069,19 @@ class ReaderViewModel {
         let hi = min(totalPages - 1, page + ahead)
         guard lo <= hi else { return }
 
+        // 判据是「图片数据到没到」，不是「URL 解析没解析」。
+        //
+        // 这里原本写的是 `imageURLs[$0] == nil`：一旦某页的 URL 解析过，
+        // 它就永远进不了候选，于是 downloadImageData 再也不会为它跑。
+        // 结果就是翻到那一页才开始现场下载——左右翻页模式下每翻一页都要等，
+        // 预加载看起来完全没生效。
         let candidates = (lo...hi)
-            .filter { $0 != page && imageURLs[$0] == nil && !loadingPages.contains($0) }
+            .filter { p in
+                p != page
+                    && !isImageReady(p)
+                    && !loadingPages.contains(p)
+                    && !downloadingImages.contains(p)
+            }
             // 距离近的先来；同距离时优先阅读方向那一侧
             .sorted {
                 let d0 = abs($0 - page), d1 = abs($1 - page)

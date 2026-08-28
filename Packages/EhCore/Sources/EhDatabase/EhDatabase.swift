@@ -221,6 +221,20 @@ public final class EhDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v3") { db in
+            // 下载/历史/本地收藏三张表补 simpleTags。
+            //
+            // 这三处的列表行此前只能显示标题和封面：卡片组件支持标签 chip，
+            // 但记录里根本没存过标签，于是同一本本子在首页信息完整、
+            // 换到收藏页就只剩一个标题。列表接口本来就返回 simpleTags，
+            // 存下来即可，不需要额外请求。
+            for table in ["download", "history", "localFavorite"] {
+                try db.alter(table: table) { t in
+                    t.add(column: "simpleTags", .text)
+                }
+            }
+        }
+
         return migrator
     }
 
@@ -747,6 +761,8 @@ public struct DownloadRecord: Codable, FetchableRecord, PersistableRecord, Senda
     public var rating: Float
     public var simpleLanguage: String?
     public var pages: Int
+    /// 列表接口返回的简易标签，供列表行显示 chip
+    public var simpleTags: [String]?
     public var state: Int
     public var legacy: Int
     public var date: Date
@@ -780,6 +796,8 @@ public struct HistoryRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public var rating: Float
     public var simpleLanguage: String?
     public var pages: Int
+    /// 列表接口返回的简易标签，供列表行显示 chip
+    public var simpleTags: [String]?
     public var mode: Int
     public var date: Date
 
@@ -810,6 +828,8 @@ public struct LocalFavoriteRecord: Codable, FetchableRecord, PersistableRecord, 
     public var rating: Float
     public var simpleLanguage: String?
     public var pages: Int
+    /// 列表接口返回的简易标签，供列表行显示 chip
+    public var simpleTags: [String]?
     public var date: Date
 
     public init(gid: Int64, token: String, title: String, category: Int = 0,

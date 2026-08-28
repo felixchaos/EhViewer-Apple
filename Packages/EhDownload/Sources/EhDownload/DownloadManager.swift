@@ -123,7 +123,7 @@ public actor DownloadManager {
         downloadQueue.append(task)
 
         // 持久化到数据库
-        let record = DownloadRecord(
+        var record = DownloadRecord(
             gid: gallery.gid, token: gallery.token,
             title: gallery.bestTitle, titleJpn: gallery.titleJpn,
             thumb: gallery.thumb, category: gallery.category.rawValue,
@@ -131,6 +131,8 @@ public actor DownloadManager {
             rating: gallery.rating, simpleLanguage: gallery.simpleLanguage,
             pages: gallery.pages, state: Self.stateWait, date: Date()
         )
+        // 标签也存下来，否则下载页的卡片比首页少一行信息
+        record.simpleTags = gallery.simpleTags
         try? EhDatabase.shared.insertDownload(record)
 
         // 启动队列处理
@@ -221,6 +223,10 @@ public actor DownloadManager {
 
         downloadQueue.removeAll { $0.gallery.gid == gid }
         try? EhDatabase.shared.deleteDownload(gid: gid)
+        // 列表行上的「已下载」标记要跟着消失
+        NotificationCenter.default.post(name: Notification.Name("galleryDownloadChanged"),
+                                        object: nil,
+                                        userInfo: ["gid": gid, "downloading": false])
 
         if deleteFiles {
             // 清除 SpiderDen 阅读缓存
@@ -479,8 +485,19 @@ public actor DownloadManager {
         downloadQueue[finalIndex].spider = nil  // 释放 spider 引用
         try? EhDatabase.shared.updateDownloadState(gid: gallery.gid, state: downloadQueue[finalIndex].state)
 
-        // 通知监听器下载完成
-        await listener?.onDownloadFinish(gid: gallery.gid, title: gallery.bestTitle, success: success)
+        // 通知监听器下载完成。
+        //
+        // isBatchFinished 表示队列里已经没有等待/进行中的任务了。
+        // Android 是靠 DownloadService 在空闲时 stopSelf、销毁时 clear() 计数
+        // 来实现「一批算一批」；我们的通知服务是常驻单例，没有这个生命周期，
+        // 于是计数从 App 启动起一直累加——下完第三本，通知写的是
+        //「3 个画廊下载完成」，而不是刚下完的那一本。
+        let stillPending = downloadQueue.contains {
+            $0.gallery.gid != gallery.gid
+                && ($0.state == Self.stateWait || $0.state == Self.stateDownload)
+        }
+        await listener?.onDownloadFinish(gid: gallery.gid, title: gallery.bestTitle,
+                                         success: success, isBatchFinished: !stillPending)
 
         // iOS: 释放后台执行时间
         await endBackgroundTask(bgToken)
@@ -773,7 +790,7 @@ public protocol DownloadListener: AnyObject, Sendable {
     func onDownloadProgress(gid: Int64, title: String, downloaded: Int, total: Int, speed: Int64) async
 
     /// 下载完成
-    func onDownloadFinish(gid: Int64, title: String, success: Bool) async
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) async
 
     /// 509错误
     func on509Error() async

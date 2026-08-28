@@ -163,7 +163,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
 
     // MARK: - 下载完成通知（对应 Android onFinish）
 
-    func onDownloadFinish(gid: Int64, title: String, success: Bool) {
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool = true) {
         // 移除下载中通知
         removeNotification(id: downloadingNotificationId)
         currentDownloadInfo = nil
@@ -211,6 +211,14 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
         content.userInfo = ["action": "open_downloads"]
 
         sendNotificationImmediate(id: downloadedNotificationId, content: content)
+
+        // 这一批下完了就把计数清零。不清的话下次单独下一本，
+        // 通知会把历史上所有完成过的都算进去。
+        if isBatchFinished {
+            completedItems.removeAll()
+            finishedCount = 0
+            failedCount = 0
+        }
     }
 
     // MARK: - 509错误通知（对应 Android onGet509）

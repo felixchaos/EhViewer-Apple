@@ -38,6 +38,9 @@ struct ImageReaderView: View {
     @State private var vm: ReaderViewModel
     @State private var showOverlay = true
     @State private var showSettings = false
+    /// 页面网格（对齐 Android 阅读器的「目录」）——
+    /// 此前跳页只有底部那条 slider，200 页的本子要靠手感拖
+    @State private var showPageGrid = false
     @State private var hasAppliedInitialPage = false
     @State private var isZoomed = false
     @State private var showTutorial = false
@@ -183,6 +186,16 @@ struct ImageReaderView: View {
                 startPosition: $startPosition,
                 autoPageEnabled: $autoPageEnabled
             )
+        }
+        .sheet(isPresented: $showPageGrid) {
+            ReaderPageGrid(total: vm.totalPages, current: vm.currentPage) { target in
+                showPageGrid = false
+                vm.currentPage = target
+                vm.lazyCurrentPage = target
+                vm.verticalScrollPage = target
+                if vm.isDoublePageEnabled { vm.syncSpreadIndex() }
+                Task { await vm.onPageChange(target) }
+            }
         }
         // 跳页输入弹窗
         .alert("跳转到页码", isPresented: $showJumpPageAlert) {
@@ -408,9 +421,14 @@ struct ImageReaderView: View {
             record.posted = info.posted
             record.uploader = info.uploader
             record.rating = info.rating
+        record.simpleTags = info.simpleTags
+        record.simpleLanguage = info.simpleLanguage
+            record.simpleTags = info.simpleTags
+            record.simpleLanguage = info.simpleLanguage
             do {
                 try EhDatabase.shared.insertHistory(record)
                 try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+                NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
             } catch {
                 debugLog("Failed to record reading history: \(error)")
             }
@@ -424,6 +442,7 @@ struct ImageReaderView: View {
             do {
                 try EhDatabase.shared.insertHistory(record)
                 try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+                NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
             } catch {
                 debugLog("Failed to record reading history: \(error)")
             }
@@ -1255,30 +1274,19 @@ struct ImageReaderView: View {
 
             Spacer(minLength: 8)
 
+            // 双页与阅读方向只在底栏出现一次。
+            // 此前顶栏和底栏各有一份，同一个开关在屏幕上有两个位置、
+            // 两种样式，按哪个都行——这不是「快捷方式」，是重复。
             HStack(spacing: 14) {
-                Button {
-                    vm.toggleDoublePage()
-                } label: {
-                    Image(systemName: "book.pages")
-                        .foregroundStyle(vm.isDoublePageEnabled ? EhColor.accent : EhColor.label)
-                }
-
-                Menu {
-                    ForEach(ReadingDirection.allCases, id: \.rawValue) { dir in
-                        Button {
-                            readingDirection = dir
-                            AppSettings.shared.readingDirection = dir.rawValue
-                        } label: {
-                            Label(dir.label, systemImage: dir.icon)
-                        }
-                    }
-                } label: {
-                    Image(systemName: readingDirection.icon)
+                Button { showPageGrid = true } label: {
+                    Image(systemName: "square.grid.2x2")
                         .foregroundStyle(EhColor.label)
                 }
 
+                // 齿轮。这里原来画的是 sun.max，点开却是整个阅读设置面板——
+                // 图标承诺的是亮度，打开的是设置。
                 Button { showSettings = true } label: {
-                    Image(systemName: "sun.max")
+                    Image(systemName: "gearshape")
                         .foregroundStyle(EhColor.label)
                 }
             }
@@ -1369,15 +1377,31 @@ struct ImageReaderView: View {
                     AppSettings.shared.readingDirection = readingDirection.rawValue
                 }
                 modeBlock("自动", isOn: autoPageEnabled) { toggleAutoPage() }
-                modeBlock("护眼", isOn: AppSettings.shared.colorFilter) {
-                    AppSettings.shared.colorFilter.toggle()
-                }
+                // 护眼滤镜留在设置面板里。它是「设一次就不动」的偏好，
+                // 不该和翻页方向这类阅读中随时要改的东西抢同一排位置。
             }
         }
         .padding(EhSpacing.page)
         .ehGlass(cornerRadius: EhRadius.card)
         .padding(.horizontal, EhSpacing.page)
-        .padding(.bottom, 8)
+        // 阅读器整屏忽略安全区（图要铺满），底栏就得自己把 Home Indicator
+        // 的高度让出来，否则最后一排按钮被屏幕底边切掉——这条在带
+        // Home Indicator 的机器上是必然发生，不是偶发。
+        .padding(.bottom, max(8, safeAreaBottomInset))
+    }
+
+    /// 底部安全区高度。阅读器用了 ignoresSafeArea，GeometryProxy 报的是 0，
+    /// 只能问窗口要。
+    private var safeAreaBottomInset: CGFloat {
+        #if os(iOS)
+        let scenes = UIApplication.shared.connectedScenes
+        let window = scenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+        return window?.safeAreaInsets.bottom ?? 0
+        #else
+        return 0
+        #endif
     }
 
     private func modeBlock(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
@@ -2007,3 +2031,67 @@ private func setScreenBrightness(_ brightness: CGFloat) {
     }
 }
 #endif
+
+// MARK: - 页面网格（目录）
+
+/// 跳页网格。对齐 Android 阅读器里的页码目录：
+/// 底部那条 slider 在两百页的本子上根本定位不到具体页，
+/// 而「回到第 87 页」是阅读时的常见需求。
+struct ReaderPageGrid: View {
+    let total: Int
+    let current: Int
+    let onSelect: (Int) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = [GridItem(.adaptive(minimum: 54), spacing: 10)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        ForEach(0..<max(total, 0), id: \.self) { index in
+                            Button {
+                                onSelect(index)
+                            } label: {
+                                Text("\(index + 1)")
+                                    .font(EhFont.mono(15, weight: index == current ? .bold : .regular))
+                                    .foregroundStyle(index == current
+                                                     ? EhColor.onAccentFill : EhColor.label)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 44)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: EhRadius.smallControl,
+                                                         style: .continuous)
+                                            .fill(index == current ? EhColor.accentFill : EhColor.fill)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .id(index)
+                        }
+                    }
+                    .padding(EhSpacing.page)
+                }
+                .onAppear {
+                    // 打开就停在当前页上，而不是从第 1 页开始滚
+                    proxy.scrollTo(current, anchor: .center)
+                }
+            }
+            .background(EhColor.background)
+            .navigationTitle("跳转到第 \(current + 1) 页")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #endif
+    }
+}

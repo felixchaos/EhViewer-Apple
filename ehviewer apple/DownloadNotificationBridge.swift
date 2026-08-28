@@ -55,7 +55,7 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
         }
     }
 
-    func onDownloadFinish(gid: Int64, title: String, success: Bool) async {
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) async {
         await MainActor.run {
             #if os(iOS)
             // 结束灵动岛 Live Activity
@@ -64,7 +64,10 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
             }
             #endif
             // 完成通知仍使用传统通知 (在通知中心保留记录)
-            DownloadNotificationService.shared.onDownloadFinish(gid: gid, title: title, success: success)
+            DownloadNotificationService.shared.onDownloadFinish(
+                gid: gid, title: title, success: success, isBatchFinished: isBatchFinished)
+            NotificationCenter.default.post(name: .galleryDownloadChanged, object: nil,
+                                            userInfo: ["gid": gid, "downloading": true])
         }
     }
 

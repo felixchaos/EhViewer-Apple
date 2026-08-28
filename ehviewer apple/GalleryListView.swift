@@ -66,6 +66,11 @@ struct GalleryListView: View {
     /// 收藏页自己已经有页头和搜索按钮，内嵌列表再画一条搜索栏就成了两个搜索入口，
     /// 上下叠在一起。
     private var hidesOwnSearchBar = false
+    /// 由父视图接管空状态。
+    ///
+    /// 收藏页的「全部」把本地收藏区块和这个在线列表叠在一起：没登录时在线
+    /// 列表永远是空的，于是本地收藏下面永远吊着一句「这个收藏夹是空的」。
+    private var hidesEmptyState = false
 
     /// 顶部横向切页的选中项。非 nil 时在搜索栏下方渲染「首页/订阅/热门/排行」切页条。
     /// 只有作为浏览容器的根列表才传入；标签列表、搜索结果等推入的列表不显示切页条。
@@ -110,20 +115,23 @@ struct GalleryListView: View {
     }
 
     /// 收藏搜索模式
-    init(mode: ListMode, searchKeyword: String?, hidesOwnSearchBar: Bool = false) {
+    init(mode: ListMode, searchKeyword: String?, hidesOwnSearchBar: Bool = false,
+         hidesEmptyState: Bool = false) {
         self.mode = mode
         self.favSearchKeyword = searchKeyword
         self.externalSelection = nil
         self.hidesOwnSearchBar = hidesOwnSearchBar
+        self.hidesEmptyState = hidesEmptyState
     }
 
     /// 收藏搜索模式 (嵌入)
     init(mode: ListMode, selection: Binding<GalleryInfo?>, searchKeyword: String?,
-         hidesOwnSearchBar: Bool = false) {
+         hidesOwnSearchBar: Bool = false, hidesEmptyState: Bool = false) {
         self.mode = mode
         self.externalSelection = selection
         self.favSearchKeyword = searchKeyword
         self.hidesOwnSearchBar = hidesOwnSearchBar
+        self.hidesEmptyState = hidesEmptyState
     }
 
     /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
@@ -191,8 +199,8 @@ struct GalleryListView: View {
             viewModel.favSearchKeyword = favSearchKeyword
             viewModel.loadSearchHistory()
             // 已下载标记要有数据才画得出来
-            if !DownloadStatusCache.shared.isLoaded {
-                await DownloadStatusCache.shared.reload()
+            if !GalleryStatusCache.shared.isLoaded {
+                await GalleryStatusCache.shared.reload()
             }
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
@@ -256,7 +264,7 @@ struct GalleryListView: View {
                         } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
                             // 加载完但一条都没有：此前直接渲染空 List，屏幕一片白，
                             // 用户分不清是没结果、没登录，还是界面坏了
-                            emptyStateView
+                            if !hidesEmptyState { emptyStateView }
                         } else {
                             // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
                             galleryList
@@ -315,7 +323,6 @@ struct GalleryListView: View {
                                     gid: gallery.gid, token: gallery.token, slot: slot
                                 )
                             }
-                            Haptics.success()
                         }
                     },
                     onCancel: { pendingFavorite = nil }
@@ -685,28 +692,20 @@ struct GalleryListView: View {
         }
     }
 
-    /// 收藏。没有设默认收藏夹时弹选择器——此前这里直接丢掉了
-    /// `quickFavorite` 的返回值（false 表示「需要弹选择器」），
-    /// 于是没设默认的用户点侧滑/长按收藏毫无反应。
+    /// 收藏。没设默认收藏夹时弹选择器——此前这里直接丢掉了
+    /// `quickFavorite` 的返回值，于是没设默认的用户点侧滑/长按收藏毫无反应。
+    /// 成功与失败的提示由 GalleryActionService 统一发出。
     private func requestFavorite(_ gallery: GalleryInfo) {
         Task {
-            let done = await GalleryActionService.shared.quickFavorite(gallery: gallery)
-            if done {
-                Haptics.success()
-            } else {
+            if await GalleryActionService.shared.quickFavorite(gallery: gallery) == .needsPicker {
                 pendingFavorite = gallery
             }
         }
     }
 
-    /// 下载。补上触感反馈——此前下载确实发起了，但界面毫无动静，
-    /// 看起来就像按钮没响应。
+    /// 下载
     private func requestDownload(_ gallery: GalleryInfo) {
-        Task {
-            await GalleryActionService.shared.startDownload(gallery: gallery)
-            DownloadStatusCache.shared.markDownloaded(gid: gallery.gid)
-            Haptics.success()
-        }
+        Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
     }
 
     /// 提交搜索。
@@ -1162,29 +1161,14 @@ struct GalleryRow: View {
     var onRequestDownload: (GalleryInfo) -> Void = { _ in }
     var onRequestFavorite: (GalleryInfo) -> Void = { _ in }
 
-    @Environment(\.responsiveLayout) private var layout
-
-    // 列表显示开关 (对齐 Android Settings: SHOW_GALLERY_PAGES / RATING / READ_PROGRESS / THUMB_SIZE)
-    private let showPages = AppSettings.shared.showGalleryPages
-    private let showRating = AppSettings.shared.showGalleryRating
-    private let showProgress = AppSettings.shared.showReadProgress
-    private let thumbScale = GalleryRow.scale(for: AppSettings.shared.thumbSize)
-
-    /// 缩略图大小: 0 小 / 1 中 / 2 大
-    private static func scale(for size: Int) -> CGFloat {
-        switch size {
-        case 0:  return 0.8
-        case 2:  return 1.25
-        default: return 1.0
-        }
-    }
-
-    /// 已读到第几页 —— 只有开了"显示阅读进度"才去查
-    private var readProgress: Int? {
-        guard showProgress, gallery.pages > 0 else { return nil }
-        // 存的是 0-based 页索引，展示时 +1
-        let index = UserDefaults.standard.integer(forKey: "reading_progress_\(gallery.gid)")
-        return index > 0 ? index + 1 : nil
+    /// 行的显示全部交给 EhGalleryRow(gallery:)，这里只负责把封面 URL 修正好。
+    /// 显示开关、缩略图缩放、已下载/已收藏都在那个组件里统一处理——
+    /// 放在调用方就会出现「首页有、别的页没有」。
+    private var displayGallery: GalleryInfo {
+        guard let fixed = thumbURL?.absoluteString, fixed != gallery.thumb else { return gallery }
+        var copy = gallery
+        copy.thumb = fixed
+        return copy
     }
 
     /// 对齐 Android EhUrl.getFixedThumbUrl: 修复缩略图 CDN 域名不可达问题
@@ -1203,51 +1187,9 @@ struct GalleryRow: View {
         return URL(string: urlStr)
     }
 
-    /// 缩略图实际尺寸（响应式基准 × 用户设置的缩放）
-    private var thumbSize: CGSize {
-        let base = layout.galleryThumbnailSize
-        return CGSize(width: base.width * thumbScale, height: base.height * thumbScale)
-    }
-
-    /// 本地是否已经下载过这一本。
-    /// 对齐 Android 列表项里的 downloaded 标记——扫列表时能直接看出哪本已在本地。
-    private var isDownloaded: Bool {
-        DownloadStatusCache.shared.isDownloaded(gid: gallery.gid)
-    }
-
-    /// 元信息行：分类 / 页数 / 收藏 / 阅读进度。
-    /// 语言不在这里——它已经叠在封面的分类角标上（与 Android 一致）。
-    private var metaItems: [EhGalleryRow.MetaItem] {
-        // 分类名已经在封面角标上，这里不再重复
-        var items: [EhGalleryRow.MetaItem] = []
-        if let lang = gallery.simpleLanguage, !lang.isEmpty {
-            items.append(.init(lang))
-        }
-        if showPages {
-            items.append(.init("\(gallery.pages)P"))
-        }
-        if let readProgress {
-            items.append(.init("读至 \(readProgress)", color: EhColor.accent))
-        }
-        return items
-    }
-
     var body: some View {
-        EhGalleryRow(
-            cover: thumbURL?.absoluteString,
-            title: gallery.suitableTitle(preferJpn: showJpnTitle),
-            category: gallery.category,
-            language: gallery.simpleLanguage,
-            subtitle: gallery.uploader,
-            meta: metaItems,
-            tags: gallery.simpleTags ?? [],
-            isDownloaded: isDownloaded,
-            isFavorited: gallery.favoriteSlot >= 0,
-            rating: showRating ? gallery.rating : nil,
-            trailingText: gallery.posted,
-            thumbnailSize: thumbSize
-        )
-        .contentShape(Rectangle())
+        EhGalleryRow(gallery: displayGallery)
+            .contentShape(Rectangle())
         .contextMenu {
             // 下载
             Button {

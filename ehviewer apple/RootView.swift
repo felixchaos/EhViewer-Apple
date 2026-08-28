@@ -96,11 +96,16 @@ struct RootView: View {
                 onboardingOverlay
             }
         }
+        // 收藏/下载的轻提示层挂在根上，全 App 共用一个
+        .ehToastHost()
         .withGlobalErrorBoundary()
         // 已登录用户: 启动时异步获取资料 + ExH 检测 (不 mutate isSignedIn，不触发重渲染)
         .task {
             // 在 .task 中初始化 cachedColorScheme，打破 body 对 AppSettings.shared.theme 的直接观察
             cachedColorScheme = Self.computeColorScheme()
+            // 已下载/已收藏的标记要在任何列表第一次画出来之前就备好，
+            // 否则首屏那几行永远是「没下载过」的样子
+            await GalleryStatusCache.shared.reload()
             if appState.isSignedIn && !AppSettings.shared.skipSignIn {
                 await postLoginActions()
             }

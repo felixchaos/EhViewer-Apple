@@ -6,12 +6,14 @@
 //
 //  此前有四套各自的实现：GalleryListView 的 GalleryRow、FavoritesView 的
 //  localFavoriteRow、DownloadsView 的 DownloadTaskRow、HistoryView 内联的行。
-//  同一件事写四遍的代价是：改一次样式要改四处，而且总有漏掉的——
-//  分类色条、评分呈现、hairline 缩进这几轮改动就出现过四处不一致。
+//  收成一个组件之后仍然出过两类问题，这一版一并堵掉：
 //
-//  这里用「数据 + 可选配件」的形式收成一个组件：各页面的差异（下载进度条、
-//  续读按钮、收藏夹备注）通过 meta 行与 accessory 插槽表达，
-//  不必再各自复制一份布局。
+//  1. 尺寸不一致：首页按响应式基准 × 用户设置的缩放算缩略图，另外三页各自
+//     写死常量。同一台 iPhone 上，首页的封面和收藏页的封面不一样大。
+//     现在尺寸只在 `resolvedThumbnailSize` 一处算，调用方不再传。
+//  2. 信息不一致：调用方各自决定传哪些字段，收藏页只传了标题和封面。
+//     现在有 `EhGalleryRow(gallery:)` 这个入口，从 GalleryInfo 一次性铺开
+//     所有字段，四个页面都走它，不可能再漏。
 //
 
 import SwiftUI
@@ -44,24 +46,45 @@ struct EhGalleryRow: View {
     var language: String? = nil
     var subtitle: String? = nil          // 上传者 / 相对时间 / 收藏夹备注
     var meta: [MetaItem] = []
-    /// 标签 chip。列表接口本来就带 simpleTags，此前一直没用上——
-    /// 卡片里那块空间给了分类名，而分类名现在已经在封面角标上。
+    /// 标签 chip
     var tags: [String] = []
     /// 已下载 / 已收藏标记。对齐 Android item_gallery_list.xml 里的
-    /// downloaded 与 favourited 两个 16dp ImageView——iOS 端此前完全没有，
-    /// 用户在列表里看不出哪本已经下过。
+    /// downloaded 与 favourited 两个 16dp ImageView。
     var isDownloaded: Bool = false
     var isFavorited: Bool = false
-    var rating: Float? = nil             // nil = 不显示评分行
-    var trailingText: String? = nil      // 发布时间，跟在评分条右侧
+    var rating: Float? = nil             // nil = 不显示评分
+    var trailingText: String? = nil      // 发布时间，跟在星星右侧
     var readProgress: Double? = nil      // 封面底部的阅读进度
     var progress: Double? = nil          // 独立的下载进度条
     var progressLabel: String? = nil
-    var thumbnailSize: CGSize = EhSize.listThumbnail
+    /// 只有确实需要另一种尺寸的地方才传（目前没有）。默认走统一尺寸。
+    var thumbnailSize: CGSize? = nil
     var titleLineLimit: Int = 2
 
     /// 行右侧的按钮（续读、暂停/重试…）
     var accessory: AnyView? = nil
+
+    @Environment(\.responsiveLayout) private var layout
+
+    /// 全 App 统一的缩略图尺寸：响应式基准 × 用户在设置里选的缩放。
+    ///
+    /// 以前这个式子只在首页的行里有，另外三页传的是 `EhSize.listThumbnail`
+    /// 常量，于是设置里把缩略图调大只有首页会变。
+    private var resolvedThumbnailSize: CGSize {
+        if let thumbnailSize { return thumbnailSize }
+        let base = layout.galleryThumbnailSize
+        let scale = Self.thumbScale
+        return CGSize(width: base.width * scale, height: base.height * scale)
+    }
+
+    /// 缩略图大小: 0 小 / 1 中 / 2 大
+    private static var thumbScale: CGFloat {
+        switch AppSettings.shared.thumbSize {
+        case 0:  return 0.8
+        case 2:  return 1.25
+        default: return 1.0
+        }
+    }
 
     /// 标签 chip 上的文字：优先中文翻译，没有就去掉命名空间显示裸标签。
     /// 命名空间在 chip 里是噪音——`artist:onion knight kk` 占掉半行，
@@ -72,11 +95,15 @@ struct EhGalleryRow: View {
         return String(tag[tag.index(after: colon)...])
     }
 
+    /// 状态标记要不要占一行
+    private var hasStatusRow: Bool { isDownloaded || isFavorited || !meta.isEmpty }
+
     var body: some View {
-        HStack(alignment: .top, spacing: EhSpacing.row) {
+        let thumb = resolvedThumbnailSize
+        return HStack(alignment: .top, spacing: EhSpacing.row) {
             EhCoverThumbnail(
                 url: cover,
-                size: thumbnailSize,
+                size: thumb,
                 category: category,
                 language: language,
                 readProgress: readProgress
@@ -122,16 +149,19 @@ struct EhGalleryRow: View {
                     .padding(.bottom, 4)
                 }
 
-                if !meta.isEmpty {
+                // 状态标记这一行此前被写在 `if !meta.isEmpty` 里面：
+                // 元信息为空的页面（收藏、历史）永远看不到已下载/已收藏，
+                // 首页在关掉「显示页数」后也一样看不到。现在它自己成一行。
+                if hasStatusRow {
                     HStack(spacing: EhSpacing.meta) {
                         if isDownloaded {
                             Image(systemName: "arrow.down.circle.fill")
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(EhColor.success)
                         }
                         if isFavorited {
                             Image(systemName: "heart.fill")
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(EhColor.danger)
                         }
                         ForEach(meta) { item in
@@ -177,7 +207,7 @@ struct EhGalleryRow: View {
                         .padding(.top, 5)
                 }
             }
-            .frame(minHeight: thumbnailSize.height, alignment: .top)
+            .frame(minHeight: thumb.height, alignment: .top)
 
             accessory
         }
@@ -191,30 +221,48 @@ struct EhGalleryRow: View {
     }
 }
 
+// MARK: - 从 GalleryInfo 一次性铺开
+
 extension EhGalleryRow {
-    /// 带配件的构造器
-    init<A: View>(
-        cover: String?,
-        title: String,
-        category: EhCategory? = nil,
-        language: String? = nil,
-        subtitle: String? = nil,
-        meta: [MetaItem] = [],
-        rating: Float? = nil,
-        trailingText: String? = nil,
-        readProgress: Double? = nil,
+    /// 全 App 四个列表页的唯一入口。
+    ///
+    /// 字段在这里一次性铺开，调用方不再各自挑着传——收藏页只传标题和封面、
+    /// 历史页丢掉评分和语言这类事，就是从「调用方自己决定传什么」来的。
+    init(
+        gallery: GalleryInfo,
+        subtitleOverride: String? = nil,
+        extraMeta: [MetaItem] = [],
         progress: Double? = nil,
         progressLabel: String? = nil,
-        thumbnailSize: CGSize = EhSize.listThumbnail,
-        titleLineLimit: Int = 2,
-        @ViewBuilder accessory: () -> A
+        accessory: AnyView? = nil
     ) {
+        let settings = AppSettings.shared
+        var meta = extraMeta
+        if settings.showGalleryPages, gallery.pages > 0 {
+            meta.append(.init("\(gallery.pages)P"))
+        }
+        if settings.showReadProgress, gallery.pages > 0 {
+            let index = UserDefaults.standard.integer(forKey: "reading_progress_\(gallery.gid)")
+            if index > 0 {
+                meta.append(.init("读至 \(index + 1)", color: EhColor.accent))
+            }
+        }
+
         self.init(
-            cover: cover, title: title, category: category, language: language,
-            subtitle: subtitle, meta: meta, rating: rating, trailingText: trailingText,
-            readProgress: readProgress, progress: progress, progressLabel: progressLabel,
-            thumbnailSize: thumbnailSize, titleLineLimit: titleLineLimit,
-            accessory: AnyView(accessory())
+            cover: gallery.thumb,
+            title: gallery.suitableTitle(preferJpn: settings.showJpnTitle),
+            category: gallery.category,
+            language: gallery.simpleLanguage,
+            subtitle: subtitleOverride ?? gallery.uploader,
+            meta: meta,
+            tags: gallery.simpleTags ?? [],
+            isDownloaded: GalleryStatusCache.shared.isDownloaded(gid: gallery.gid),
+            isFavorited: GalleryStatusCache.shared.isFavorited(gallery),
+            rating: settings.showGalleryRating ? gallery.rating : nil,
+            trailingText: gallery.posted,
+            progress: progress,
+            progressLabel: progressLabel,
+            accessory: accessory
         )
     }
 }

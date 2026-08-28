@@ -84,36 +84,54 @@ struct EhCoverThumbnail: View {
 ///
 /// 五颗星在 15px 的行高里只能画得很小，且半星难以辨认；数值加一条 2px 的条
 /// 既精确又省空间。是否显示由 `AppSettings.showGalleryRating` 控制。
+/// 五颗星 + 数值。对齐 Android SimpleRatingView：半星粒度，空星是描边。
+///
+/// 原来画的是一条进度条。条形在「4.5 和 4.0 差多少」这个问题上完全没有刻度，
+/// 用户得去读旁边那个数字；星星本身就是刻度，扫一眼就知道。
+struct EhStarRating: View {
+    let rating: Double
+    var starSize: CGFloat = 12
+    var spacing: CGFloat = 1.5
+
+    var body: some View {
+        HStack(spacing: spacing) {
+            ForEach(0..<5, id: \.self) { i in
+                // 每颗星取这一格里剩下的评分：>=1 满星，>=0.5 半星，否则空星
+                let remain = rating - Double(i)
+                Image(systemName: remain >= 0.75 ? "star.fill"
+                                : remain >= 0.25 ? "star.leadinghalf.filled"
+                                : "star")
+                    .font(.system(size: starSize))
+                    .foregroundStyle(remain >= 0.25 ? EhColor.accentFill : EhColor.tertiaryLabel)
+            }
+        }
+    }
+}
+
 struct EhRatingRow: View {
     /// GalleryInfo.rating 是 Float，这里统一收成 Double 由构造器转换
     let rating: Double
     /// 右侧附加文字（发布时间等）
     var trailingText: String? = nil
-    var barWidth: CGFloat = 92
+    var starSize: CGFloat = 12
 
-    init(rating: Double, trailingText: String? = nil, barWidth: CGFloat = 92) {
+    init(rating: Double, trailingText: String? = nil, starSize: CGFloat = 12) {
         self.rating = rating
         self.trailingText = trailingText
-        self.barWidth = barWidth
+        self.starSize = starSize
     }
 
-    init(rating: Float, trailingText: String? = nil, barWidth: CGFloat = 92) {
-        self.init(rating: Double(rating), trailingText: trailingText, barWidth: barWidth)
+    init(rating: Float, trailingText: String? = nil, starSize: CGFloat = 12) {
+        self.init(rating: Double(rating), trailingText: trailingText, starSize: starSize)
     }
 
     var body: some View {
         HStack(spacing: EhSpacing.meta) {
-            Text(String(format: "%.2f", rating))
-                .font(EhFont.mono(13, weight: .semibold))
-                .foregroundStyle(EhColor.accent)
+            EhStarRating(rating: rating, starSize: starSize)
 
-            ZStack(alignment: .leading) {
-                Capsule().fill(EhColor.fill)
-                Capsule()
-                    .fill(EhColor.accentFill)
-                    .frame(width: barWidth * max(0, min(1, rating / 5)))
-            }
-            .frame(width: barWidth, height: EhSize.ratingBarHeight)
+            Text(String(format: "%.2f", rating))
+                .font(EhFont.mono(11, weight: .semibold))
+                .foregroundStyle(EhColor.secondaryLabel)
 
             if let trailingText {
                 Spacer(minLength: 4)
