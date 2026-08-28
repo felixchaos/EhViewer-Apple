@@ -97,14 +97,27 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # 导入证书
+          # 不能加 -t cert: 那会只挑出证书、丢掉私钥。签名需要两者配对，这里全量导入。
           security import "$CERTIFICATE_PATH" \
             -P "$P12_PASSWORD" \
-            -A -t cert -f pkcs12 \
+            -A -f pkcs12 \
             -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          # 校验配对是否成立。只导出了证书 (缺私钥) 或只导出了私钥 (缺证书) 都会在这里被挡下，
+          # 否则错误会拖到 Archive 阶段才以 "No signing certificate" 的形式冒出来，很难定位。
+          IDENTITIES=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true)
+          echo "$IDENTITIES"
+          if ! echo "$IDENTITIES" | grep -qE '^[[:space:]]+[0-9]+\)'; then
+            echo "::error::BUILD_CERTIFICATE_BASE64 未能导入出可用于签名的身份。"
+            echo "::error::请在「钥匙串访问」中选中**证书那一行**（不是展开后的私钥）右键导出 .p12，"
+            echo "::error::导出的文件必须同时包含证书与私钥。"
+            exit 1
+          fi
+
           security set-key-partition-list \
             -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
 
           # 安装描述文件
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
