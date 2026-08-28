@@ -26,37 +26,22 @@ struct WarningView: View {
                 .padding(.bottom, 20)
 
             // 标题
-            Text("内容警告")
+            Text("本应用包含成人内容")
                 .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(EhColor.label)
-                .padding(.bottom, 16)
-            
-            // 警告内容
-            VStack(alignment: .leading, spacing: 12) {
-                warningText("本应用可能包含成人内容（18+），包括但不限于：")
-                    .fontWeight(.medium)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    bulletPoint("成人向绘画和插图")
-                    bulletPoint("裸露或性暗示内容")
-                    bulletPoint("其他可能不适合未成年人的内容")
-                }
-                .padding(.leading, 8)
-                
-                warningText("继续使用本应用即表示您确认：")
-                    .fontWeight(.medium)
-                    .padding(.top, 8)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    bulletPoint("您已年满 18 周岁")
-                    bulletPoint("您所在地区法律允许访问此类内容")
-                    bulletPoint("您自愿并知情地访问这些内容")
-                }
-                .padding(.leading, 8)
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
-            
+                .multilineTextAlignment(.center)
+                .padding(.bottom, 14)
+
+            // 设计稿这版比原先的项目符号列表短得多，而且补上了「不托管内容」
+            // 这句免责——原文案通篇在描述内容形态，反而漏了这个更要紧的事实。
+            Text("继续使用表示你已满足所在地区的法定年龄要求，并自行承担浏览责任。本应用不托管任何内容，仅作为 E-Hentai / ExHentai 的第三方客户端。")
+                .font(EhFont.body)
+                .foregroundStyle(EhColor.secondaryLabel)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 32)
+
             Spacer()
             
             // 按钮区域

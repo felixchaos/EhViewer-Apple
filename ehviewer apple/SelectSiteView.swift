@@ -18,122 +18,122 @@ struct SelectSiteView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            Spacer()
-            
-            // 标题
+            Spacer(minLength: 40)
+
+            // 品牌区与登录页保持一致：同一段引导流程里换一种视觉语言很突兀
+            Image("AppLogo")
+                .resizable()
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(EhColor.cardStroke, lineWidth: 0.5)
+                }
+                .padding(.bottom, 18)
+
             Text("欢迎使用 EhViewer")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .padding(.bottom, 8)
-            
-            Text("请选择默认访问的站点")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 40)
-            
-            // 站点选项
-            VStack(spacing: 16) {
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(EhColor.label)
+                .padding(.bottom, 6)
+
+            Text("先选一个默认站点，之后可以随时切换")
+                .font(EhFont.caption)
+                .foregroundStyle(EhColor.secondaryLabel)
+                .padding(.bottom, 32)
+
+            VStack(spacing: 10) {
                 siteOption(
                     site: .eHentai,
                     title: "E-Hentai",
-                    description: "标准版本，无需登录即可访问大部分内容",
+                    description: "无需登录即可浏览大部分内容",
                     icon: "globe"
                 )
-                
                 siteOption(
                     site: .exHentai,
                     title: "ExHentai",
-                    description: "完整版本，需要账号登录，包含更多内容",
+                    description: "内容更全，需要账号且账号需具备访问权限",
                     icon: "globe.badge.chevron.backward"
                 )
             }
-            .padding(.horizontal, 24)
-            
-            // 提示
-            VStack(spacing: 8) {
-                Text("您可以稍后在设置中更改此选项")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                
-                if selectedSite == .exHentai {
-                    VStack(spacing: 4) {
-                        Text("⚠️ ExHentai 需要特定账号权限才能访问")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                        Text("如果您的账号不支持，登录后将自动切换到 E-Hentai")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+            .padding(.horizontal, EhSpacing.page)
+
+            if selectedSite == .exHentai {
+                // 只在选了 ExHentai 时出现：这条提醒对选 E-Hentai 的人是噪音
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(EhColor.warning)
+                    Text("账号若不具备 ExHentai 权限，登录后会自动退回 E-Hentai。")
+                        .font(EhFont.footnote)
+                        .foregroundStyle(EhColor.secondaryLabel)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.horizontal, EhSpacing.page + 4)
+                .padding(.top, 14)
             }
-            .padding(.top, 24)
-            
-            Spacer()
-            
-            // 确认按钮
-            Button(action: confirmSelection) {
-                Text("开始使用")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.horizontal, 32)
-            .padding(.bottom, 40)
+
+            Spacer(minLength: 24)
+
+            Button("开始使用", action: confirmSelection)
+                .buttonStyle(EhFilledButtonStyle(height: EhSize.actionButtonHeight))
+                .padding(.horizontal, EhSpacing.page)
+                .padding(.bottom, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(EhColor.background)
+        .animation(.easeInOut(duration: 0.2), value: selectedSite)
     }
-    
+
     @ViewBuilder
     private func siteOption(site: EhSite, title: String, description: String, icon: String) -> some View {
+        let isSelected = selectedSite == site
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                selectedSite = site
-            }
+            selectedSite = site
+            Haptics.tap()
         } label: {
-            HStack(spacing: 16) {
-                // 图标
+            HStack(spacing: EhSpacing.row) {
                 Image(systemName: icon)
-                    .font(.title)
-                    .foregroundStyle(selectedSite == site ? .white : .blue)
-                    .frame(width: 48, height: 48)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(selectedSite == site ? Color.blue : Color.blue.opacity(0.1))
-                    )
-                
-                // 文字
-                VStack(alignment: .leading, spacing: 4) {
+                    .font(.system(size: 20))
+                    .foregroundStyle(isSelected ? EhColor.onAccentFill : EhColor.accent)
+                    .frame(width: 44, height: 44)
+                    .background {
+                        RoundedRectangle(cornerRadius: EhRadius.control, style: .continuous)
+                            .fill(isSelected ? EhColor.accentFill : EhColor.fill)
+                    }
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    
+                        .font(EhFont.title)
+                        .foregroundStyle(EhColor.label)
                     Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .font(EhFont.meta)
+                        .foregroundStyle(EhColor.secondaryLabel)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                
-                Spacer()
-                
-                // 选中标记
-                Image(systemName: selectedSite == site ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
-                    .foregroundStyle(selectedSite == site ? .blue : .secondary)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(isSelected ? EhColor.accent : EhColor.tertiaryLabel)
             }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(selectedSite == site ? Color.blue : Color.secondary.opacity(0.3), lineWidth: 2)
-            )
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(selectedSite == site ? Color.blue.opacity(0.05) : Color.clear)
-            )
+            .padding(EhSpacing.page)
+            .background {
+                RoundedRectangle(cornerRadius: EhRadius.card, style: .continuous)
+                    .fill(EhColor.card)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: EhRadius.card, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? EhColor.accentFill : EhColor.cardStroke,
+                                lineWidth: isSelected ? 1.5 : 0.5
+                            )
+                    }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
-    
+
     private func confirmSelection() {
         // 保存选择
         AppSettings.shared.gallerySite = selectedSite

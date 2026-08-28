@@ -95,17 +95,32 @@ struct LoginView: View {
     // MARK: - 品牌区
 
     private var brand: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "book.pages")
-                .font(.system(size: 44))
-                .foregroundStyle(Color.accentColor)
-            Text("EhViewer")
-                .font(.title.bold())
-            Text("E-Hentai / ExHentai 画廊浏览器")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            // 用真正的 App 图标而不是 SF Symbol。
+            // AppIcon.appiconset 无法被 Image("AppIcon") 直接引用，
+            // 因此在 Assets 里另存了一份普通图片集 AppLogo。
+            Image("AppLogo")
+                .resizable()
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(EhColor.cardStroke, lineWidth: 0.5)
+                }
+
+            VStack(spacing: 4) {
+                Text("登录 E-Hentai")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(EhColor.label)
+                Text("登录后可同步收藏、发表评论、查看配额与访问 ExHentai。也可以先以访客身份浏览。")
+                    .font(EhFont.caption)
+                    .foregroundStyle(EhColor.secondaryLabel)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.top, 24)
+        .padding(.top, 20)
+        .padding(.horizontal, 24)
     }
 
     // MARK: - 主推方式
