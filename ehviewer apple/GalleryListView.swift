@@ -1095,7 +1095,7 @@ struct GalleryRow: View {
         HStack(spacing: EhSpacing.meta) {
             Text(gallery.category.name)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(gallery.category.color)
+                .foregroundStyle(gallery.category.labelColor)
 
             if let lang = gallery.simpleLanguage, !lang.isEmpty {
                 Text(lang)

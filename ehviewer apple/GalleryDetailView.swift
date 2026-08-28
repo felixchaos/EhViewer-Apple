@@ -212,7 +212,7 @@ struct GalleryDetailView: View {
                 // 再来一个实心方块是同一信息说两遍
                 Text(gallery.category.name)
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(gallery.category.color)
+                    .foregroundStyle(gallery.category.labelColor)
 
                 Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
                     .font(EhFont.title)

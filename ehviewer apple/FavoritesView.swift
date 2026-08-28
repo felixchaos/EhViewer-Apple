@@ -425,60 +425,73 @@ struct FavoritesView: View {
     // MARK: - Slot Picker
 
     private var slotPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                // "全部" 标签 (对齐 Android FavoritesActivity: favCatArray[0] = "All Favorites")
-                Button(action: { selectedSlot = -1 }) {
-                    Text("全部")
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(selectedSlot == -1 ? Color.accentColor : Color(.tertiarySystemFill))
-                        .foregroundStyle(selectedSlot == -1 ? .white : .primary)
-                        .clipShape(Capsule())
+        VStack(alignment: .leading, spacing: 0) {
+            // 同步状态：云收藏夹是网络数据，用户需要知道看到的是不是最新的
+            if selectedSlot >= 0 {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                    Text(syncStatusText)
+                        .font(EhFont.footnote)
                 }
-                .buttonStyle(.plain)
+                .foregroundStyle(EhColor.tertiaryLabel)
+                .padding(.horizontal, EhSpacing.page)
+                .padding(.top, 4)
+            }
 
-                // "本地收藏" 标签 (对齐 Android FAV_CAT_LOCAL)
-                Button(action: { selectedSlot = -2 }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "heart.fill")
-                            .font(.caption2)
-                        Text("本地收藏")
-                            .font(.subheadline)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    slotPill(slot: -1, title: "全部", symbol: nil, count: 0)
+                    slotPill(slot: -2, title: "本地收藏", symbol: "heart.fill", count: 0)
+                    ForEach(0..<10, id: \.self) { slot in
+                        slotPill(
+                            slot: slot,
+                            title: favoriteNames[slot],
+                            symbol: nil,
+                            count: AppSettings.shared.favCount(slot)
+                        )
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(selectedSlot == -2 ? Color.accentColor : Color(.tertiarySystemFill))
-                    .foregroundStyle(selectedSlot == -2 ? .white : .primary)
-                    .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, EhSpacing.page)
+            }
+            .frame(height: 46)
+        }
+    }
 
-                ForEach(0..<10) { slot in
-                    Button(action: { selectedSlot = slot }) {
-                        HStack(spacing: 4) {
-                            Text(favoriteNames[slot])
-                                .font(.subheadline)
-                            let count = AppSettings.shared.favCount(slot)
-                            if count > 0 {
-                                Text("(\(count))")
-                                    .font(.caption2)
-                                    .foregroundStyle(selectedSlot == slot ? .white.opacity(0.8) : .secondary)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(selectedSlot == slot ? Color.accentColor : Color(.tertiarySystemFill))
-                        .foregroundStyle(selectedSlot == slot ? .white : .primary)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+    private func slotPill(slot: Int, title: String, symbol: String?, count: Int) -> some View {
+        let isSelected = selectedSlot == slot
+        return Button {
+            selectedSlot = slot
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 4) {
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 10))
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(isSelected ? EhColor.onAccentFill.opacity(0.7) : EhColor.tertiaryLabel)
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            .foregroundStyle(isSelected ? EhColor.onAccentFill : EhColor.secondaryLabel)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background { Capsule().fill(isSelected ? EhColor.accentFill : EhColor.fill) }
         }
+        .buttonStyle(.plain)
+    }
+
+    /// 上次同步时间。没同步过就不说「刚刚」——那是错的。
+    private var syncStatusText: String {
+        guard let ts = UserDefaults.standard.object(forKey: "fav_last_sync") as? TimeInterval else {
+            return "云端收藏夹"
+        }
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        return "云端同步 · " + f.localizedString(for: Date(timeIntervalSince1970: ts), relativeTo: Date())
     }
 }
 
