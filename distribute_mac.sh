@@ -237,8 +237,14 @@ APPLESCRIPT
     rm -f "$dmg_temp"
     rm -rf "$DMG_DIR"
 
+    # 给 DMG 本身签名。此前只签了 .app，外层映像没有签名，
+    # Gatekeeper 以 --type open 评估时会以 "no usable signature" 拒绝。
+    # 必须在公证之前完成——公证的对象就是最终分发的这个文件。
+    info "为 DMG 签名..."
+    codesign --force --sign "$SIGNING_IDENTITY" --timestamp "$dmg_path"
+
     DMG_PATH="$dmg_path"
-    success "DMG 已创建: $DMG_PATH"
+    success "DMG 已创建并签名: $DMG_PATH"
 }
 
 # ─────────────────────────── 5. 公证 DMG ───────────────────────────
@@ -298,8 +304,18 @@ staple_dmg() {
 final_verify() {
     info "最终验证..."
 
-    # Gatekeeper 评估
-    spctl --assess --type open --context context:primary-signature -v "$DMG_PATH" 2>&1 || true
+    # Gatekeeper 评估。DMG 是磁盘映像，必须用 --type open；
+    # 默认的 execute 类型对映像永远得到 "no usable signature"。
+    local assess
+    assess=$(spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH" 2>&1 || true)
+    echo "$assess" | sed 's/^/  /'
+    if ! echo "$assess" | grep -q "accepted"; then
+        fail "Gatekeeper 拒绝了这个 DMG，不要分发。\n$assess"
+    fi
+
+    # 票据必须能离线校验，否则用户断网时仍会被拦
+    xcrun stapler validate "$DMG_PATH" >/dev/null 2>&1 \
+        || fail "公证票据未正确植入 DMG"
 
     local size
     size=$(du -sh "$DMG_PATH" | awk '{print $1}')
