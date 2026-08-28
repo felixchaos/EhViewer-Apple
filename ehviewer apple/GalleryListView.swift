@@ -220,22 +220,28 @@ struct GalleryListView: View {
                 // 搜索栏 (全宽，置于内容顶部)
                 searchBarView
 
-                // 顶部横向切页 — 首页/订阅/热门/排行。
-                // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
-                // 此前热门与排行要经「更多」标签页二级跳转才能到达。
-                if let browseSource {
-                    EhTopTabs(
-                        items: BrowseSource.allCases.map { ($0, $0.title) },
-                        selection: browseSource
-                    )
-                }
+                // 聚焦搜索时由面板接管搜索框以下的区域——此时列表内容与用户无关。
+                // 搜索框本身留在上面，否则用户看不到自己正在打什么。
+                if isSearchFocused {
+                    searchSuggestionsOverlay
+                } else {
+                    // 顶部横向切页 — 首页/订阅/热门/排行。
+                    // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
+                    // 此前热门与排行要经「更多」标签页二级跳转才能到达。
+                    if let browseSource {
+                        EhTopTabs(
+                            items: BrowseSource.allCases.map { ($0, $0.title) },
+                            selection: browseSource
+                        )
+                    }
 
-                Group {
-                    if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
-                        errorView
-                    } else {
-                        // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
-                        galleryList
+                    Group {
+                        if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
+                            errorView
+                        } else {
+                            // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
+                            galleryList
+                        }
                     }
                 }
             }
@@ -265,10 +271,9 @@ struct GalleryListView: View {
                 }
             }
             #endif
-            .overlay(alignment: .top) {
-                searchSuggestionsOverlay
-                    .padding(.top, 44) // 搜索建议浮层偏移到搜索栏下方
-            }
+            // 整屏覆盖而不是贴在搜索栏下方的小浮层：
+            // 聚焦时列表内容与用户无关，让面板完全接管
+
             .rightDrawer(isOpen: $showQuickSearch) {
                 QuickSearchDrawerContent(
                     selectedSearch: $selectedQuickSearch,
@@ -344,10 +349,7 @@ struct GalleryListView: View {
             }
         }
         #endif
-        .overlay(alignment: .top) {
-            searchSuggestionsOverlay
-                .padding(.top, 44)
-        }
+
         .rightDrawer(isOpen: $showQuickSearch) {
             QuickSearchDrawerContent(
                 selectedSearch: $selectedQuickSearch,
@@ -552,10 +554,7 @@ struct GalleryListView: View {
             }
         }
         #endif
-        .overlay(alignment: .top) {
-            searchSuggestionsOverlay
-                .padding(.top, 44)
-        }
+
         .rightDrawer(isOpen: $showQuickSearch) {
             QuickSearchDrawerContent(
                 selectedSearch: $selectedQuickSearch,
@@ -606,39 +605,45 @@ struct GalleryListView: View {
     /// 点 token 上的叉删掉整个标签，光标在文字里时退格照常改字。
     @State private var searchTokens: [String] = []
 
+    /// 输入框里**正在打的文字**，只含自由文本。
+    ///
+    /// 不能直接绑 `viewModel.searchText`：那里保存的是提交给服务端的完整查询，
+    /// 提交时会把 token 合并进去；绑在一起就会出现「token 胶囊后面还跟着
+    /// 同一个标签的文字」的重复显示。
+    @State private var searchFieldText = ""
+
+
     private var searchBarView: some View {
         EhSearchBar(
-            text: $viewModel.searchText,
+            text: $searchFieldText,
             tokens: $searchTokens,
             placeholder: "搜索标签或标题",
             isFocused: $isSearchFocused,
-            trailingButtons: [
-                // 省得用户手打 f:"big breasts$" 这种语法
-                ("tag", { showTagSelector = true }),
-                (advancedSearch.isEnabled ? "line.3.horizontal.decrease.circle.fill"
-                                          : "line.3.horizontal.decrease.circle",
-                 { showAdvancedSearch = true }),
-            ],
-            onSubmit: {
-                isSearchFocused = false
-                viewModel.searchText = combinedQuery
-                viewModel.searchWithAdvanced(advancedSearch)
-            }
+            // 右侧不再放小图标：15pt 的点按目标远低于 HIG 的 44pt，手机上按不中。
+            // 标签选择器、高级搜索、快速搜索都移进聚焦面板，那里有整行宽度。
+            trailingButtons: [],
+            onSubmit: { submitSearch() }
         )
-        .onChange(of: viewModel.searchText) { _, _ in
-            viewModel.updateSuggestions()
+        .onChange(of: searchFieldText) { _, text in
+            viewModel.updateSuggestions(for: text)
         }
         .onChange(of: searchTokens) { _, _ in
-            // token 变化也要重新搜索：删掉一个标签本身就是一次条件变更
-            viewModel.searchText = combinedQuery
-            viewModel.searchWithAdvanced(advancedSearch)
+            // token 变了就重搜：删掉一个标签本身就是一次条件变更
+            submitSearch()
         }
     }
 
-    /// token 与自由文本拼成最终查询串
-    private var combinedQuery: String {
-        let typed = viewModel.searchText.trimmingCharacters(in: .whitespaces)
-        return (searchTokens + (typed.isEmpty ? [] : [typed])).joined(separator: " ")
+    /// 提交搜索。
+    ///
+    /// token 与自由文本在**提交时**才合并，不写回 viewModel.searchText——
+    /// 写回去会让同一个标签既显示为 token 又显示为文字（搜索框里出现
+    /// 「bdsm」胶囊后面还跟着 f:bdsm$ 这样的重复）。
+    private func submitSearch() {
+        isSearchFocused = false
+        let typed = searchFieldText.trimmingCharacters(in: .whitespaces)
+        let query = (searchTokens + (typed.isEmpty ? [] : [typed]))
+            .joined(separator: " ")
+        viewModel.performSearch(query: query, advanced: advancedSearch)
     }
 
     // MARK: - 统一工具栏 (对齐 Android FAB secondaryButtons)
@@ -666,69 +671,34 @@ struct GalleryListView: View {
 
     // MARK: - 搜索建议浮层 (对齐 Android SearchBar.updateSuggestions 下拉列表)
 
+    /// 搜索聚焦面板 —— 设计稿第 2 屏。
+    ///
+    /// 此前是个 300pt 高的下拉浮层，只放了历史与建议；标签选择器、高级搜索、
+    /// 快速搜索被塞进搜索胶囊右侧的三个 15pt 图标里，手机上点不中，
+    /// 「快速搜索」还在改版时整个丢了。整屏接管后这些都有整行的落点。
     @ViewBuilder
     private var searchSuggestionsOverlay: some View {
-        let showHistory = viewModel.searchText.isEmpty && !viewModel.searchHistory.isEmpty
-        let showSuggestions = !viewModel.searchText.isEmpty && !viewModel.suggestions.isEmpty
-
-        if isSearchFocused && (showHistory || showSuggestions) {
-            ZStack(alignment: .top) {
-                // 点击空白关闭
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { isSearchFocused = false }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // 搜索历史 (搜索框为空时)
-                        if showHistory {
-                            HStack {
-                                Text("搜索历史")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("清除") { viewModel.clearSearchHistory() }
-                                    .font(.caption)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-
-                            ForEach(viewModel.searchHistory, id: \.self) { term in
-                                Button {
-                                    viewModel.searchText = term
-                                    isSearchFocused = false
-                                    viewModel.searchWithAdvanced(advancedSearch)
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "clock")
-                                            .foregroundStyle(.secondary)
-                                        Text(term)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 10)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                Divider().padding(.leading, 48)
-                            }
-                        }
-
-                        // 标签建议 (搜索框有内容时)
-                        if showSuggestions {
-                            searchSuggestionsContent
-                        }
-                    }
-                }
-                .frame(maxHeight: 300)
-                .background(.regularMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-                .padding(.horizontal, 8)
-                .padding(.top, 4)
-            }
+        if isSearchFocused {
+            SearchFocusPanel(
+                text: searchFieldText,
+                tokens: $searchTokens,
+                suggestions: viewModel.suggestions,
+                history: viewModel.searchHistory,
+                onClearHistory: { viewModel.clearSearchHistory() },
+                onPickHistory: { term in
+                    // 历史条目本身就是一条完整查询，直接提交，
+                    // 不塞进输入框再拼一次
+                    searchFieldText = ""
+                    searchTokens = []
+                    isSearchFocused = false
+                    viewModel.performSearch(query: term, advanced: advancedSearch)
+                },
+                onOpenTagSelector: { showTagSelector = true },
+                onOpenAdvancedSearch: { showAdvancedSearch = true },
+                onOpenQuickSearch: { showQuickSearch = true },
+                isAdvancedActive: advancedSearch.isEnabled
+            )
+            .transition(.opacity)
         }
     }
 
@@ -1295,14 +1265,18 @@ class GalleryListViewModel {
     private var suggestionTask: Task<Void, Never>?
 
     /// 更新搜索建议 (对齐 Android SearchBar.updateSuggestions)
-    func updateSuggestions() {
+    /// 按输入框里正在打的文字更新建议。
+    ///
+    /// 参数取自输入框而非 `searchText`：后者保存的是「已提交的完整查询」，
+    /// 包含已经变成 token 的标签，拿它算建议会一直命中已选过的标签。
+    func updateSuggestions(for text: String) {
         suggestionTask?.cancel()
         suggestionTask = Task { @MainActor in
             // 防抖 200ms
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
 
-            guard let extracted = EhTagDatabase.extractLastKeyword(from: searchText) else {
+            guard let extracted = EhTagDatabase.extractLastKeyword(from: text) else {
                 suggestions = []
                 return
             }
@@ -1456,6 +1430,15 @@ class GalleryListViewModel {
     }
 
     /// 带高级搜索参数的搜索 (对齐 Android AdvanceSearchTable → ListUrlBuilder)
+    /// 用给定的查询串搜索。
+    ///
+    /// token 与自由文本在提交时才合并成一串传进来，`searchText` 只保存用户
+    /// 正在打的那部分——这样搜索框里不会出现「token + 同一内容的文字」的重复。
+    func performSearch(query: String, advanced: AdvancedSearchState) {
+        searchText = query
+        searchWithAdvanced(advanced)
+    }
+
     func searchWithAdvanced(_ state: AdvancedSearchState) {
         searchText = ListUrlBuilder.sanitizeKeyword(searchText)
         if !searchText.isEmpty { addSearchToHistory(searchText) }

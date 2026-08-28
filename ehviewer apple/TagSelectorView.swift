@@ -23,6 +23,8 @@ struct TagSelectorView: View {
     @State private var filter = ""
     @State private var tags: [TagEntry] = []
     @State private var picked: [String] = []
+    @State private var searchTokens: [String] = []
+    @State private var isFilterFocused = false
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 8)]
 
@@ -37,6 +39,16 @@ struct TagSelectorView: View {
                     ))
                 } else {
                     namespacePicker
+                    // 用统一搜索框而不是 .searchable：后者在 iOS 26 渲染在
+                    // 屏幕底部，它自带的清除叉会被误认成「确认」按钮，
+                    // 而真正的「加入搜索」在工具栏里反而看不见。
+                    EhSearchBar(
+                        text: $filter,
+                        tokens: $searchTokens,
+                        placeholder: "在本组内筛选",
+                        showsCancelButton: false,
+                        isFocused: $isFilterFocused
+                    )
                     Divider()
                     tagGrid
                 }
@@ -45,17 +57,37 @@ struct TagSelectorView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .searchable(text: $filter, prompt: "在本组内筛选")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("加入搜索 (\(picked.count))") {
-                        picked.forEach(onPick)
-                        dismiss()
+            }
+            // 确认动作放底部常驻条而不是工具栏：勾选是在页面中下部完成的，
+            // 手指就在那一带；而且它要显示「已选 N 个」，工具栏塞不下。
+            .safeAreaInset(edge: .bottom) {
+                if !picked.isEmpty {
+                    HStack(spacing: EhSpacing.row) {
+                        Text("已选 \(picked.count) 个")
+                            .font(EhFont.caption)
+                            .foregroundStyle(EhColor.secondaryLabel)
+                        Spacer()
+                        Button("清空") { picked.removeAll() }
+                            .font(EhFont.caption)
+                            .foregroundStyle(EhColor.secondaryLabel)
+                        Button("加入搜索") {
+                            picked.forEach(onPick)
+                            dismiss()
+                        }
+                        .font(EhFont.button)
+                        .foregroundStyle(EhColor.onAccentFill)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(EhColor.accentFill))
+                        .buttonStyle(.plain)
                     }
-                    .disabled(picked.isEmpty)
+                    .padding(.horizontal, EhSpacing.page)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial)
                 }
             }
             .task { await loadNamespaces() }
