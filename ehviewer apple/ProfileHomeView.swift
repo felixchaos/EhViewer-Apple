@@ -23,11 +23,17 @@ struct ProfileHomeView: View {
     @State private var downloadCount: Int = 0
     @State private var downloadBytes: Int64 = 0
     @State private var isLoadingQuota = false
+    private var updateChecker: AppUpdateChecker { .shared }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: EhSpacing.section) {
+                    // 更新提示放「我的」而不是首页：首页是每天要看很多次的地方，
+                    // 一条常驻横幅会一直占位；而用户找版本相关的东西本来就会来这里
+                    if let info = updateChecker.updateAvailable {
+                        UpdateBanner(info: info)
+                    }
                     accountCard
                     quickGrid
                     settingsList
@@ -45,7 +51,10 @@ struct ProfileHomeView: View {
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery).id(gallery.gid)
             }
-            .task { await loadSummary() }
+            .task {
+                await loadSummary()
+                updateChecker.checkOnLaunchIfNeeded()
+            }
             .refreshable { await loadSummary() }
         }
     }
@@ -344,5 +353,65 @@ private struct SettingsEntry {
 private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - 更新提示
+
+/// 有新版本时显示在「我的」顶部。
+///
+/// 放这里而不是首页：首页是每天要看很多次的地方，一条常驻横幅会一直占位；
+/// 而用户找版本相关的东西本来就会来这一屏。
+///
+/// 关于「热更新」：iOS 在内核层强制代码签名，进程只能执行签名过的页，
+/// 下载来的原生代码加载不进去，因此 SwiftUI App 没有真正的热补丁。
+/// 「装一次之后自动更新」由 AltStore / SideStore 的源订阅实现
+/// （见仓库根目录的 source.json），这条横幅负责的是另一半——
+/// 主动告知，以及给没订阅源的人一个直达下载页的入口。
+struct UpdateBanner: View {
+    @Environment(\.openURL) private var openURL
+    let info: AppUpdateInfo
+
+    var body: some View {
+        HStack(spacing: EhSpacing.row) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(EhColor.accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("有新版本 \(info.version)")
+                    .font(EhFont.body.weight(.semibold))
+                    .foregroundStyle(EhColor.label)
+                Text("订阅了 AltStore / SideStore 源会自动更新，也可以手动下载")
+                    .font(EhFont.footnote)
+                    .foregroundStyle(EhColor.secondaryLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                openURL(info.releaseURL)
+            } label: {
+                Text("查看")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(EhColor.onAccentFill)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(EhColor.accentFill))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                AppUpdateChecker.shared.updateAvailable = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(EhColor.tertiaryLabel)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(EhSpacing.page)
+        .ehCard()
     }
 }

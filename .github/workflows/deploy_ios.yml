@@ -349,6 +349,27 @@ jobs:
             echo "✅ Files deployed and permissions set"
             ls -lh EhViewer.ipa manifest.plist
 
+      # ─── 11.5 刷新 AltStore / SideStore 源清单 ──────────────
+      # iOS 不允许下载执行原生代码，所以没有热更新。「装一次之后自动更新」
+      # 靠的是 AltStore / SideStore 的源订阅：用户添加一次源，之后新版本
+      # 会出现在它们的更新列表里，用用户自己的证书重签安装。
+      # 清单必须在发布后重新生成，否则新版本不会出现在订阅方。
+      - name: Refresh AltStore source manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/build_altstore_source.py
+          if git diff --quiet source.json; then
+            echo "清单无变化"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add source.json
+            git commit -m "chore: 刷新 AltStore 源清单"
+            git push origin HEAD:main
+          fi
+
       # ─── 12. 清理钥匙串 ────────────────────────────────────
       - name: Cleanup keychain
         if: always()

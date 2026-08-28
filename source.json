@@ -1,0 +1,53 @@
+{
+  "name": "EhViewer-Apple",
+  "identifier": "icu.stellatrix.ehviewer",
+  "sourceURL": "https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/source.json",
+  "website": "https://github.com/felixchaos/EhViewer-Apple",
+  "apps": [
+    {
+      "name": "EhViewer",
+      "bundleIdentifier": "Stellatrix.ehviewer-apple",
+      "developerName": "Felix Chaos",
+      "subtitle": "E-Hentai / ExHentai 画廊客户端",
+      "localizedDescription": "用 SwiftUI 重写的 E-Hentai / ExHentai 画廊客户端，支持 iPhone、iPad 与 Mac。功能与交互对齐 Android 端的 EhViewer_CN_SXJ。",
+      "iconURL": "https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/ehviewer%20apple/Assets.xcassets/AppLogo.imageset/AppLogo.png",
+      "tintColor": "FFB340",
+      "category": "entertainment",
+      "versions": [
+        {
+          "version": "1.3.1",
+          "date": "2026-08-28T06:06:21Z",
+          "localizedDescription": "本次以性能为主，重点解决大画廊下的卡顿。同时更换了 iOS 的分发方式。\n\n## 下载\n\n| 平台 | 文件 |\n|------|------|\n| macOS 26+ | `EhViewer-Apple-1.3.1.dmg` |\n| iOS / iPadOS 26.2+ | `EhViewer-1.3.1.ipa` |\n\niPhone 和 iPad 用同一个通用包。\n\n### macOS\n\n已用 Developer ID 签名并通过 Apple 公证，票据已植入，断网也能装。双击挂载后拖进「应用程序」即可，不会出现「无法验证开发者」。\n\n### iOS / iPadOS\n\n**从本版起不再收集设备 UDID。** 请用你自己的 Apple ID 给安装包签名：\n\n- [Sideloadly](https://sideloadly.io)（Windows / macOS）——连数据线，填 Apple ID，选 IPA，开始\n- [AltStore](https://altstore.io) / [SideStore](https://sidestore.io)——装一次后可在设备上自助续签\n\n免费 Apple ID 签出的 App 7 天后失效，重签即可，数据不会丢；付费开发者账号为 1 年。建议用一个单独注册的 Apple ID，不要用主力账号。\n\n本项目的 entitlements 只有 `application-identifier` 和 `team-identifier`，没有用 App Group、推送或关联域名——这些正是免费账号申请不到、会被签名工具剥离的部分，所以重签不会造成功能损失。下载进度的灵动岛走 ActivityKit，重签后照常工作。\n\n---\n\n## 性能\n\n### 查看全部预览\n\nE-Hentai 的普通预览是一张大图里排约 20 个缩略图。原实现每个格子各自把**整张**图解码一遍——20 个格子就是 20 次全图解码、20 份内存，而且解码发生在主线程，裁剪写在 `body` 里每次重新求值都要重做。\n\n新增 `SpriteSheetCache`：按 URL 只解码一次、并发请求自动合并、裁剪结果按「URL + 区域」缓存、解码移出主线程。分页触发也从「每个格子各挂一个 `onAppear`」改成单个触底哨兵。\n\n### 图片加载\n\n`CachedAsyncImage` 是 View，`load()` 天然跑在主线程上，三处 `PlatformImage(data:)` 都是主线程全尺寸解码。改用 ImageIO 在后台任务里直接解出目标尺寸的缩略图——既不占主线程，也不会把 4000px 原图整张位图留在内存里。\n\n### 阅读器\n\n- **拖动进度条卡顿**：`currentPage` 是 `@Observable`，滑块每移动一像素就写一次，整个阅读器（ScrollView 加全部页视图）跟着重新求值。改为拖动期间只更新本地状态，松手才提交；页码标签实时跟随拖动目标。\n- **翻页要等预加载**：`onPageChange` 原先 `await` 整个预加载 TaskGroup（默认 5 页 = 6 次网络往返），翻页手势要等它跑完才算结束。改为后台推进，下次翻页时取消上一轮。\n- **淘汰时整份拷贝字典**：`evictDistantPages` 每次翻页都拷贝一遍缓存字典，大画廊里几十项白拷；改为原地删除。\n\n### 动态预加载\n\n顺着翻页方向多铺、逆向只留少量回看余量；由近及远分批发出，避免第 6 页比第 1 页先回来；按平台和物理内存分档（macOS 12 页，iPad 7~10 页，iPhone 4~6 页），淘汰保留半径跟随预加载窗口，避免刚预取的页被立刻扔掉。\n\n---\n\n## 其他\n\n修复了 macOS 分发脚本的两个问题：`xcodebuild -version | head -1` 触发 SIGPIPE 导致脚本在 `set -o pipefail` 下中途退出；以及 DMG 本身未签名——此前只签了 .app，外层映像没有签名，Gatekeeper 会以 \"no usable signature\" 拒绝。\n\n完整变更见 [CHANGELOG.md](https://github.com/felixchaos/EhViewer-Apple/blob/main/CHANGELOG.md)。",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.3.1/EhViewer-1.3.1.ipa",
+          "size": 8377907,
+          "minOSVersion": "26.2"
+        },
+        {
+          "version": "1.2.1",
+          "date": "2026-02-20T09:28:46Z",
+          "localizedDescription": "## 🔧 阅读器体验优化 + ExHentai 修复\n\n### Bug 修复\n- **修复搜索失效** — `@Observable` 宏使 `didSet` 在 `init()` 中也会触发，导致 `siteChangedNotification` 误刷新列表覆盖搜索结果\n- **修复切换 ExHentai 后重启回退** — 移除 `validateExHentaiAccess()` 对 igneous Cookie 的错误检查，已登录用户可自由切换站点（对齐 Android）\n- **修复 ExHentai 站点切换无效** — `siteBaseURL` 不再依赖 igneous Cookie（鸡生蛋死循环），改为检查登录 Cookie\n- **修复下载进度卡在 0%** — `URLSession.download(for:delegate:)` 不转发进度回调，改用 `bytes(for:)` 流式下载 + 16KB 分块写入\n- **修复纵向滚动阅读器卡顿** — 轻量化图片预处理、100ms 滚动去抖、节流进度更新\n\n### 新功能\n- **GIF 动图支持** — 阅读器和缩略图支持 GIF 动画播放\n- **应用内检查更新** — 设置页新增「检查更新」，自动/手动检查 GitHub Releases 最新版本\n- **纯黑阅读器背景** — 阅读器背景改为纯黑色，移除 CIAreaAverage 计算\n- **默认纵向滚动** — 阅读方向默认改为从上到下纵向滚动\n\n### 改进\n- 站点切换后列表自动刷新（对齐 Android 行为）\n- ExHentai 可用提示不再重复弹出（已在 ExHentai 时跳过）",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.2.1/EhViewer-Apple-1.2.1-iOS.ipa",
+          "size": 3700331,
+          "minOSVersion": "26.2"
+        },
+        {
+          "version": "1.2.0",
+          "date": "2026-02-18T14:11:03Z",
+          "localizedDescription": "## 🔧 阅读器手势与导航全面修复\n\n### Bug 修复\n- **修复图片加载后手势失效** — SwiftUI ScrollView 不走 UIKit failure chain，改用 `panGestureRecognizer.isEnabled` 彻底禁用内层手势竞争\n- **修复缩略图预览进入阅读器页面错位** — `lazyCurrentPage` 未同步 `initialPage`，`.onChange` 不触发初始值导致 ScrollView 始终显示第 0 页\n- **修复多层手势冲突** — 重写 `gestureRecognizerShouldBegin()` 为三级优先级逻辑：边缘返回 > 无滚动透传 > 边缘翻页\n- **修复翻页手势只触发一次** — 移除错误的 `panGestureRecognizer.isEnabled = false` 设置\n- **修复 FaceID 认证无限循环** — SecurityView 认证状态机修复\n- **修复阅读器四个关键问题** — 滑动手势冲突、垂直模式点击区域、页码重复显示、FaceID 崩溃\n\n### 性能优化\n- `@ObservationIgnored` 标记非 UI 属性，减少不必要的视图重绘\n- 批量驱逐远距离页面缓存\n- 翻页去抖 80ms debounce\n\n---\n\n**Full Changelog**: https://github.com/felixchaos/EhViewer-Apple/compare/v1.1.0...v1.2.0",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.2.0/EhViewer-Apple-1.2.0-iOS.ipa",
+          "size": 18128630,
+          "minOSVersion": "26.2"
+        },
+        {
+          "version": "1.1.0",
+          "date": "2026-02-18T13:02:30Z",
+          "localizedDescription": "## EhViewer-Apple v1.1.0\n\n首个多平台正式发布版本，提供 iPhone / iPad / Mac 安装包。\n\n### 下载说明\n\n| 文件 | 平台 | 说明 |\n|------|------|------|\n| EhViewer-Apple-1.1.0-iOS.ipa | iPhone / iPad | Development 签名的 IPA，需通过 AltStore / Sideloadly 等工具安装，或使用 Xcode 自行构建 |\n| EhViewer-Apple-1.1.0-macOS.zip | Mac (Apple Silicon) | 解压后拖入 Applications 文件夹即可使用 |\n\n### Bug 修复\n- 修复左右翻页手势丢失\n- 修复标签搜索列表点击画廊导航循环和错乱\n- 修复启动页面设置无法反映到 iPhone 底部导航栏\n- 修复热门列表点击画廊报错\n- 修复启动页面 Picker 下拉菜单无法点击\n- 修复 HistoryView 重复注册 navigationDestination 警告\n- 修复 ReaderViewModel Main actor isolation 构建错误\n\n### 架构改进\n- NavigationLink 统一采用 value-based API，消除导航栈冲突\n- Tab.bottomTabs 改为动态计算属性，启动页自动替换底部栏位置\n- maxDecodePixelSize 改用固定保守值，避免非主线程访问 UIApplication\n\n### 并发安全\n- SpiderDen 静态可变状态 NSLock 保护\n- DownloadManager.SpiderInfoUpdater 迁移为 actor\n- GalleryDetailViewModel 标注 @MainActor\n- AppSettings UI 属性支持 @Observable\n\n### 内存优化\n- NSCache 容量自适应设备内存 (80-400 MB)\n- 翻页时主动驱逐远距离页面\n\n### 环境要求\n- Xcode 26.0+\n- iOS 26.0+ / macOS 26.0+\n- Swift 6.0",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.1.0/EhViewer-Apple-1.1.0-iOS.ipa",
+          "size": 3591673,
+          "minOSVersion": "26.2"
+        }
+      ]
+    }
+  ],
+  "news": []
+}
