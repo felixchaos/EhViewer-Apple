@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-1.3.1-brightgreen" alt="Version"/>
-  <img src="https://img.shields.io/badge/platform-iOS%2026%2B%20%7C%20macOS%2026%2B-blue" alt="Platform"/>
+  <img src="https://img.shields.io/badge/platform-iOS%2026.2%2B%20%7C%20macOS%2026%2B-blue" alt="Platform"/>
   <img src="https://img.shields.io/badge/swift-6.0-orange" alt="Swift 6.0"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
@@ -17,25 +17,44 @@
 
 **本项目没有 TestFlight，也不会上架 App Store。** 内容形态不符合审核指南，请不要等待邀请。
 
-| 方式 | 平台 | 有效期 | 说明 |
-|------|------|--------|------|
-| Ad-Hoc 分发 | iPhone / iPad | 1 年 | 需要把设备 UDID 登记进描述文件，然后用 Safari 打开 `itms-services://` 链接安装 |
-| Xcode 自签 | iPhone / iPad | 免费账号 7 天，付费账号 1 年 | 见下文「从源码构建」 |
-| 公证 DMG | Mac | 1 年 | 已公证，不会触发 Gatekeeper 警告 |
+| 平台 | 安装包 | 做法 | 有效期 |
+|------|--------|------|--------|
+| Mac | `.dmg` | 双击打开，拖进「应用程序」 | 1 年 |
+| iPhone / iPad | `.ipa` | 用你自己的 Apple ID 签名后安装，见下文 | 免费账号 7 天，付费账号 1 年 |
 
-已发布的安装包见 [Releases](../../releases)。
+安装包见 [Releases](../../releases)。iPhone 和 iPad 用的是同一个通用包。
 
-> 仓库里有一条 Ad-Hoc 自动构建流水线（`.github/workflows/deploy_ios.yml`），但它需要签名证书与描述文件作为
-> repository secrets 才能运行。目前这些 secret 未配置，流水线不会产出可用的包，现有 Release 资产是手工上传的。
-> 配置方法见 workflow 里的前置检查步骤。
+### Mac
 
-### 只有 Windows 怎么办
+DMG 已用 Developer ID 签名并通过 Apple 公证，票据已植入，断网也能正常安装，不会出现
+「无法打开，因为无法验证开发者」。双击挂载后把 App 拖进「应用程序」即可。
 
-签名和打包必须在 macOS 上完成，Windows 无法自行构建。可选路径：
+### iPhone / iPad
 
-- 用已发布的 Ad-Hoc 包安装，前提是你的设备 UDID 已被登记（在 issue 里提供 UDID 即可）
-- iOS 16 及以下可以用巨魔（TrollStore）安装未签名 IPA，但本项目最低要求 iOS 26，暂不适用
-- 借一台 Mac 完成一次自签，有效期 7 天到 1 年不等
+**本项目不收集设备 UDID。** 请用你自己的 Apple ID 给安装包签名——你的设备信息不需要
+交给任何人，也不受开发者账号每年 100 台设备的限制。
+
+常用工具，任选其一：
+
+| 工具 | 运行环境 | 说明 |
+|------|----------|------|
+| [Sideloadly](https://sideloadly.io) | Windows / macOS | 连数据线，填 Apple ID，选 IPA，点开始 |
+| [AltStore](https://altstore.io) / [SideStore](https://sidestore.io) | Windows / macOS | 装一次后可在设备上自助续签，不必每周接电脑 |
+
+签名用的 Apple ID 建议单独注册一个，不要用主力账号。
+
+免费账号签出的 App **7 天后失效**，重签即可，数据不会丢。付费开发者账号（$99/年）为 1 年。
+
+关于重签的几点实测：
+
+- 本项目的 entitlements 只有 `application-identifier` 和 `team-identifier`，**没有用 App Group、
+  推送或关联域名**。这类权限在免费账号下无法申请，会被签名工具剥离并导致功能残缺——本项目不受影响。
+- 下载进度的灵动岛显示走 ActivityKit，数据经 Live Activity 传递而非共享容器，重签后照常工作。
+- widget 扩展会额外占用一个 App ID。免费账号每 7 天有 App ID 数量配额，正常使用够用；
+  如果你短时间内反复重签多个 App 可能撞到上限，等配额恢复即可。
+
+> 没有 Mac 也能装：Sideloadly 和 AltStore 都有 Windows 版本，签名在你自己的电脑上完成。
+> 只有从源码编译才需要 macOS。
 
 ---
 
@@ -61,7 +80,7 @@
 |------|------|
 | Xcode | 26.0+ |
 | Swift | 6.0 |
-| iOS / iPadOS | 26.0+ |
+| iOS / iPadOS | 26.2+ |
 | macOS | 26.0+ |
 
 系统要求较高是因为代码大量使用了 Swift 6 严格并发与 iOS 26 的 SwiftUI API（`@Observable`、`scrollPosition`、`ContentUnavailableView` 等）。降低最低版本需要成规模的重写，目前没有计划。
