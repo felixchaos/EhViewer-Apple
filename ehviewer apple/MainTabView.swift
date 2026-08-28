@@ -33,6 +33,7 @@ struct MainTabView: View {
         case history = "历史"
         case settings = "设置"
         case more = "更多"
+        case profile = "我的"
 
         var icon: String {
             switch self {
@@ -45,11 +46,14 @@ struct MainTabView: View {
             case .history: return "clock"
             case .settings: return "gear"
             case .more: return "ellipsis.circle"
+            case .profile: return "person.crop.circle"
             }
         }
 
-        /// 固定的底部默认标签页
-        private static let defaultBottomTabs: [Tab] = [.home, .favorites, .downloads, .settings, .more]
+        /// 固定的底部默认标签页。
+        /// 「热门」「排行」已提到首页顶部的横向切页，不再占用底部位置；
+        /// 「设置」并入「我的」，底部因此空出一格给「历史」。
+        private static let defaultBottomTabs: [Tab] = [.home, .favorites, .downloads, .history, .profile]
 
         /// iPhone 底部显示的标签页 — 根据启动页面设置动态调整
         /// 如果启动页不在默认底部栏中 (热门/排行榜/历史)，替换首页位置
@@ -64,7 +68,19 @@ struct MainTabView: View {
         /// "更多"菜单中的标签页 — 不在底部栏且非 .more 的标签
         static var moreTabs: [Tab] {
             let bottom = Set(bottomTabs)
-            return allCases.filter { $0 != .more && !bottom.contains($0) }
+            return allCases.filter { $0 != .more && $0 != .profile && !bottom.contains($0) }
+        }
+
+        /// 浮起导航条的图标（选中态用实心变体）
+        var filledIcon: String {
+            switch self {
+            case .home: return "house.fill"
+            case .favorites: return "heart.fill"
+            case .downloads: return "arrow.down.circle.fill"
+            case .history: return "clock.fill"
+            case .profile: return "person.crop.circle.fill"
+            default: return icon
+            }
         }
 
         /// 启动页面设置映射
@@ -166,16 +182,32 @@ struct MainTabView: View {
                         .id(selectedTab)
                 }
             } else {
-                // iPhone / iPad 竖屏: 底部标签栏
-                TabView(selection: $selectedTab) {
+                // iPhone / iPad 竖屏: 浮起玻璃导航条
+                //
+                // 不再用系统 TabView：设计需要一条离开屏幕边缘、带圆角与模糊的浮条，
+                // 而 TabBar 的外观定制到不了这个程度。代价是要自己补回系统行为，
+                // 见 EhFloatingTabBar 的说明（安全区避让、重复点击回顶、无障碍）。
+                ZStack {
                     ForEach(Tab.bottomTabs, id: \.self) { tab in
                         tabContent(tab)
-                            .tabItem {
-                                Label(tab.rawValue, systemImage: tab.icon)
-                            }
-                            .tag(tab)
+                            // 保留全部页面的视图状态：切走的页面只是隐藏，
+                            // 不销毁，回来时滚动位置与已加载数据都还在
+                            .opacity(selectedTab == tab ? 1 : 0)
+                            .allowsHitTesting(selectedTab == tab)
+                            .accessibilityHidden(selectedTab != tab)
                     }
                 }
+                .ehFloatingTabBar(
+                    items: Tab.bottomTabs.map {
+                        .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
+                    },
+                    selection: $selectedTab,
+                    onReselect: { tab in
+                        NotificationCenter.default.post(
+                            name: .ehScrollToTop, object: nil, userInfo: ["tab": tab.rawValue]
+                        )
+                    }
+                )
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
@@ -237,7 +269,8 @@ struct MainTabView: View {
     private func tabContent(_ tab: Tab) -> some View {
         switch tab {
         case .home:
-            GalleryListView(mode: .home)
+            // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
+            BrowseHomeView()
         case .subscription:
             GalleryListView(mode: .subscription)
         case .popular:
@@ -253,8 +286,10 @@ struct MainTabView: View {
         case .settings:
             SettingsView()
         case .more:
-            // "更多"标签页: 列出剩余功能入口 (对齐 Android DrawerLayout 更多菜单)
+            // 保留给 iPad/macOS 侧边栏的兼容路径；iPhone 底部栏已改用 .profile
             MoreTabView(onNavigate: { tab in selectedTab = tab })
+        case .profile:
+            ProfileHomeView()
         }
     }
 }

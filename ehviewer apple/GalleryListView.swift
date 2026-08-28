@@ -59,6 +59,10 @@ struct GalleryListView: View {
     /// 收藏夹搜索关键字 (对齐 Android FavoritesScene 搜索)
     private var favSearchKeyword: String?
 
+    /// 顶部横向切页的选中项。非 nil 时在搜索栏下方渲染「首页/订阅/热门/排行」切页条。
+    /// 只有作为浏览容器的根列表才传入；标签列表、搜索结果等推入的列表不显示切页条。
+    private var browseSource: Binding<BrowseSource>?
+
     private var selectionBinding: Binding<GalleryInfo?> {
         externalSelection ?? $selectedGallery
     }
@@ -76,6 +80,13 @@ struct GalleryListView: View {
     init(mode: ListMode) {
         self.mode = mode
         self.externalSelection = nil
+    }
+
+    /// 浏览容器的根列表 — 在搜索栏下方带出顶部切页条
+    init(mode: ListMode, browseSource: Binding<BrowseSource>) {
+        self.mode = mode
+        self.externalSelection = nil
+        self.browseSource = browseSource
     }
 
     /// 作为导航目标推入时使用，不创建自己的 NavigationStack/SplitView
@@ -207,6 +218,16 @@ struct GalleryListView: View {
                 // 搜索栏 (全宽，置于内容顶部)
                 searchBarView
 
+                // 顶部横向切页 — 首页/订阅/热门/排行。
+                // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
+                // 此前热门与排行要经「更多」标签页二级跳转才能到达。
+                if let browseSource {
+                    EhTopTabs(
+                        items: BrowseSource.allCases.map { ($0, $0.title) },
+                        selection: browseSource
+                    )
+                }
+
                 Group {
                     if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                         errorView
@@ -228,6 +249,10 @@ struct GalleryListView: View {
             .navigationTitle(navigationTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            // 作为浏览容器的根列表时隐藏系统导航栏——设计稿里这一屏
+            // 从搜索胶囊开始，标题栏只是重复了顶部切页已经表达的信息。
+            // 推入的列表（标签、搜索结果）仍需要标题与返回按钮，故只在根列表隐藏。
+            .toolbar(browseSource != nil ? .hidden : .visible, for: .navigationBar)
             #endif
             .toolbar { galleryToolbar }
             #if os(iOS)
@@ -401,9 +426,15 @@ struct GalleryListView: View {
             }
 
             ForEach(viewModel.galleries, id: \.gid) { gallery in
-                NavigationLink(value: gallery) {
+                // NavigationLink 在 List 里会自动补一个 disclosure 箭头，设计稿没有它，
+                // 而且每行右侧多出的 20pt 会挤压元信息行。把链接藏成零透明的底层，
+                // 行本身画在它上面——点按仍由链接接收。
+                ZStack {
+                    NavigationLink(value: gallery) { EmptyView() }
+                        .opacity(0)
                     GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
                 }
+                .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     // 下载 (对齐 Android onItemLongClick: Download)
                     Button {
@@ -1051,100 +1082,96 @@ struct GalleryRow: View {
         return URL(string: urlStr)
     }
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // 缩略图 (对齐 Android @id/thumb) - 使用响应式尺寸
-            CachedAsyncImage(url: thumbURL) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color(.secondarySystemBackground)
-            }
-            .frame(width: layout.galleryThumbnailSize.width * thumbScale,
-                   height: layout.galleryThumbnailSize.height * thumbScale)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+    /// 缩略图实际尺寸（响应式基准 × 用户设置的缩放）
+    private var thumbSize: CGSize {
+        let base = layout.galleryThumbnailSize
+        return CGSize(width: base.width * thumbScale, height: base.height * thumbScale)
+    }
 
-            // 信息区 (对齐 Android RelativeLayout 右侧元素)
+    /// 元信息行：分类 / 语言 / 页数 / 收藏 / 阅读进度
+    ///
+    /// 数字一律等宽（`EhFont.mono`），否则同一列的页数在不同行会左右跳动。
+    private var metaRow: some View {
+        HStack(spacing: EhSpacing.meta) {
+            Text(gallery.category.name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(gallery.category.color)
+
+            if let lang = gallery.simpleLanguage, !lang.isEmpty {
+                Text(lang)
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.secondaryLabel)
+            }
+
+            if showPages {
+                Text("\(gallery.pages)P")
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.secondaryLabel)
+            }
+
+            if gallery.favoriteSlot >= 0 {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(EhColor.danger)
+            }
+
+            if let readProgress {
+                Text("读至 \(readProgress)")
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.accent)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: EhSpacing.row) {
+            // 分类色从彩色方块退成封面左侧 3px 色条：方块在深色底上过于抢眼，
+            // 色条保留了分类的可扫视性又不与内容争注意力
+            EhCoverThumbnail(
+                url: thumbURL?.absoluteString,
+                size: thumbSize,
+                category: gallery.category
+            )
+
             VStack(alignment: .leading, spacing: 0) {
-                // 标题 (对齐 Android @id/title: alignParentTop, toRightOf thumb)
                 Text(gallery.suitableTitle(preferJpn: showJpnTitle))
-                    .font(.subheadline)
+                    .font(EhFont.body)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(EhColor.label)
 
-                // 上传者 (对齐 Android @id/uploader: below title)
-                if let uploader = gallery.uploader {
+                if let uploader = gallery.uploader, !uploader.isEmpty {
                     Text(uploader)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(EhFont.meta)
+                        .foregroundStyle(EhColor.secondaryLabel)
                         .lineLimit(1)
                         .padding(.top, 2)
                 }
 
-                Spacer(minLength: 4)
+                // 把元信息压到与封面底边齐平：各行的元信息因此横向成列，
+                // 扫视时视线不必逐行重新定位
+                Spacer(minLength: 6)
 
-                // 底部区域 — 评分 + 图标行 (对齐 Android rating + LinearLayout)
-                HStack {
-                    // 评分星星 (对齐 Android SimpleRatingView: above category)
-                    if showRating {
-                        SimpleRatingView(rating: gallery.rating)
-                    }
+                metaRow
 
-                    Spacer(minLength: 4)
-
-                    // 右侧图标 (对齐 Android LinearLayout: downloaded, favourited, simple_language, pages)
-                    HStack(spacing: 6) {
-                        if gallery.favoriteSlot >= 0 {
-                            Image(systemName: "heart.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.red)
-                        }
-                        if let lang = gallery.simpleLanguage, !lang.isEmpty {
-                            Text(lang)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let readProgress {
-                            Text("读至 \(readProgress)")
-                                .font(.caption2)
-                                .foregroundStyle(Color.accentColor)
-                        }
-                        if showPages {
-                            Text("\(gallery.pages)P")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                // 五星改为数值 + 细条：星星在这个行高里只能画得很小，半星难辨认，
+                // 数值既精确又省出横向空间给发布时间
+                if showRating {
+                    EhRatingRow(rating: gallery.rating, trailingText: gallery.posted)
+                        .padding(.top, 5)
+                } else if let posted = gallery.posted, !posted.isEmpty {
+                    Text(posted)
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(EhColor.tertiaryLabel)
+                        .padding(.top, 5)
                 }
-
-                // 分类 + 发布时间 (对齐 Android category + posted)
-                HStack {
-                    // 分类标签 (对齐 Android @id/category: alignBottom thumb)
-                    Text(gallery.category.name)
-                        .font(.caption2.bold())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(gallery.category.color)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-
-                    Spacer(minLength: 4)
-
-                    // 发布时间 (对齐 Android @id/posted: alignBottom thumb, alignParentRight)
-                    if let posted = gallery.posted, !posted.isEmpty {
-                        Text(posted)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.top, 4)
             }
+            .frame(minHeight: thumbSize.height, alignment: .top)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, EhSpacing.page)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .contextMenu {
             // 下载
