@@ -72,6 +72,12 @@ struct DownloadsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // 紧凑页头：标题与动作同一行，避免系统大标题那条空导航栏带
+                EhPageHeader(title: "下载") {
+                    EhSearchToggleButton(isActive: $isSearching)
+                    mainToolbarMenu
+                }
+
                 // 标签选择栏
                 labelPicker
 
@@ -97,22 +103,11 @@ struct DownloadsView: View {
                     batchActionBar
                 }
             }
-            .navigationTitle("下载")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
+            .ehCompactHeader()
             // 搜索改为按钮形态：设计稿的默认状态顶部只有标题与过滤胶囊，
             // 点放大镜才展开统一搜索框。此前用 .searchable，iOS 26 会把它
             // 渲染在屏幕底部，与浮起导航条重叠。
             .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索标题或标签")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    EhSearchToggleButton(isActive: $isSearching)
-                }
-                ToolbarItem(placement: .automatic) {
-                    mainToolbarMenu
-                }
-            }
             // 批量移动标签 Sheet
             .sheet(isPresented: $showMoveLabelSheet) {
                 batchMoveLabelSheet

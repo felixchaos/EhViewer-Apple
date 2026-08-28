@@ -30,6 +30,9 @@ struct ProfileHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: EhSpacing.section) {
+                    EhPageHeader(title: "我的")
+                        .padding(.horizontal, -EhSpacing.page)  // 页头自带页边距
+
                     // 更新提示放「我的」而不是首页：首页是每天要看很多次的地方，
                     // 一条常驻横幅会一直占位；而用户找版本相关的东西本来就会来这里
                     if let info = updateChecker.updateAvailable {
@@ -48,10 +51,15 @@ struct ProfileHomeView: View {
             // 浮起导航条只在 iOS 存在，macOS 是侧边栏
             .ehTabBarAutoHide()
             #endif
-            .navigationTitle("我的")
+            .ehCompactHeader()
             .scrollContentBackground(.hidden)
             .navigationDestination(for: ProfileRoute.self) { route in
+                // 二级页一律隐藏底部浮条：它们是设置/管理类页面，
+                // 没有平级切换的需要，而浮条会盖住列表最后一行与底部按钮
                 route.destination
+                    #if os(iOS)
+                    .ehHidesTabBar()
+                    #endif
             }
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery).id(gallery.gid)

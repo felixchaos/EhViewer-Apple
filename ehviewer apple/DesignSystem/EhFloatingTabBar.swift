@@ -118,20 +118,20 @@ extension View {
 /// 放在 environment 里而不是层层传 binding：驱动它的是各个列表，
 /// 消费它的是根部的 modifier，两者之间隔着好几层视图。
 @Observable
+@MainActor
 final class EhTabBarVisibility {
+    /// 全局唯一。
+    ///
+    /// 此前走 environment 注入，结果驱动方（列表的滚动修饰器）读到的是
+    /// EnvironmentKey 的 defaultValue，而消费方（浮条）用的是自己 @State 里的
+    /// 另一个实例——回调在跑、状态也在写，但写进了另一个对象，浮条自然不动。
+    /// 全 App 只有一条浮条，用单例最直接，也不会再有两份状态。
+    static let shared = EhTabBarVisibility()
+
     /// 滚动导致的隐藏
     var hiddenByScroll = false
-}
 
-private struct EhTabBarVisibilityKey: EnvironmentKey {
-    static let defaultValue = EhTabBarVisibility()
-}
-
-extension EnvironmentValues {
-    var ehTabBarVisibility: EhTabBarVisibility {
-        get { self[EhTabBarVisibilityKey.self] }
-        set { self[EhTabBarVisibilityKey.self] = newValue }
-    }
+    private init() {}
 }
 
 extension View {
@@ -145,7 +145,7 @@ extension View {
 }
 
 private struct EhTabBarAutoHideModifier: ViewModifier {
-    @Environment(\.ehTabBarVisibility) private var visibility
+    private var visibility: EhTabBarVisibility { .shared }
     @State private var lastOffset: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -171,13 +171,12 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     var onReselect: ((Tab) -> Void)?
 
     @State private var isHidden = false
-    @State private var visibility = EhTabBarVisibility()
+    private var visibility: EhTabBarVisibility { .shared }
 
     private var shouldHide: Bool { isHidden || visibility.hiddenByScroll }
 
     func body(content: Content) -> some View {
         content
-            .environment(\.ehTabBarVisibility, visibility)
             .onPreferenceChange(EhHidesTabBarKey.self) { isHidden = $0 }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !shouldHide {

@@ -214,9 +214,10 @@ struct QuickSearchDrawerContent: View {
     var body: some View {
         VStack(spacing: 0) {
             // 顶部标题栏 (对齐 Android drawer header)
-            HStack {
+            HStack(spacing: EhSpacing.meta) {
                 Text("快速搜索")
-                    .font(.headline)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(EhColor.label)
                 Spacer()
                 // 收藏当前搜索词 (对齐 Android: 抽屉顶部添加按钮)
                 Button {
@@ -227,33 +228,38 @@ struct QuickSearchDrawerContent: View {
                         keyword: currentKeyword
                     )
                     vm.addSearch(record)
+                    Haptics.success()
                 } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title3)
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(
+                            currentKeyword.isEmpty ? EhColor.tertiaryLabel : EhColor.onAccentFill
+                        )
+                        .frame(width: 30, height: 30)
+                        .background {
+                            Circle().fill(
+                                currentKeyword.isEmpty ? EhColor.fill : EhColor.accentFill
+                            )
+                        }
                 }
+                .buttonStyle(.plain)
                 .disabled(currentKeyword.isEmpty)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, EhSpacing.page)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
-            Divider()
+            EhHairline(inset: EhSpacing.page)
 
             // 搜索词列表
             if vm.searches.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("暂无快速搜索")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                    Text("点击 + 收藏当前搜索词")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                EhStateView(kind: .empty(
+                    symbol: "bookmark",
+                    title: "还没有快速搜索",
+                    message: currentKeyword.isEmpty
+                        ? "先搜一次，再回到这里把条件存下来"
+                        : "点右上角 + 把当前搜索条件存下来"
+                ))
             } else {
                 List {
                     ForEach(vm.searches, id: \.id) { search in
@@ -279,7 +285,18 @@ struct QuickSearchDrawerContent: View {
                     .onDelete { vm.delete(at: $0) }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
+        }
+        // 抽屉底色与 App 一致，并给左边缘一条细线把它与内容区分开。
+        // 此前用的是系统默认底色，深浅模式下都和主界面对不上，
+        // 看起来像贴上去的另一个 App 的浮窗。
+        .background(EhColor.background)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(EhColor.hairline)
+                .frame(width: 0.5)
+                .ignoresSafeArea()
         }
         .task { vm.loadSearches() }
     }

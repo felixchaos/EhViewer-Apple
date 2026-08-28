@@ -45,7 +45,19 @@ struct HistoryView: View {
     }
 
     private var historyInnerContent: some View {
-        Group {
+        VStack(spacing: 0) {
+            // 紧凑页头：标题与动作同一行。系统大标题会先留一条空导航栏带
+            // 再放标题，两处加起来白白吃掉近百点垂直空间。
+            EhPageHeader(title: "阅读历史") {
+                EhSearchToggleButton(isActive: $isSearching)
+                if !vm.records.isEmpty {
+                    Button("清空", role: .destructive) { vm.showClearConfirm = true }
+                        .font(.system(size: 15))
+                        .foregroundStyle(EhColor.danger)
+                }
+            }
+
+            Group {
                 if filteredRecords.isEmpty {
                     if searchText.isEmpty {
                         EhStateView(kind: .empty(
@@ -64,26 +76,11 @@ struct HistoryView: View {
                     historyList
                 }
             }
-            .navigationTitle("历史")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
+        }
             // 去掉 .searchable：iOS 26 把搜索栏放在屏幕**底部**，
             // 于是它和浮起导航条重叠，键盘弹出后也没有收起的落点。
-            // 设计稿里历史页顶部只有标题与「清空」，检索靠时间分组完成。
             .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索历史")
-            .toolbar {
-                if !vm.records.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
-                        EhSearchToggleButton(isActive: $isSearching)
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("清空", role: .destructive) {
-                            vm.showClearConfirm = true
-                        }
-                    }
-                }
-            }
+            .ehCompactHeader()
             .confirmationDialog("确认清空所有历史记录？", isPresented: $vm.showClearConfirm, titleVisibility: .visible) {
                 Button("清空", role: .destructive) {
                     vm.clearAll()
