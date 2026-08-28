@@ -112,23 +112,83 @@ extension View {
 }
 
 
+/// 浮起导航条的显隐状态。
+///
+/// 由滚动驱动（向下滚隐藏、向上滚显示），也可由 `ehHidesTabBar` 强制隐藏。
+/// 放在 environment 里而不是层层传 binding：驱动它的是各个列表，
+/// 消费它的是根部的 modifier，两者之间隔着好几层视图。
+@Observable
+final class EhTabBarVisibility {
+    /// 滚动导致的隐藏
+    var hiddenByScroll = false
+}
+
+private struct EhTabBarVisibilityKey: EnvironmentKey {
+    static let defaultValue = EhTabBarVisibility()
+}
+
+extension EnvironmentValues {
+    var ehTabBarVisibility: EhTabBarVisibility {
+        get { self[EhTabBarVisibilityKey.self] }
+        set { self[EhTabBarVisibilityKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 挂在可滚动内容上：向下滚时收起底部导航条，向上滚时放出来。
+    ///
+    /// 阈值 12pt 是为了避免橡皮筋回弹和手指微抖造成的反复开合；
+    /// 接近顶部时无条件显示，否则用户滚回顶部会发现导航条不见了。
+    func ehTabBarAutoHide() -> some View {
+        modifier(EhTabBarAutoHideModifier())
+    }
+}
+
+private struct EhTabBarAutoHideModifier: ViewModifier {
+    @Environment(\.ehTabBarVisibility) private var visibility
+    @State private var lastOffset: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, offset in
+            let delta = offset - lastOffset
+            guard abs(delta) > 12 else { return }
+            lastOffset = offset
+
+            if offset < 40 {
+                visibility.hiddenByScroll = false
+            } else {
+                visibility.hiddenByScroll = delta > 0
+            }
+        }
+    }
+}
+
 private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     let items: [EhFloatingTabBar<Tab>.Item]
     @Binding var selection: Tab
     var onReselect: ((Tab) -> Void)?
 
     @State private var isHidden = false
+    @State private var visibility = EhTabBarVisibility()
+
+    private var shouldHide: Bool { isHidden || visibility.hiddenByScroll }
 
     func body(content: Content) -> some View {
         content
+            .environment(\.ehTabBarVisibility, visibility)
             .onPreferenceChange(EhHidesTabBarKey.self) { isHidden = $0 }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !isHidden {
+                if !shouldHide {
                     EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                        // 键盘弹出时不要把导航条顶起来 —— 它应该留在原地被键盘盖住。
+                        // safeAreaInset 的内容默认跟随键盘安全区，这里显式忽略。
+                        .ignoresSafeArea(.keyboard, edges: .bottom)
                 }
             }
-            .animation(.easeInOut(duration: 0.22), value: isHidden)
+            .animation(.easeInOut(duration: 0.22), value: shouldHide)
     }
 }
 

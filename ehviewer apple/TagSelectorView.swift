@@ -37,19 +37,6 @@ struct TagSelectorView: View {
                     ))
                 } else {
                     namespacePicker
-                    // 实时拼装出最终会进搜索框的查询串。
-                    // 标签语法（namespace:"tag$"）不是所有人都清楚，
-                    // 勾选时直接把结果摆出来，比事后到搜索框里去猜要好。
-                    if !picked.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            Text(picked.joined(separator: " "))
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(EhColor.accent)
-                                .padding(.horizontal, EhSpacing.page)
-                        }
-                        .frame(height: 30)
-                        .background(EhColor.accentWash)
-                    }
                     Divider()
                     tagGrid
                 }

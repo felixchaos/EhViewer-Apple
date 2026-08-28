@@ -279,7 +279,11 @@ struct GalleryListView: View {
             }
             .sheet(isPresented: $showTagSelector) {
                 TagSelectorView { keyword in
-                    viewModel.appendSearchKeyword(keyword)
+                    // 选中的标签直接进搜索框成为一枚 token，
+                    // 而不是在选择器里另画一条「预览」——预览是同一信息说两遍
+                    if !searchTokens.contains(keyword) {
+                        searchTokens.append(keyword)
+                    }
                 }
             }
             .onChange(of: selectedQuickSearch) { _, newValue in
@@ -354,7 +358,9 @@ struct GalleryListView: View {
         }
         .sheet(isPresented: $showTagSelector) {
             TagSelectorView { keyword in
-                viewModel.appendSearchKeyword(keyword)
+                if !searchTokens.contains(keyword) {
+                    searchTokens.append(keyword)
+                }
             }
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
@@ -560,7 +566,9 @@ struct GalleryListView: View {
         }
         .sheet(isPresented: $showTagSelector) {
             TagSelectorView { keyword in
-                viewModel.appendSearchKeyword(keyword)
+                if !searchTokens.contains(keyword) {
+                    searchTokens.append(keyword)
+                }
             }
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
@@ -592,62 +600,43 @@ struct GalleryListView: View {
 
     // MARK: - 搜索栏 (对齐 Android SearchBar，从 toolbar 移到 body header 以获得完整宽度)
 
+    /// 已确定的标签 token。文字与 token 在同一个输入框里混排：
+    /// 点 token 上的叉删掉整个标签，光标在文字里时退格照常改字。
+    @State private var searchTokens: [String] = []
+
     private var searchBarView: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
-
-            TextField("搜索", text: $viewModel.searchText)
-                .textFieldStyle(.plain)
-                .focused($isSearchFocused)
-                .onSubmit {
-                    isSearchFocused = false
-                    viewModel.searchWithAdvanced(advancedSearch)
-                }
-                .onChange(of: viewModel.searchText) { _, _ in
-                    viewModel.updateSuggestions()
-                }
-                #if os(iOS)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                #endif
-
-            // 清除按钮 (输入内容时显示)
-            if !viewModel.searchText.isEmpty {
-                Button {
-                    viewModel.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+        EhSearchBar(
+            text: $viewModel.searchText,
+            tokens: $searchTokens,
+            placeholder: "搜索标签或标题",
+            isFocused: $isSearchFocused,
+            trailingButtons: [
+                // 省得用户手打 f:"big breasts$" 这种语法
+                ("tag", { showTagSelector = true }),
+                (advancedSearch.isEnabled ? "line.3.horizontal.decrease.circle.fill"
+                                          : "line.3.horizontal.decrease.circle",
+                 { showAdvancedSearch = true }),
+            ],
+            onSubmit: {
+                isSearchFocused = false
+                viewModel.searchText = combinedQuery
+                viewModel.searchWithAdvanced(advancedSearch)
             }
-
-            // 标签选择器 (对齐 Android 上游 TagSelectorActivity)
-            // 省得用户手打 f:"big breasts$" 这种语法
-            Button {
-                showTagSelector = true
-            } label: {
-                Image(systemName: "tag")
-                    .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-
-            // 搜索选项按钮 (始终可见, 对齐 Android AddDeleteDrawable)
-            Button {
-                showAdvancedSearch = true
-            } label: {
-                Image(systemName: advancedSearch.isEnabled ? "plus.circle.fill" : "plus.circle")
-                    .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
+        )
+        .onChange(of: viewModel.searchText) { _, _ in
+            viewModel.updateSuggestions()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .onChange(of: searchTokens) { _, _ in
+            // token 变化也要重新搜索：删掉一个标签本身就是一次条件变更
+            viewModel.searchText = combinedQuery
+            viewModel.searchWithAdvanced(advancedSearch)
+        }
+    }
+
+    /// token 与自由文本拼成最终查询串
+    private var combinedQuery: String {
+        let typed = viewModel.searchText.trimmingCharacters(in: .whitespaces)
+        return (searchTokens + (typed.isEmpty ? [] : [typed])).joined(separator: " ")
     }
 
     // MARK: - 统一工具栏 (对齐 Android FAB secondaryButtons)

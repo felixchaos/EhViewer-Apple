@@ -145,9 +145,11 @@ struct ProfileHomeView: View {
 
     private var quickGrid: some View {
         HStack(spacing: 10) {
-            quickEntry(.myTags, symbol: "tag", title: "我的标签")
-            quickEntry(.filters, symbol: "line.3.horizontal.decrease", title: "筛选器")
-            quickEntry(.hosts, symbol: "network", title: "Hosts")
+            // 「我的标签」→「订阅标签」：顶部切页叫「订阅」，这里管理的正是
+            // 它背后的标签列表，两处用同一个词才对得上
+            quickEntry(.myTags, symbol: "bell", title: "订阅标签")
+            quickEntry(.filters, symbol: "line.3.horizontal.decrease.circle", title: "筛选器")
+            quickEntry(.hosts, symbol: "globe", title: "Hosts")
             quickEntry(.news, symbol: "envelope", title: "站内公告")
         }
     }
@@ -155,12 +157,19 @@ struct ProfileHomeView: View {
     private func quickEntry(_ route: ProfileRoute, symbol: String, title: String) -> some View {
         NavigationLink(value: route) {
             VStack(spacing: 7) {
+                // 固定 22×22 的图标框 + 统一字重。不同 SF Symbol 的字形高度差别
+                // 很大（line.3.horizontal.decrease 明显矮一截），只给 font size
+                // 不给框，四个格子的图标就会一个比一个小
                 Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .regular))
+                    .font(.system(size: 19, weight: .regular))
+                    .symbolRenderingMode(.monochrome)
                     .foregroundStyle(EhColor.accent)
+                    .frame(width: 22, height: 22)
                 Text(title)
                     .font(EhFont.footnote)
                     .foregroundStyle(EhColor.label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 66)

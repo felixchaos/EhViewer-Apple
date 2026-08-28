@@ -58,7 +58,8 @@ struct FavoritesView: View {
                 }
             }
             .navigationTitle("收藏")
-            .searchable(text: $searchText, prompt: selectedSlot == -2 ? "搜索本地收藏" : "搜索收藏")
+                // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
+                // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
             .onChange(of: searchText) { _, _ in
                 if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
             }
@@ -79,9 +80,10 @@ struct FavoritesView: View {
                 }
                 .navigationTitle("收藏")
                 #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.large)
                 #endif
-                .searchable(text: $searchText, prompt: selectedSlot == -2 ? "搜索本地收藏" : "搜索收藏")
+                // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
+                // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
                 .onChange(of: searchText) { _, _ in
                     if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
                 }

@@ -98,9 +98,10 @@ struct DownloadsView: View {
             }
             .navigationTitle("下载")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             #endif
-            .searchable(text: $searchText, prompt: "搜索标题或标签")
+                // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
+                // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     mainToolbarMenu
@@ -747,7 +748,7 @@ struct DownloadsView: View {
             }
             .navigationTitle("移动到标签")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

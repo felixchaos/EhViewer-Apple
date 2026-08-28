@@ -52,7 +52,11 @@ struct HistoryView: View {
                             message: "浏览过的画廊会出现在这里"
                         ))
                     } else {
-                        ContentUnavailableView.search(text: searchText)
+                        EhStateView(kind: .empty(
+                            symbol: "magnifyingglass",
+                            title: "没有匹配的记录",
+                            message: "换个关键词，或清空搜索看全部历史"
+                        ))
                     }
                 } else {
                     historyList
@@ -60,12 +64,14 @@ struct HistoryView: View {
             }
             .navigationTitle("历史")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             #endif
-            .searchable(text: $searchText, prompt: "搜索历史")
+            // 去掉 .searchable：iOS 26 把搜索栏放在屏幕**底部**，
+            // 于是它和浮起导航条重叠，键盘弹出后也没有收起的落点。
+            // 设计稿里历史页顶部只有标题与「清空」，检索靠时间分组完成。
             .toolbar {
                 if !vm.records.isEmpty {
-                    ToolbarItem(placement: .automatic) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button("清空", role: .destructive) {
                             vm.showClearConfirm = true
                         }
@@ -91,9 +97,49 @@ struct HistoryView: View {
         }
     }
 
+    /// 按「今天 / 昨天 / 更早」分组。
+    ///
+    /// 历史页去掉了搜索框（见 body 处的说明），检索改由时间分组承担——
+    /// 找一本刚看过的书，「今天」这一段比在搜索框里回忆标题快。
+    private var groupedRecords: [(title: String, records: [HistoryRecord])] {
+        let cal = Calendar.current
+        var today: [HistoryRecord] = []
+        var yesterday: [HistoryRecord] = []
+        var earlier: [HistoryRecord] = []
+        for r in filteredRecords {
+            if cal.isDateInToday(r.date) { today.append(r) }
+            else if cal.isDateInYesterday(r.date) { yesterday.append(r) }
+            else { earlier.append(r) }
+        }
+        return [("今天", today), ("昨天", yesterday), ("更早", earlier)]
+            .filter { !$0.1.isEmpty }
+    }
+
     private var historyList: some View {
         List {
-            ForEach(filteredRecords, id: \.gid) { record in
+            ForEach(groupedRecords, id: \.title) { group in
+                Section {
+                    historyRows(group.records)
+                } header: {
+                    Text(group.title).ehSectionHeader()
+                }
+            }
+        }
+        .listStyle(.plain)
+        #if os(iOS)
+        .fullScreenCover(item: $resumeItem) { item in
+            ImageReaderView(
+                gid: item.gid, token: item.token,
+                pages: item.pages, initialPage: item.initialPage
+            )
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private func historyRows(_ records: [HistoryRecord]) -> some View {
+        Group {
+            ForEach(records, id: \.gid) { record in
                 // 零透明链接垫底，避免 List 给 NavigationLink 自动补 disclosure 箭头
                 ZStack {
                     NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
@@ -169,18 +215,11 @@ struct HistoryView: View {
                 }
             }
             .onDelete { indexSet in
-                vm.delete(at: indexSet)
+                // indexSet 是分组内的下标，删除前换算回全局记录
+                let gids = indexSet.map { records[$0].gid }
+                for gid in gids { vm.deleteByGid(gid) }
             }
         }
-        .listStyle(.plain)
-        #if os(iOS)
-        .fullScreenCover(item: $resumeItem) { item in
-            ImageReaderView(
-                gid: item.gid, token: item.token,
-                pages: item.pages, initialPage: item.initialPage
-            )
-        }
-        #endif
     }
 
     /// 0...1 的阅读进度；没读过或页数未知则不显示
