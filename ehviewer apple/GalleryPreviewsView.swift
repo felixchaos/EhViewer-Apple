@@ -104,6 +104,11 @@ struct GalleryPreviewsView: View {
     
     // MARK: - 预览项 (点击跳转到阅读器，对齐 Android GalleryPreviewsScene.onItemClick)
     
+    /// 已读到的页索引（0-based）。与列表行、详情页读同一个键。
+    private var readUpTo: Int {
+        UserDefaults.standard.integer(forKey: "reading_progress_\(gid)")
+    }
+
     @ViewBuilder
     private func previewItem(preview: PreviewItem) -> some View {
         Button {
@@ -111,29 +116,42 @@ struct GalleryPreviewsView: View {
             readerTarget = ReaderTarget(page: preview.position)
         } label: {
             VStack(spacing: 6) {
-                switch preview.type {
-                case .large(let imageUrl):
-                    CachedAsyncImage(url: URL(string: imageUrl)) { img in
-                        img.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Color(.tertiarySystemFill)
-                            .overlay { ProgressView() }
+                Group {
+                    switch preview.type {
+                    case .large(let imageUrl):
+                        CachedAsyncImage(url: URL(string: imageUrl), showProgress: false) { img in
+                            img.resizable().aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            EhColor.thumbnailPlaceholder
+                        }
+                    case .normal(let normalPreview):
+                        SpritePreviewView(preview: normalPreview)
                     }
-                    .frame(width: previewWidth, height: previewWidth / previewAspect)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
-                    
-                case .normal(let normalPreview):
-                    SpritePreviewView(preview: normalPreview)
-                        .frame(width: previewWidth, height: previewWidth / previewAspect)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
                 }
-                
+                .frame(width: previewWidth, height: previewWidth / previewAspect)
+                .clipShape(RoundedRectangle(cornerRadius: EhRadius.thumbnail, style: .continuous))
+                // 已读的页在底部画一条琥珀线，当前页整格描边。
+                // 翻到一半退出来再进预览时，能立刻看出读到哪了。
+                .overlay(alignment: .bottom) {
+                    if preview.position < readUpTo {
+                        Rectangle()
+                            .fill(EhColor.accentFill)
+                            .frame(height: 2)
+                    }
+                }
+                .overlay {
+                    if preview.position == readUpTo {
+                        RoundedRectangle(cornerRadius: EhRadius.thumbnail, style: .continuous)
+                            .strokeBorder(EhColor.accentFill, lineWidth: 1.5)
+                    }
+                }
+
                 // 页码标签 (1-based，对齐 Android preview.getPosition() + 1)
                 Text("\(preview.position + 1)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(
+                        preview.position == readUpTo ? EhColor.accent : EhColor.tertiaryLabel
+                    )
             }
         }
         .buttonStyle(.plain)

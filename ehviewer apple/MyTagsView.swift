@@ -96,16 +96,26 @@ struct MyTagsView: View {
     }
 
     private func row(_ tag: UserTag) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: EhSpacing.row) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(tag.tagName)
-                    .font(.callout)
+                HStack(spacing: 6) {
+                    // 命名空间单独着色：订阅标签往往几十上百条，
+                    // 按命名空间分辨比逐字读整串快得多
+                    if let ns = namespace(of: tag.tagName) {
+                        Text(ns)
+                            .font(EhFont.footnote.weight(.semibold))
+                            .foregroundStyle(EhColor.accent)
+                    }
+                    Text(bareName(of: tag.tagName))
+                        .font(EhFont.body)
+                        .foregroundStyle(EhColor.label)
+                }
                 // 中文翻译能显示就显示 —— 光看英文标签名不好认
                 if let translated = EhTagDatabase.shared.getTranslation(tag.tagName),
                    translated != tag.tagName {
                     Text(translated)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(EhFont.meta)
+                        .foregroundStyle(EhColor.secondaryLabel)
                 }
             }
 
@@ -115,18 +125,42 @@ struct MyTagsView: View {
                 ProgressView().controlSize(.small)
             } else {
                 if tag.hidden {
-                    Label("已隐藏", systemImage: "eye.slash")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(EhColor.tertiaryLabel)
                 }
                 if tag.tagWeight != 0 {
-                    Text(tag.tagWeight > 0 ? "+\(tag.tagWeight)" : "\(tag.tagWeight)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(tag.tagWeight > 0 ? .green : .red)
+                    // 权重条：数字本身不直观，一条相对长度能让「这个比那个更重」
+                    // 在一列里横向可比
+                    HStack(spacing: 6) {
+                        ZStack(alignment: tag.tagWeight > 0 ? .leading : .trailing) {
+                            Capsule().fill(EhColor.fill)
+                            Capsule()
+                                .fill(tag.tagWeight > 0 ? EhColor.success : EhColor.danger)
+                                .frame(width: 40 * min(1, abs(Double(tag.tagWeight)) / 10))
+                        }
+                        .frame(width: 40, height: 3)
+
+                        Text(tag.tagWeight > 0 ? "+\(tag.tagWeight)" : "\(tag.tagWeight)")
+                            .font(EhFont.mono(12, weight: .medium))
+                            .foregroundStyle(tag.tagWeight > 0 ? EhColor.success : EhColor.danger)
+                            .frame(width: 30, alignment: .trailing)
+                    }
                 }
             }
         }
+    }
+
+    /// "female:glasses" → "female"
+    private func namespace(of tag: String) -> String? {
+        guard let idx = tag.firstIndex(of: ":"), idx != tag.startIndex else { return nil }
+        return String(tag[tag.startIndex..<idx])
+    }
+
+    /// "female:glasses" → "glasses"
+    private func bareName(of tag: String) -> String {
+        guard let idx = tag.firstIndex(of: ":") else { return tag }
+        return String(tag[tag.index(after: idx)...])
     }
 
     // MARK: - 数据

@@ -17,6 +17,45 @@ struct HostsView: View {
     @State private var newHost = ""
     @State private var newIPs = ""
 
+    /// IP → 最近一次探测结果
+    @State private var latencies: [String: HostLatency] = [:]
+    @State private var isProbing = false
+
+    @ViewBuilder
+    private func latencyBadge(for ip: String?) -> some View {
+        if let ip, let latency = latencies[ip] {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(color(for: latency.grade))
+                    .frame(width: 7, height: 7)
+                Text(latency.milliseconds.map { "\($0) ms" } ?? "不可达")
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.secondaryLabel)
+            }
+        } else if isProbing {
+            ProgressView().controlSize(.mini)
+        } else {
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+
+    private func color(for grade: HostLatency.Grade) -> Color {
+        switch grade {
+        case .good:        return EhColor.success
+        case .fair:        return EhColor.warning
+        case .poor:        return EhColor.warning
+        case .unreachable: return EhColor.danger
+        }
+    }
+
+    private func probeAll() async {
+        let ips = entries.compactMap { $0.ips.first }
+        guard !ips.isEmpty else { return }
+        isProbing = true
+        latencies = await HostLatencyProbe.shared.measureAll(ips: ips)
+        isProbing = false
+    }
+
     var body: some View {
         Form {
             Section {
@@ -25,12 +64,19 @@ struct HostsView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(entries) { entry in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.host)
-                                .font(.system(.callout, design: .monospaced))
-                            Text(entry.ips.joined(separator: ", "))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: EhSpacing.row) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.host)
+                                    .font(.system(size: 14, design: .monospaced))
+                                    .foregroundStyle(EhColor.label)
+                                Text(entry.ips.joined(separator: ", "))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(EhColor.secondaryLabel)
+                            }
+                            Spacer(minLength: 8)
+                            // 一条早已失效的记录和一条正常记录此前长得一模一样，
+                            // 用户只能靠「打不开」反推。这里把可达性直接标出来。
+                            latencyBadge(for: entry.ips.first)
                         }
                     }
                     .onDelete { indexSet in
@@ -64,6 +110,8 @@ struct HostsView: View {
             }
         }
         .navigationTitle("自定义 Hosts")
+        .task { await probeAll() }
+        .refreshable { await probeAll() }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

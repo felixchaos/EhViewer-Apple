@@ -61,35 +61,24 @@ struct TopListView: View {
             .padding(.vertical, 8)
             .disabled(vm.categoryNames.isEmpty)
 
-            // 时间维度选择
-            Picker("时间", selection: $selectedPeriod) {
-                ForEach(0..<periods.count, id: \.self) { i in
-                    Text(periods[i]).tag(i)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.bottom, 8)
+            // 时间维度用琥珀分段控件。类别项数多且名字长，仍用系统 Picker——
+            // 塞进等宽分段会挤成一堆截断的字。
+            EhSegmented(
+                items: periods.indices.map { ($0, periods[$0]) },
+                selection: $selectedPeriod
+            )
+            .padding(.horizontal, EhSpacing.page)
+            .padding(.bottom, 10)
             .disabled(vm.categoryNames.isEmpty)
-
-            Divider()
 
             if vm.isLoading {
                 ProgressView("加载排行榜...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = vm.errorMessage {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    Text(error)
-                        .foregroundStyle(.secondary)
-                    Button("重试") {
-                        Task { await vm.load() }
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EhStateView(
+                    kind: .error(title: "排行榜加载失败", message: error),
+                    primaryAction: ("重试", { Task { await vm.load() } })
+                )
             } else {
                 let items = vm.items(for: selectedCategory, period: selectedPeriod)
                 List(items.indices, id: \.self) { idx in
@@ -127,33 +116,29 @@ struct TopListRow: View {
     let item: TopListItem
 
     var body: some View {
-        HStack(spacing: 12) {
-            // 排名
+        HStack(spacing: EhSpacing.row) {
+            // 26pt 固定宽的排名列：名次要能在竖直方向连成一列扫下来，
+            // 宽度随位数变化就对不齐了
             Text("\(rank)")
-                .font(.headline)
+                .font(EhFont.mono(15, weight: rank <= 3 ? .bold : .regular))
                 .foregroundStyle(rankColor)
-                .frame(width: 30)
+                .frame(width: 26, alignment: .trailing)
 
             Text(item.text)
+                .font(EhFont.body)
+                .foregroundStyle(EhColor.label)
                 .lineLimit(2)
 
-            Spacer()
-
-            if item.href != nil {
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(.secondary)
-            }
+            Spacer(minLength: 4)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { EhHairline(inset: 26 + EhSpacing.row) }
     }
 
+    /// 前三名统一用琥珀。金/银/铜三色在深色底上彼此难分，
+    /// 而「是不是前三」本身才是这里要传达的信息。
     private var rankColor: Color {
-        switch rank {
-        case 1: return .yellow
-        case 2: return .gray
-        case 3: return .orange
-        default: return .secondary
-        }
+        rank <= 3 ? EhColor.accent : EhColor.tertiaryLabel
     }
 }
 
