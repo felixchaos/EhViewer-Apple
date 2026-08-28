@@ -149,33 +149,17 @@ struct HistoryView: View {
                     NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
                         .opacity(0)
 
-                    HStack(spacing: EhSpacing.row) {
-                        // 封面底部的 2px 进度条把「读到哪了」直接画在缩略图上，
-                        // 不必再占一行文字
-                        EhCoverThumbnail(
-                            url: record.thumb,
-                            size: EhSize.historyThumbnail,
-                            cornerRadius: EhRadius.smallThumbnail,
-                            readProgress: readProgress(for: record)
-                        )
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(record.titleJpn ?? record.title)
-                                .font(EhFont.body)
-                                .foregroundStyle(EhColor.label)
-                                .lineLimit(2)
-
-                            Text(formattedTime(record.date))
-                                .font(EhFont.meta)
-                                .foregroundStyle(EhColor.secondaryLabel)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        // 续读钮：历史页最主要的动作就是接着上次读，
-                        // 让它有个独立的落点而不是只能整行点进详情
-                        Button {
-                            Haptics.tap()
+                    EhGalleryRow(
+                        cover: record.thumb,
+                        title: record.titleJpn ?? record.title,
+                        category: EhCategory(rawValue: record.category),
+                        subtitle: formattedTime(record.date),
+                        readProgress: readProgress(for: record),
+                        thumbnailSize: EhSize.historyThumbnail
+                    ) {
+                        // 历史页最主要的动作就是接着上次读，
+                        // 让它有个独立落点而不是只能整行点进详情
+                        EhRowActionButton(symbol: "play.fill") {
                             resumeItem = ReaderLaunchItem(
                                 gid: record.gid, token: record.token,
                                 pages: record.pages, previewSet: nil,
@@ -183,14 +167,7 @@ struct HistoryView: View {
                                     forKey: "reading_progress_\(record.gid)"
                                 ) as? Int
                             )
-                        } label: {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(EhColor.accent)
-                                .frame(width: 30, height: 30)
-                                .background(Circle().fill(EhColor.fill))
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.vertical, 4)
                 }

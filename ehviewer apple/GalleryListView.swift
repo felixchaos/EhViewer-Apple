@@ -1142,90 +1142,36 @@ struct GalleryRow: View {
         return CGSize(width: base.width * thumbScale, height: base.height * thumbScale)
     }
 
-    /// 元信息行：分类 / 语言 / 页数 / 收藏 / 阅读进度
-    ///
-    /// 数字一律等宽（`EhFont.mono`），否则同一列的页数在不同行会左右跳动。
-    private var metaRow: some View {
-        HStack(spacing: EhSpacing.meta) {
-            Text(gallery.category.name)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(gallery.category.labelColor)
-
-            if let lang = gallery.simpleLanguage, !lang.isEmpty {
-                Text(lang)
-                    .font(EhFont.mono(11))
-                    .foregroundStyle(EhColor.secondaryLabel)
-            }
-
-            if showPages {
-                Text("\(gallery.pages)P")
-                    .font(EhFont.mono(11))
-                    .foregroundStyle(EhColor.secondaryLabel)
-            }
-
-            if gallery.favoriteSlot >= 0 {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(EhColor.danger)
-            }
-
-            if let readProgress {
-                Text("读至 \(readProgress)")
-                    .font(EhFont.mono(11))
-                    .foregroundStyle(EhColor.accent)
-            }
-
-            Spacer(minLength: 0)
+    /// 元信息行：分类 / 页数 / 收藏 / 阅读进度。
+    /// 语言不在这里——它已经叠在封面的分类角标上（与 Android 一致）。
+    private var metaItems: [EhGalleryRow.MetaItem] {
+        var items: [EhGalleryRow.MetaItem] = [
+            .init(gallery.category.name, color: gallery.category.labelColor, isMonospaced: false)
+        ]
+        if showPages {
+            items.append(.init("\(gallery.pages)P"))
         }
+        if gallery.favoriteSlot >= 0 {
+            items.append(.init("♥", color: EhColor.danger))
+        }
+        if let readProgress {
+            items.append(.init("读至 \(readProgress)", color: EhColor.accent))
+        }
+        return items
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: EhSpacing.row) {
-            // 分类色从彩色方块退成封面左侧 3px 色条：方块在深色底上过于抢眼，
-            // 色条保留了分类的可扫视性又不与内容争注意力
-            EhCoverThumbnail(
-                url: thumbURL?.absoluteString,
-                size: thumbSize,
-                category: gallery.category
-            )
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(gallery.suitableTitle(preferJpn: showJpnTitle))
-                    .font(EhFont.body)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(EhColor.label)
-
-                if let uploader = gallery.uploader, !uploader.isEmpty {
-                    Text(uploader)
-                        .font(EhFont.meta)
-                        .foregroundStyle(EhColor.secondaryLabel)
-                        .lineLimit(1)
-                        .padding(.top, 2)
-                }
-
-                // 把元信息压到与封面底边齐平：各行的元信息因此横向成列，
-                // 扫视时视线不必逐行重新定位
-                Spacer(minLength: 6)
-
-                metaRow
-
-                // 五星改为数值 + 细条：星星在这个行高里只能画得很小，半星难辨认，
-                // 数值既精确又省出横向空间给发布时间
-                if showRating {
-                    EhRatingRow(rating: gallery.rating, trailingText: gallery.posted)
-                        .padding(.top, 5)
-                } else if let posted = gallery.posted, !posted.isEmpty {
-                    Text(posted)
-                        .font(EhFont.mono(11))
-                        .foregroundStyle(EhColor.tertiaryLabel)
-                        .padding(.top, 5)
-                }
-            }
-            .frame(minHeight: thumbSize.height, alignment: .top)
-        }
-        .padding(.horizontal, EhSpacing.page)
-        .padding(.vertical, 10)
+        EhGalleryRow(
+            cover: thumbURL?.absoluteString,
+            title: gallery.suitableTitle(preferJpn: showJpnTitle),
+            category: gallery.category,
+            language: gallery.simpleLanguage,
+            subtitle: gallery.uploader,
+            meta: metaItems,
+            rating: showRating ? gallery.rating : nil,
+            trailingText: gallery.posted,
+            thumbnailSize: thumbSize
+        )
         .contentShape(Rectangle())
         .contextMenu {
             // 下载

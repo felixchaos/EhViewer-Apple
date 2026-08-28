@@ -317,54 +317,19 @@ struct FavoritesView: View {
     }
 
     private func localFavoriteRow(_ record: LocalFavoriteRecord) -> some View {
-        HStack(spacing: 12) {
-            CachedAsyncImage(url: URL(string: record.thumb ?? "")) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color(.secondarySystemBackground)
-            }
-            .frame(width: 76, height: 106)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(EhCategory(rawValue: record.category).name)
-                    .font(.caption2.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(EhCategory(rawValue: record.category).color)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-
-                Text(record.title)
-                    .font(.subheadline)
-                    .lineLimit(2)
-
-                if let uploader = record.uploader {
-                    Text(uploader)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 8) {
-                    if record.rating > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "star.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.yellow)
-                            Text(String(format: "%.1f", record.rating))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if record.pages > 0 {
-                        Text("\(record.pages)P")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 4)
+        // 与首页、下载、历史共用同一个行组件。此前这里是第四份各自的实现，
+        // 分类还画成填充方块、评分是星星，改一次样式要改四处。
+        EhGalleryRow(
+            cover: record.thumb,
+            title: record.title,
+            category: EhCategory(rawValue: record.category),
+            subtitle: record.uploader,
+            meta: [.init(EhCategory(rawValue: record.category).name,
+                         color: EhCategory(rawValue: record.category).labelColor,
+                         isMonospaced: false)],
+            rating: record.rating > 0 ? record.rating : nil,
+            trailingText: record.posted
+        )
     }
 
     private func loadLocalFavorites() {

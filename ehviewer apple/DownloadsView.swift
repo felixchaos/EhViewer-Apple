@@ -963,80 +963,24 @@ struct DownloadTaskRow: View {
     }
 
     var body: some View {
-        HStack(spacing: EhSpacing.row) {
-            EhCoverThumbnail(
-                url: task.gallery.thumb,
-                size: EhSize.downloadThumbnail,
-                cornerRadius: EhRadius.smallThumbnail,
-                readProgress: readProgressFraction
-            )
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(task.gallery.bestTitle)
-                    .font(EhFont.body)
-                    .foregroundStyle(EhColor.label)
-                    .lineLimit(2)
-
-                // 状态用颜色表达，不再依赖图标 + 灰字：
-                // 「失败」和「已完成」在一列灰字里几乎分辨不出来
-                HStack(spacing: EhSpacing.meta) {
-                    Text(statusText)
-                        .font(EhFont.mono(11, weight: .medium))
-                        .foregroundStyle(statusColor)
-
-                    Text("\(task.gallery.pages) 页")
-                        .font(EhFont.mono(11))
-                        .foregroundStyle(EhColor.secondaryLabel)
-
-                    if let size = storageSize, size > 0 {
-                        Text(DownloadsView.formatFileSize(size))
-                            .font(EhFont.mono(11))
-                            .foregroundStyle(EhColor.tertiaryLabel)
-                    }
-
-                    Spacer(minLength: 0)
+        EhGalleryRow(
+            cover: task.gallery.thumb,
+            title: task.gallery.bestTitle,
+            category: task.gallery.category,
+            language: task.gallery.simpleLanguage,
+            meta: metaItems,
+            readProgress: readProgressFraction,
+            progress: isActive ? downloadProgress : nil,
+            progressLabel: isActive ? "\(Int(downloadProgress * 100))%" : nil,
+            thumbnailSize: EhSize.downloadThumbnail
+        ) {
+            // 暂停/继续是这一行最常按的东西，此前只能长按出上下文菜单
+            Group {
+                if isActive {
+                    EhRowActionButton(symbol: "pause.fill", size: 28, action: onPause)
+                } else if task.state != DownloadManager.stateFinish {
+                    EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: onResume)
                 }
-
-                // 下载中才画进度条：已完成的行画一条 100% 的条没有信息量，
-                // 只会让列表看起来更吵
-                if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                    HStack(spacing: EhSpacing.meta) {
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(EhColor.fill)
-                            GeometryReader { geo in
-                                Capsule()
-                                    .fill(EhColor.accentFill)
-                                    .frame(width: geo.size.width * max(0, min(1, downloadProgress)))
-                            }
-                        }
-                        .frame(height: 3)
-
-                        Text("\(Int(downloadProgress * 100))%")
-                            .font(EhFont.mono(11, weight: .medium))
-                            .foregroundStyle(EhColor.accent)
-                            .frame(width: 34, alignment: .trailing)
-                    }
-
-                    HStack(spacing: EhSpacing.meta) {
-                        Text("\(task.downloadedPages)/\(task.gallery.pages)")
-                            .font(EhFont.mono(11))
-                            .foregroundStyle(EhColor.tertiaryLabel)
-                        if task.speed > 0 {
-                            Text(Self.formatSpeed(task.speed))
-                                .font(EhFont.mono(11))
-                                .foregroundStyle(EhColor.info)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-            }
-
-            // 圆形动作钮：暂停/继续是这一行最常按的东西，
-            // 此前只能长按出上下文菜单
-            if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                circleActionButton(symbol: "pause.fill", action: onPause)
-            } else if task.state != DownloadManager.stateFinish {
-                circleActionButton(symbol: "arrow.clockwise", action: onResume)
             }
         }
         .contentShape(Rectangle())
@@ -1113,6 +1057,32 @@ struct DownloadTaskRow: View {
             }
         }
     }
+
+    private var isActive: Bool {
+        task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait
+    }
+
+    /// 元信息：状态（带颜色）/ 页数 / 体积 / 下载中的已完成页数与速度。
+    /// 状态用颜色表达而非图标 + 灰字——「失败」和「已完成」在一列灰字里
+    /// 几乎分辨不出来。
+    private var metaItems: [EhGalleryRow.MetaItem] {
+        var items: [EhGalleryRow.MetaItem] = [
+            .init(statusText, color: statusColor, isMonospaced: false),
+            .init("\(task.gallery.pages) 页"),
+        ]
+        if let size = storageSize, size > 0 {
+            items.append(.init(DownloadsView.formatFileSize(size), color: EhColor.tertiaryLabel))
+        }
+        if isActive {
+            items.append(.init("\(task.downloadedPages)/\(task.gallery.pages)",
+                               color: EhColor.tertiaryLabel))
+            if task.speed > 0 {
+                items.append(.init(Self.formatSpeed(task.speed), color: EhColor.info))
+            }
+        }
+        return items
+    }
+
 
     private var statusIcon: some View {
         Group {

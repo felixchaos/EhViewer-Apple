@@ -13,46 +13,55 @@ import EhModels
 
 // MARK: - 封面
 
-/// 带分类色条的封面缩略图。
+/// 带分类角标的封面缩略图。
 ///
-/// 分类色从列表内的彩色方块改为封面左侧 3px 色条——方块在深色底上过于抢眼，
-/// 而色条既保留了分类的可扫视性，又不与内容争夺注意力。
+/// 分类色块贴在封面**右上角**，与 Android 端 `item_gallery_grid_new.xml` 一致：
+/// 那里是一块 32×24dp 的分类色 TextView（`layout_gravity="top|right"`），
+/// 上面再叠白色粗体的语言代码。
+///
+/// 此前我做成了封面左侧的 3px 色条——那是我自己的发挥，两端对不上，
+/// 而且色条太细，在小尺寸缩略图上几乎看不出是什么颜色。角标既能看清，
+/// 又顺带给语言代码找到了位置，不必再占元信息行的一格。
 struct EhCoverThumbnail: View {
     let url: String?
     let size: CGSize
-    /// 传 nil 则不显示色条（历史、下载等不需要分类的场合）
+    /// 传 nil 则不显示角标（历史、下载等不需要分类的场合）
     var category: EhCategory? = nil
+    /// 叠在角标上的语言代码（CN / JP / EN…），与 Android 的 simple_language 对应
+    var language: String? = nil
     var cornerRadius: CGFloat = EhRadius.thumbnail
     /// 0...1，显示在底部的阅读进度；nil 表示不显示
     var readProgress: Double? = nil
 
     var body: some View {
-        HStack(spacing: 0) {
+        CachedAsyncImage(url: URL(string: url ?? ""), showProgress: false) { image in
+            image.resizable().aspectRatio(contentMode: .fill)
+        } placeholder: {
+            EhColor.thumbnailPlaceholder
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+        .overlay(alignment: .topTrailing) {
             if let category {
-                Rectangle()
-                    .fill(category.color)
-                    .frame(width: EhSize.categoryBarWidth)
+                Text(language ?? "")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 26, minHeight: 18)
+                    .padding(.horizontal, 3)
+                    .background(category.color)
             }
-
-            CachedAsyncImage(url: URL(string: url ?? ""), showProgress: false) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                EhColor.thumbnailPlaceholder
-            }
-            .frame(width: size.width, height: size.height)
-            .clipped()
-            .overlay(alignment: .bottom) {
-                if let readProgress {
-                    GeometryReader { geo in
-                        Rectangle()
-                            .fill(EhColor.accentFill)
-                            .frame(
-                                width: geo.size.width * max(0, min(1, readProgress)),
-                                height: EhSize.progressBarHeight
-                            )
-                    }
-                    .frame(height: EhSize.progressBarHeight)
+        }
+        .overlay(alignment: .bottom) {
+            if let readProgress {
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(EhColor.accentFill)
+                        .frame(
+                            width: geo.size.width * max(0, min(1, readProgress)),
+                            height: EhSize.progressBarHeight
+                        )
                 }
+                .frame(height: EhSize.progressBarHeight)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
