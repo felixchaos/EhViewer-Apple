@@ -131,7 +131,6 @@ jobs:
       # ─── 3. 解析 SPM 依赖 ──────────────────────────────────
       - name: Resolve Swift packages
         run: |
-          cd "ehviewer apple"
           xcodebuild -resolvePackageDependencies \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
@@ -176,12 +175,11 @@ jobs:
       # ─── 5. Archive ─────────────────────────────────────────
       - name: Archive
         run: |
-          cd "ehviewer apple"
           xcodebuild archive \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -destination "generic/platform=iOS" \
-            -archivePath "../$ARCHIVE_PATH" \
+            -archivePath "$ARCHIVE_PATH" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm_cache" \
             CODE_SIGN_STYLE=Manual \
             PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
@@ -191,7 +189,7 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO
 
           echo "✅ Archive complete"
-          ls -la "../$ARCHIVE_PATH"
+          ls -la "$ARCHIVE_PATH"
 
       # ─── 6. Export IPA ──────────────────────────────────────
       - name: Export IPA

@@ -72,7 +72,7 @@
 
 ```bash
 git clone https://github.com/felixchaos/EhViewer-Apple.git
-cd "EhViewer-Apple/ehviewer apple"
+cd EhViewer-Apple
 open "ehviewer apple.xcodeproj"
 ```
 
