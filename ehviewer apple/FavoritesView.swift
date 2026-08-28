@@ -54,7 +54,7 @@ struct FavoritesView: View {
                     // "全部": 合并本地收藏 + 在线收藏 (对齐 Android: 全部包含所有来源)
                     allFavoritesContent(embedded: true)
                 } else {
-                    GalleryListView(mode: .favorites(slot: selectedSlot), selection: externalSelection!, searchKeyword: searchText.isEmpty ? nil : searchText)
+                    GalleryListView(mode: .favorites(slot: selectedSlot), selection: externalSelection!, searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
                         .id(selectedSlot)
                 }
             }
@@ -68,6 +68,18 @@ struct FavoritesView: View {
         } else {
             NavigationStack {
                 VStack(spacing: 0) {
+                    // 紧凑页头：标题与动作同一行。同步状态作为副标题挂在标题下方，
+                    // 它是对标题的注解，不该单独占一行。
+                    EhPageHeader(
+                        title: "收藏",
+                        subtitle: selectedSlot >= 0 ? syncStatusText : nil
+                    ) {
+                        EhSearchToggleButton(isActive: $isSearching)
+                        if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
+                            localBatchToolbar
+                        }
+                    }
+
                     slotPicker
                     Divider()
                     if selectedSlot == -2 {
@@ -76,31 +88,18 @@ struct FavoritesView: View {
                         // "全部": 合并本地收藏 + 在线收藏
                         allFavoritesContent(embedded: false)
                     } else {
-                        GalleryListView(mode: .favorites(slot: selectedSlot), searchKeyword: searchText.isEmpty ? nil : searchText)
+                        GalleryListView(mode: .favorites(slot: selectedSlot), searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
                             .id(selectedSlot)
                     }
                 }
-                .navigationTitle("收藏")
                 .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.large)
-                #endif
+                .ehCompactHeader()
                 // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
                 // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
                 .onChange(of: searchText) { _, _ in
                     if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
                 }
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        EhSearchToggleButton(isActive: $isSearching)
-                    }
-                    // 本地收藏批量操作工具栏 (对齐 Android FavoritesScene FAB)
-                    if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
-                        ToolbarItem(placement: .automatic) {
-                            localBatchToolbar
-                        }
-                    }
-                }
+                // 动作已并入页头，不再用系统工具栏
             }
         }
     }
@@ -309,9 +308,9 @@ struct FavoritesView: View {
 
             // 在线收藏
             if embedded, let sel = externalSelection {
-                GalleryListView(mode: .favorites(slot: -1), selection: sel, searchKeyword: searchText.isEmpty ? nil : searchText)
+                GalleryListView(mode: .favorites(slot: -1), selection: sel, searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
             } else {
-                GalleryListView(mode: .favorites(slot: -1), searchKeyword: searchText.isEmpty ? nil : searchText)
+                GalleryListView(mode: .favorites(slot: -1), searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
             }
         }
         .onAppear { loadLocalFavorites() }

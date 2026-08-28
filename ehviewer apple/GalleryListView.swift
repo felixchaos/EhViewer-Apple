@@ -61,6 +61,12 @@ struct GalleryListView: View {
     /// 收藏夹搜索关键字 (对齐 Android FavoritesScene 搜索)
     private var favSearchKeyword: String?
 
+    /// 嵌在别的页面里时隐藏自带的搜索栏。
+    ///
+    /// 收藏页自己已经有页头和搜索按钮，内嵌列表再画一条搜索栏就成了两个搜索入口，
+    /// 上下叠在一起。
+    private var hidesOwnSearchBar = false
+
     /// 顶部横向切页的选中项。非 nil 时在搜索栏下方渲染「首页/订阅/热门/排行」切页条。
     /// 只有作为浏览容器的根列表才传入；标签列表、搜索结果等推入的列表不显示切页条。
     private var browseSource: Binding<BrowseSource>?
@@ -104,17 +110,20 @@ struct GalleryListView: View {
     }
 
     /// 收藏搜索模式
-    init(mode: ListMode, searchKeyword: String?) {
+    init(mode: ListMode, searchKeyword: String?, hidesOwnSearchBar: Bool = false) {
         self.mode = mode
         self.favSearchKeyword = searchKeyword
         self.externalSelection = nil
+        self.hidesOwnSearchBar = hidesOwnSearchBar
     }
 
     /// 收藏搜索模式 (嵌入)
-    init(mode: ListMode, selection: Binding<GalleryInfo?>, searchKeyword: String?) {
+    init(mode: ListMode, selection: Binding<GalleryInfo?>, searchKeyword: String?,
+         hidesOwnSearchBar: Bool = false) {
         self.mode = mode
         self.externalSelection = selection
         self.favSearchKeyword = searchKeyword
+        self.hidesOwnSearchBar = hidesOwnSearchBar
     }
 
     /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
@@ -218,7 +227,9 @@ struct GalleryListView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 // 搜索栏 (全宽，置于内容顶部)
-                searchBarView
+                if !hidesOwnSearchBar {
+                    searchBarView
+                }
 
                 // 聚焦搜索时由面板接管搜索框以下的区域——此时列表内容与用户无关。
                 // 搜索框本身留在上面，否则用户看不到自己正在打什么。
@@ -238,6 +249,10 @@ struct GalleryListView: View {
                     Group {
                         if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                             errorView
+                        } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                            // 加载完但一条都没有：此前直接渲染空 List，屏幕一片白，
+                            // 用户分不清是没结果、没登录，还是界面坏了
+                            emptyStateView
                         } else {
                             // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
                             galleryList
@@ -957,6 +972,48 @@ struct GalleryListView: View {
     /// 当前错误是不是 IP 封禁 (issue #1: 以前这种情况只显示一片空白)
     private var isIPBanned: Bool {
         viewModel.errorMessage?.contains("临时封禁") == true
+    }
+
+    /// 空结果态。按当前模式给出对应的下一步，而不是一句笼统的「暂无内容」。
+    @ViewBuilder
+    private var emptyStateView: some View {
+        switch mode {
+        case .favorites:
+            EhStateView(kind: .empty(
+                symbol: "heart",
+                title: "这个收藏夹是空的",
+                message: "在画廊详情页点 ♡ 就能加进来；云收藏夹需要登录后才会同步"
+            ))
+        case .subscription:
+            EhStateView(kind: .empty(
+                symbol: "bell",
+                title: "订阅里还没有内容",
+                message: "在「我的 → 订阅标签」里加几个标签，符合的画廊会出现在这里"
+            ))
+        case .search, .tag:
+            EhStateView(
+                kind: .empty(
+                    symbol: "magnifyingglass",
+                    title: "没有符合条件的画廊",
+                    message: "换个关键词，或放宽高级搜索里的筛选条件"
+                ),
+                primaryAction: advancedSearch.isEnabled
+                    ? ("清除筛选条件", {
+                        advancedSearch = AdvancedSearchState()
+                        viewModel.searchWithAdvanced(advancedSearch)
+                    })
+                    : nil
+            )
+        default:
+            EhStateView(
+                kind: .empty(
+                    symbol: "tray",
+                    title: "这里暂时没有内容",
+                    message: "下拉可以重新加载"
+                ),
+                primaryAction: ("重新加载", { viewModel.refresh(mode: mode) })
+            )
+        }
     }
 
     private var errorView: some View {
