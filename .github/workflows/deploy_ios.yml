@@ -148,7 +148,7 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>ad-hoc</string>
+            <string>release-testing</string>
             <key>teamID</key>
             <string>HWZEUNLCY6</string>
             <key>compileBitcode</key>
@@ -187,8 +187,8 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             -allowProvisioningUpdates \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            | xcpretty || true
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
           echo "✅ Archive complete"
           ls -la "../$ARCHIVE_PATH"
@@ -199,8 +199,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist "$EXPORT_OPTIONS" \
-            -exportPath "$IPA_DIR" \
-            | xcpretty || true
+            -exportPath "$IPA_DIR"
 
           # 重命名为固定文件名
           IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" | head -1)
@@ -279,8 +278,37 @@ jobs:
           echo "✅ manifest.plist generated"
           cat "$IPA_DIR/manifest.plist"
 
-      # ─── 9. 部署到 Stellatrix 服务器 ────────────────────────
+      # ─── 9. 留存产物 ────────────────────────────────────────
+      # 先于部署执行：服务器凭据是可选的，但包必须无条件拿得到，
+      # 否则一次成功的构建会因为部署失败而白跑。
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EhViewer-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
+          path: |
+            build/ipa/EhViewer.ipa
+            build/ipa/manifest.plist
+          retention-days: 30
+          if-no-files-found: error
+
+      # ─── 10. 部署到 Stellatrix 服务器 (可选) ────────────────
+      # 未配置 DEPLOY_* 凭据时整体跳过，构建仍算成功。
+      # secrets 上下文在 step 级 if 里不可用，先探测一次落成 output。
+      - name: Check deploy credentials
+        id: deploycfg
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -n "$DEPLOY_HOST" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "服务器凭据已配置，将部署到分发服务器"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "未配置 DEPLOY_* 凭据，跳过服务器部署（IPA 已存为 workflow artifact）"
+          fi
+
       - name: Deploy to Stellatrix
+        if: steps.deploycfg.outputs.enabled == 'true'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -291,8 +319,9 @@ jobs:
           target: "/var/www/html/ios/"
           strip_components: 2
 
-      # ─── 10. 服务器后处理 ───────────────────────────────────
+      # ─── 11. 服务器后处理 (可选) ────────────────────────────
       - name: Post-deploy setup
+        if: steps.deploycfg.outputs.enabled == 'true'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -306,13 +335,13 @@ jobs:
             echo "✅ Files deployed and permissions set"
             ls -lh EhViewer.ipa manifest.plist
 
-      # ─── 11. 清理钥匙串 ────────────────────────────────────
+      # ─── 12. 清理钥匙串 ────────────────────────────────────
       - name: Cleanup keychain
         if: always()
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
-      # ─── 12. 构建摘要 ──────────────────────────────────────
+      # ─── 13. 构建摘要 ──────────────────────────────────────
       - name: Build summary
         if: success()
         run: |
