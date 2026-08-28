@@ -1225,96 +1225,79 @@ struct ImageReaderView: View {
     }
 
     private var topBar: some View {
-        HStack {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
+        // 两枚玻璃胶囊而非一条通栏工具栏：阅读器的主体是图，
+        // 通栏会在图上压出一条硬边，胶囊只占它需要的宽度。
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                // 设计稿这枚胶囊里还有画廊标题，但阅读器只拿到 gid/token，
+                // 标题需要额外查一次库；先留返回键，标题待后续补数据源
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(EhColor.label)
+                }
             }
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+            .ehGlass(cornerRadius: 19)
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            // 页码显示 (双页模式标注 spread) — 点击可跳页
-            Button {
-                jumpPageText = "\(vm.currentPage + 1)"
-                showJumpPageAlert = true
-            } label: {
-                Group {
-                    if vm.isDoublePageEnabled, let currentIdx = vm.currentSpreadIndex, currentIdx < vm.spreads.count {
-                        let spread = vm.spreads[currentIdx]
-                        if let sec = spread.secondaryPage {
-                            Text("\(spread.primaryPage + 1)-\(sec + 1) / \(vm.totalPages)")
-                        } else {
-                            Text("\(spread.primaryPage + 1) / \(vm.totalPages)")
+            HStack(spacing: 14) {
+                Button {
+                    vm.toggleDoublePage()
+                } label: {
+                    Image(systemName: "book.pages")
+                        .foregroundStyle(vm.isDoublePageEnabled ? EhColor.accent : EhColor.label)
+                }
+
+                Menu {
+                    ForEach(ReadingDirection.allCases, id: \.rawValue) { dir in
+                        Button {
+                            readingDirection = dir
+                            AppSettings.shared.readingDirection = dir.rawValue
+                        } label: {
+                            Label(dir.label, systemImage: dir.icon)
                         }
-                    } else {
-                        Text("\(displayedPage + 1) / \(vm.totalPages)")
                     }
+                } label: {
+                    Image(systemName: readingDirection.icon)
+                        .foregroundStyle(EhColor.label)
                 }
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
 
-            Spacer()
-
-            // 阅读方向
-            Menu {
-                ForEach(ReadingDirection.allCases, id: \.rawValue) { dir in
-                    Button {
-                        readingDirection = dir
-                        AppSettings.shared.readingDirection = dir.rawValue
-                    } label: {
-                        Label(dir.label, systemImage: dir.icon)
-                    }
+                Button { showSettings = true } label: {
+                    Image(systemName: "sun.max")
+                        .foregroundStyle(EhColor.label)
                 }
-            } label: {
-                Image(systemName: readingDirection.icon)
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
             }
-
-            // 设置
-            Button(action: { showSettings = true }) {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
+            .font(.system(size: 15, weight: .medium))
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+            .ehGlass(cornerRadius: 19)
         }
-        .padding(.horizontal)
+        .padding(.horizontal, EhSpacing.page)
         .padding(.top, 50)
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 8) {
-            // 阅读方向提示
-            if readingDirection != .topToBottom {
-                HStack(spacing: 6) {
-                    Text(readingDirection == .rightToLeft ? "← 从右到左" : "从左到右 →")
-                    if vm.isDoublePageEnabled {
-                        Text("· 双页")
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.6))
+    /// 底部页码文案 —— 双页时显示成 "12–13"
+    private var pageIndicatorText: String {
+        if vm.isDoublePageEnabled, let idx = vm.currentSpreadIndex, idx < vm.spreads.count {
+            let spread = vm.spreads[idx]
+            if let sec = spread.secondaryPage {
+                return "\(spread.primaryPage + 1)–\(sec + 1)"
             }
+            return "\(spread.primaryPage + 1)"
+        }
+        return "\(displayedPage + 1)"
+    }
 
-            HStack(spacing: 16) {
-                Button(action: goToPreviousPage) {
-                    Image(systemName: "chevron.left.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(.white.opacity(vm.currentPage > 0 ? 1 : 0.3))
-                }
-                .disabled(vm.currentPage == 0)
+    private var bottomBar: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: EhSpacing.row) {
+                Text(pageIndicatorText)
+                    .font(EhFont.mono(13, weight: .semibold))
+                    .foregroundStyle(EhColor.label)
+                    .frame(minWidth: 44, alignment: .leading)
 
                 // 拖动期间只更新本地 state，不碰 vm.currentPage。
                 // currentPage 是 @Observable，每动一像素写一次会让整个阅读器
@@ -1343,34 +1326,53 @@ struct ImageReaderView: View {
                     if vm.isDoublePageEnabled { vm.syncSpreadIndex() }
                     Task { await vm.onPageChange(target) }
                 }
-                .tint(.white)
+                .tint(EhColor.accentFill)
 
-                Button(action: goToNextPage) {
-                    Image(systemName: "chevron.right.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(.white.opacity(vm.currentPage < vm.totalPages - 1 ? 1 : 0.3))
-                }
-                .disabled(vm.currentPage == vm.totalPages - 1)
+                Text("\(vm.totalPages)")
+                    .font(EhFont.mono(13))
+                    .foregroundStyle(EhColor.tertiaryLabel)
             }
-            .padding(.horizontal)
 
-            // 自动翻页
-            HStack {
-                Button(action: toggleAutoPage) {
-                    HStack {
-                        Image(systemName: autoPageEnabled ? "pause.fill" : "play.fill")
-                        Text(autoPageEnabled ? "暂停" : "自动翻页")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
+            // 四个模式块：双页 / 方向 / 自动翻页 / 护眼。
+            // 这四项在阅读中随时可能要改，此前分散在设置面板与顶栏菜单里，
+            // 每改一次都要中断阅读。
+            HStack(spacing: 6) {
+                modeBlock("双页", isOn: vm.isDoublePageEnabled) {
+                    vm.toggleDoublePage()
+                }
+                modeBlock(readingDirection == .rightToLeft ? "右→左" : "左→右",
+                          isOn: readingDirection == .rightToLeft) {
+                    readingDirection = readingDirection == .rightToLeft ? .leftToRight : .rightToLeft
+                    AppSettings.shared.readingDirection = readingDirection.rawValue
+                }
+                modeBlock("自动", isOn: autoPageEnabled) { toggleAutoPage() }
+                modeBlock("护眼", isOn: AppSettings.shared.colorFilter) {
+                    AppSettings.shared.colorFilter.toggle()
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
+        .padding(EhSpacing.page)
+        .ehGlass(cornerRadius: EhRadius.card)
+        .padding(.horizontal, EhSpacing.page)
+        .padding(.bottom, 8)
+    }
+
+    private func modeBlock(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isOn ? EhColor.onAccentFill : EhColor.secondaryLabel)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: EhRadius.smallControl, style: .continuous)
+                        .fill(isOn ? EhColor.accentFill : EhColor.fill)
+                }
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - HUD Overlay

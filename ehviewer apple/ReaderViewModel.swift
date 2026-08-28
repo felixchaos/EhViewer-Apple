@@ -298,10 +298,24 @@ class ReaderViewModel {
 
     // MARK: - Double Page Logic
 
+    /// 用户在阅读器底栏手动切换过双页时记在这里。
+    /// 没有它的话，旋转屏幕触发的 updateLayout 会把手动选择直接覆盖掉。
+    var userDoublePageOverride: Bool?
+
+    /// 手动切换双页 —— 记录覆盖并立即重算
+    func toggleDoublePage() {
+        let next = !isDoublePageEnabled
+        userDoublePageOverride = next
+        isDoublePageEnabled = next
+        computeSpreads()
+        syncSpreadIndex()
+    }
+
     /// 根据屏幕尺寸更新双页模式 — 仅横屏 + 宽度 > 700pt 时启用
     /// 修复: iPad 竖屏不再触发双页模式
     func updateLayout(screenWidth: CGFloat, screenHeight: CGFloat) {
-        let shouldDouble = screenWidth > screenHeight && screenWidth > 700
+        let shouldDouble = userDoublePageOverride
+            ?? (screenWidth > screenHeight && screenWidth > 700)
         guard shouldDouble != isDoublePageEnabled else { return }
         isDoublePageEnabled = shouldDouble
         computeSpreads()
