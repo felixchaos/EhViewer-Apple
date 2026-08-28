@@ -124,6 +124,23 @@ public final class EhTagDatabase: @unchecked Sendable {
     }
 
     /// namespace 转前缀
+    /// 这个键是不是缩写形式（`a:xxx` / `f:xxx`）。
+    /// 缩写只保留在翻译查询表里，不进建议索引。
+    static func isAbbreviatedKey(_ key: String) -> Bool {
+        guard let colon = key.firstIndex(of: ":") else { return false }
+        let prefix = String(key[key.startIndex...colon])   // 含冒号
+        return prefixToNamespace[prefix] != nil
+    }
+
+    /// 把用户打的缩写前缀换成全称，让 `f:machine` 也能命中 `female:machine`。
+    /// 建议索引里只有全称，不做这层转换的话按缩写搜索会一条都搜不到。
+    static func normalizeQueryPrefix(_ query: String) -> String {
+        guard let colon = query.firstIndex(of: ":") else { return query }
+        let prefix = String(query[query.startIndex...colon])
+        guard let namespace = prefixToNamespace[prefix] else { return query }
+        return namespace + ":" + query[query.index(after: colon)...]
+    }
+
     public static func namespaceToPrefix(_ namespace: String) -> String? {
         if let prefix = namespaceToPrefix[namespace] {
             return prefix
@@ -152,7 +169,7 @@ public final class EhTagDatabase: @unchecked Sendable {
         queue.sync {
             guard _isLoaded, !keyword.isEmpty else { return [] }
 
-            let lowered = keyword.lowercased()
+            let lowered = Self.normalizeQueryPrefix(keyword.lowercased())
             var results: [(chinese: String, english: String)] = []
             var seen = Set<String>()
 
@@ -441,7 +458,16 @@ public final class EhTagDatabase: @unchecked Sendable {
         _translations = newTranslations
 
         // 构建预排序索引 (用于二分查找前缀匹配, V-03)
-        let sorted = newTranslations.sorted { $0.key < $1.key }
+        //
+        // 只收全称形式（artist: / female: …），不收缩写（a: / f: …）。
+        // 两种形式在 _translations 里都要留着——按任一形式查翻译都得能命中——
+        // 但建议列表里两份是同一个标签，同时出现就是「a:machine head」和
+        // 「artist:machine head」并排，用户看到的是重复项。
+        // Android 在解析阶段就把缩写规范成全称（EhTagDatabase.parseTag 里的
+        // PREFIX_TO_NAMESPACE 查表），标签表中只有一种形式。
+        let sorted = newTranslations
+            .filter { !Self.isAbbreviatedKey($0.key) }
+            .sorted { $0.key < $1.key }
         _sortedKeys = sorted.map { $0.key }
         _sortedValues = sorted.map { $0.value }
         _sortedLcValues = sorted.map { $0.value.lowercased() }

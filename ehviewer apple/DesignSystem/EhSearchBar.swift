@@ -18,6 +18,7 @@
 //
 
 import SwiftUI
+import EhSettings
 
 #if canImport(UIKit)
 import UIKit
@@ -206,13 +207,20 @@ struct EhTokenSearchField: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    /// token 上显示去掉命名空间与结尾锚点的短名，完整值仍留在 representedObject 里。
-    /// `female:"glasses$"` 在一枚 token 上显示不完，而用户认的是 "glasses"。
+    /// token 上的显示名。完整值仍留在 representedObject 里。
+    ///
+    /// 优先用中文翻译——那是用户在建议列表里认出来并点下去的那个词。
+    /// 没有翻译时保留命名空间：此前剥掉了命名空间，`f:machine` 与手打的
+    /// `machine` 都显示成「machine」，两枚 token 长得一模一样，
+    /// 看起来就像同一个标签加了两遍。
     private static func displayName(for tag: String) -> String {
-        var t = tag
-        if let colon = t.firstIndex(of: ":") { t = String(t[t.index(after: colon)...]) }
-        t = t.trimmingCharacters(in: CharacterSet(charactersIn: "\"$"))
-        return t
+        let normalized = tag.trimmingCharacters(in: CharacterSet(charactersIn: " "))
+        let bare = normalized.replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "$", with: "")
+        if let zh = EhTagDatabase.shared.getTranslation(bare), zh != bare {
+            return zh
+        }
+        return bare
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {

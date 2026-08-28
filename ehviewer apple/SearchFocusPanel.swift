@@ -25,6 +25,11 @@ struct SearchFocusPanel: View {
     let suggestions: [GalleryListViewModel.TagSuggestionItem]
     let history: [String]
 
+    /// 选中一条标签建议。由调用方负责「加 token + 清掉正在打的文字」——
+    /// 只加 token 不清文字的话，提交时那段文字会再变成一个 token，
+    /// 于是同一个标签出现两遍（f:machine 的 token 显示成「machine」，
+    /// 打的「machine」又是一个）。
+    var onPickSuggestion: (String) -> Void
     var onClearHistory: () -> Void
     var onPickHistory: (String) -> Void
     var onOpenTagSelector: () -> Void
@@ -129,7 +134,7 @@ struct SearchFocusPanel: View {
             if already {
                 tokens.removeAll { $0 == item.english }
             } else {
-                tokens.append(item.english)
+                onPickSuggestion(item.english)
             }
             Haptics.tap()
         } label: {

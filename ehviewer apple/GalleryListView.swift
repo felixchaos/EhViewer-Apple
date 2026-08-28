@@ -711,6 +711,12 @@ struct GalleryListView: View {
                 tokens: $searchTokens,
                 suggestions: viewModel.suggestions,
                 history: viewModel.searchHistory,
+                onPickSuggestion: { tag in
+                    // 建议取代了正在打的那段文字：清掉它，否则提交时它会再变成
+                    // 一个 token，同一个标签就出现两遍
+                    searchFieldText = ""
+                    if !searchTokens.contains(tag) { searchTokens.append(tag) }
+                },
                 onClearHistory: { viewModel.clearSearchHistory() },
                 onPickHistory: { term in
                     // 历史条目本身就是一条完整查询，直接提交，
