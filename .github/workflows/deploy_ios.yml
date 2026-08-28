@@ -56,39 +56,49 @@ jobs:
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
         run: |
           MISSING=""
           [ -z "$BUILD_CERTIFICATE_BASE64" ] && MISSING="$MISSING BUILD_CERTIFICATE_BASE64"
           [ -z "$P12_PASSWORD" ] && MISSING="$MISSING P12_PASSWORD"
-          [ -z "$BUILD_PROVISION_PROFILE_BASE64" ] && MISSING="$MISSING BUILD_PROVISION_PROFILE_BASE64"
           [ -z "$KEYCHAIN_PASSWORD" ] && MISSING="$MISSING KEYCHAIN_PASSWORD"
+          [ -z "$ASC_KEY_ID" ] && MISSING="$MISSING ASC_KEY_ID"
+          [ -z "$ASC_ISSUER_ID" ] && MISSING="$MISSING ASC_ISSUER_ID"
+          [ -z "$ASC_KEY_P8_BASE64" ] && MISSING="$MISSING ASC_KEY_P8_BASE64"
           if [ -n "$MISSING" ]; then
             echo "::error::缺少签名 Secret:$MISSING"
             echo "在 Settings → Secrets and variables → Actions 中配置后重新运行。"
-            echo "  BUILD_CERTIFICATE_BASE64       — 导出的 .p12 证书，base64"
-            echo "  P12_PASSWORD                   — 导出 .p12 时设置的密码"
-            echo "  BUILD_PROVISION_PROFILE_BASE64 — Ad-Hoc .mobileprovision，base64"
-            echo "  KEYCHAIN_PASSWORD              — 任意字符串，仅用于 CI 临时钥匙串"
+            echo "  BUILD_CERTIFICATE_BASE64 — Apple Distribution 身份导出的 .p12（须含私钥），base64"
+            echo "  P12_PASSWORD             — 导出 .p12 时设置的密码"
+            echo "  KEYCHAIN_PASSWORD        — 任意字符串，仅用于 CI 临时钥匙串"
+            echo "  ASC_KEY_ID               — App Store Connect API 密钥 ID"
+            echo "  ASC_ISSUER_ID            — 同一页面上的 Issuer ID"
+            echo "  ASC_KEY_P8_BASE64        — 下载的 AuthKey_xxx.p8，base64"
             exit 1
           fi
           echo "✅ 签名凭据齐全"
 
-      # ─── 2. 证书 & 描述文件注入 ────────────────────────────
-      - name: Import certificate & provisioning profile
+      # ─── 2. 证书 & API 密钥注入 ────────────────────────────
+      # 签名走自动模式：证书仍需本地导入（xcodebuild 不会替你造私钥），
+      # 描述文件则由 App Store Connect API 按需创建/更新。
+      # 项目含 widget 扩展，主 App 与扩展各需一份描述文件，手工维护两份
+      # 且每加一台设备就要全部重签，不如让 Xcode 自己管。
+      - name: Import certificate & API key
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
         run: |
-          # 解码证书和描述文件
           CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          ASC_KEY_PATH=$RUNNER_TEMP/AuthKey.p8
 
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
-          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          echo -n "$ASC_KEY_P8_BASE64" | base64 --decode -o "$ASC_KEY_PATH"
+          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
 
           # 创建临时钥匙串
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
@@ -119,14 +129,7 @@ jobs:
             -S apple-tool:,apple: \
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
 
-          # 安装描述文件
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< \
-            "$(security cms -D -i "$PP_PATH")")
-          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PP_UUID.mobileprovision"
-
-          echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
-          echo "✅ Certificate imported, provisioning profile installed: $PP_UUID"
+          echo "✅ Certificate imported, API key installed"
 
       # ─── 3. 解析 SPM 依赖 ──────────────────────────────────
       - name: Resolve Swift packages
@@ -157,23 +160,19 @@ jobs:
             <key>thinning</key>
             <string>&lt;none&gt;</string>
             <key>signingStyle</key>
-            <string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>Stellatrix.ehviewer-apple</key>
-              <string>${PP_UUID}</string>
-            </dict>
+            <string>automatic</string>
           </dict>
           </plist>
           PLIST
 
-          # 替换 PP_UUID 占位符
-          sed -i '' "s/\${PP_UUID}/$PP_UUID/" "$EXPORT_OPTIONS"
           echo "✅ ExportOptions.plist generated"
           cat "$EXPORT_OPTIONS"
 
       # ─── 5. Archive ─────────────────────────────────────────
       - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           xcodebuild archive \
             -project "$PROJECT" \
@@ -181,11 +180,11 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm_cache" \
-            CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
             -allowProvisioningUpdates \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
             COMPILER_INDEX_STORE_ENABLE=NO
 
           echo "✅ Archive complete"
@@ -193,11 +192,18 @@ jobs:
 
       # ─── 6. Export IPA ──────────────────────────────────────
       - name: Export IPA
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist "$EXPORT_OPTIONS" \
-            -exportPath "$IPA_DIR"
+            -exportPath "$IPA_DIR" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
           # 重命名为固定文件名
           IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" | head -1)
