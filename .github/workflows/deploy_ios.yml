@@ -1,14 +1,16 @@
 # ────────────────────────────────────────────────────────────
 #  EhViewer Apple — Ad-Hoc 构建 & 部署流水线
-#  触发: main 分支 push / 手动 dispatch
+#  触发: 打版本 tag / 手动 dispatch
 #  目标: RackNerd (Stellatrix.icu) → itms-services 安装
 # ────────────────────────────────────────────────────────────
 
 name: Build & Deploy iOS (Ad-Hoc)
 
+# 这是发布流水线，不是持续集成——每次 push 都签一个包既无必要，
+# 失败时还会按 push 频率发失败邮件。日常校验交给 build.yml。
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       build_note:
