@@ -46,9 +46,11 @@ struct HistoryView: View {
         Group {
                 if filteredRecords.isEmpty {
                     if searchText.isEmpty {
-                        ContentUnavailableView("暂无历史记录",
-                            systemImage: "clock",
-                            description: Text("浏览过的画廊会显示在这里"))
+                        EhStateView(kind: .empty(
+                            symbol: "clock",
+                            title: "还没有阅读记录",
+                            message: "浏览过的画廊会出现在这里"
+                        ))
                     } else {
                         ContentUnavailableView.search(text: searchText)
                     }

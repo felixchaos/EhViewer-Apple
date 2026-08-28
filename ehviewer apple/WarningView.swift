@@ -19,14 +19,16 @@ struct WarningView: View {
             
             // 警告图标
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.yellow)
-                .padding(.bottom, 24)
-            
+                .font(.system(size: 52))
+                // 用红而非黄：这是一道需要用户如实回答的门槛，
+                // 黄色读起来像「注意一下」，红色才是「请确认」
+                .foregroundStyle(EhColor.danger)
+                .padding(.bottom, 20)
+
             // 标题
             Text("内容警告")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(EhColor.label)
                 .padding(.bottom, 16)
             
             // 警告内容
@@ -59,34 +61,23 @@ struct WarningView: View {
             
             // 按钮区域
             VStack(spacing: 12) {
-                Button(action: onAccept) {
-                    Text("我已年满 18 周岁，同意继续")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-                
-                Button(action: onReject) {
-                    Text("离开")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                }
-                .buttonStyle(.bordered)
-                .tint(.secondary)
+                Button("我已满 18 岁，继续", action: onAccept)
+                    .buttonStyle(EhFilledButtonStyle(height: EhSize.actionButtonHeight))
+
+                Button("退出", action: onReject)
+                    .buttonStyle(EhTintedButtonStyle(height: EhSize.actionButtonHeight))
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(EhColor.background)
     }
-    
+
     private func warningText(_ text: String) -> some View {
         Text(text)
-            .font(.body)
-            .foregroundStyle(.primary)
+            .font(EhFont.body)
+            .foregroundStyle(EhColor.label)
     }
     
     private func bulletPoint(_ text: String) -> some View {

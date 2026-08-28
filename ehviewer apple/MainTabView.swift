@@ -264,6 +264,10 @@ struct MainTabView: View {
             HistoryView()
         case .settings:
             SettingsView()
+        case .profile:
+            // macOS 侧边栏平铺全部入口，「我的」的聚合价值不存在；
+            // 账号与配额在设置页里已有位置
+            ProfileView()
         case .more:
             // macOS 不使用 "更多" 标签，不应出现
             EmptyView()

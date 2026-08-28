@@ -184,7 +184,11 @@ struct FavoritesView: View {
                 ProgressView("加载中...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if localFavorites.isEmpty {
-                ContentUnavailableView("暂无本地收藏", systemImage: "heart.slash", description: Text("在画廊详情页点击 ♡ 添加本地收藏"))
+                EhStateView(kind: .empty(
+                    symbol: "heart.slash",
+                    title: "还没有本地收藏",
+                    message: "在画廊详情页点 ♡ 即可加入本地收藏，不需要登录"
+                ))
             } else {
                 List {
                     ForEach(localFavorites, id: \.gid) { record in

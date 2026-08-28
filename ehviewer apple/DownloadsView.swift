@@ -81,11 +81,11 @@ struct DownloadsView: View {
 
                 // 内容
                 if filteredTasks.isEmpty {
-                    ContentUnavailableView(
-                        emptyTitle,
-                        systemImage: "arrow.down.circle",
-                        description: Text(emptyDescription)
-                    )
+                    EhStateView(kind: .empty(
+                        symbol: "arrow.down.circle",
+                        title: emptyTitle,
+                        message: emptyDescription
+                    ))
                     .frame(maxHeight: .infinity)
                 } else {
                     downloadList

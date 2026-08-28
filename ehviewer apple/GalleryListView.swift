@@ -989,10 +989,11 @@ struct GalleryListView: View {
     private var errorView: some View {
         VStack(spacing: 16) {
             Image(systemName: isIPBanned ? "hand.raised.slash" : "wifi.exclamationmark")
-                .font(.system(size: 48))
-                .foregroundStyle(isIPBanned ? .orange : .secondary)
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(isIPBanned ? EhColor.warning : EhColor.danger)
             Text(viewModel.errorMessage ?? "加载失败")
-                .foregroundStyle(.secondary)
+                .font(EhFont.caption)
+                .foregroundStyle(EhColor.secondaryLabel)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
