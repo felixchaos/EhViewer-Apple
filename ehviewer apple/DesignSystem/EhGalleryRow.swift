@@ -16,6 +16,7 @@
 
 import SwiftUI
 import EhModels
+import EhSettings
 
 /// 非泛型：配件用 AnyView 承载。
 ///
@@ -43,6 +44,9 @@ struct EhGalleryRow: View {
     var language: String? = nil
     var subtitle: String? = nil          // 上传者 / 相对时间 / 收藏夹备注
     var meta: [MetaItem] = []
+    /// 标签 chip。列表接口本来就带 simpleTags，此前一直没用上——
+    /// 卡片里那块空间给了分类名，而分类名现在已经在封面角标上。
+    var tags: [String] = []
     var rating: Float? = nil             // nil = 不显示评分行
     var trailingText: String? = nil      // 发布时间，跟在评分条右侧
     var readProgress: Double? = nil      // 封面底部的阅读进度
@@ -53,6 +57,15 @@ struct EhGalleryRow: View {
 
     /// 行右侧的按钮（续读、暂停/重试…）
     var accessory: AnyView? = nil
+
+    /// 标签 chip 上的文字：优先中文翻译，没有就去掉命名空间显示裸标签。
+    /// 命名空间在 chip 里是噪音——`artist:onion knight kk` 占掉半行，
+    /// 而用户扫的是「onion knight kk」这几个字。
+    static func tagLabel(_ tag: String) -> String {
+        if let zh = EhTagDatabase.shared.getTranslation(tag), zh != tag { return zh }
+        guard let colon = tag.firstIndex(of: ":") else { return tag }
+        return String(tag[tag.index(after: colon)...])
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: EhSpacing.row) {
@@ -82,6 +95,27 @@ struct EhGalleryRow: View {
                 // 把元信息压到与封面底边齐平：各行的元信息因此横向成列，
                 // 扫视时视线不必逐行重新定位
                 Spacer(minLength: 6)
+
+                if !tags.isEmpty {
+                    // 只铺一行，多的截断——列表行的价值是快速判断「要不要点进去」，
+                    // 铺满标签会把标题挤成配角
+                    HStack(spacing: 4) {
+                        ForEach(tags.prefix(4), id: \.self) { tag in
+                            Text(Self.tagLabel(tag))
+                                .font(.system(size: 10))
+                                .foregroundStyle(EhColor.secondaryLabel)
+                                .lineLimit(1)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(EhColor.fill)
+                                }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.bottom, 4)
+                }
 
                 if !meta.isEmpty {
                     HStack(spacing: EhSpacing.meta) {

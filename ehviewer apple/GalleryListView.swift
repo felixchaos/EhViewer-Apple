@@ -1151,9 +1151,11 @@ struct GalleryRow: View {
     /// 元信息行：分类 / 页数 / 收藏 / 阅读进度。
     /// 语言不在这里——它已经叠在封面的分类角标上（与 Android 一致）。
     private var metaItems: [EhGalleryRow.MetaItem] {
-        var items: [EhGalleryRow.MetaItem] = [
-            .init(gallery.category.name, color: gallery.category.labelColor, isMonospaced: false)
-        ]
+        // 分类名已经在封面角标上，这里不再重复
+        var items: [EhGalleryRow.MetaItem] = []
+        if let lang = gallery.simpleLanguage, !lang.isEmpty {
+            items.append(.init(lang))
+        }
         if showPages {
             items.append(.init("\(gallery.pages)P"))
         }
@@ -1174,6 +1176,7 @@ struct GalleryRow: View {
             language: gallery.simpleLanguage,
             subtitle: gallery.uploader,
             meta: metaItems,
+            tags: gallery.simpleTags ?? [],
             rating: showRating ? gallery.rating : nil,
             trailingText: gallery.posted,
             thumbnailSize: thumbSize

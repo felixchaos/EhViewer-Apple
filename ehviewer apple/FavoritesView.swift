@@ -324,9 +324,8 @@ struct FavoritesView: View {
             title: record.title,
             category: EhCategory(rawValue: record.category),
             subtitle: record.uploader,
-            meta: [.init(EhCategory(rawValue: record.category).name,
-                         color: EhCategory(rawValue: record.category).labelColor,
-                         isMonospaced: false)],
+            // 分类名在封面角标上，不再占元信息行
+            meta: [],
             rating: record.rating > 0 ? record.rating : nil,
             trailingText: record.posted
         )

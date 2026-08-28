@@ -43,12 +43,22 @@ struct EhCoverThumbnail: View {
         .clipped()
         .overlay(alignment: .topTrailing) {
             if let category {
-                Text(language ?? "")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 26, minHeight: 18)
-                    .padding(.horizontal, 3)
-                    .background(category.color)
+                // 角标带上分类名本身。此前只有一块纯色 + 语言代码，
+                // 而多数画廊没有语言字段，角标就成了一块无字的色块；
+                // 分类名反而挤在卡片内部，占掉本该留给标签的位置。
+                HStack(spacing: 3) {
+                    Text(category.name)
+                    if let language, !language.isEmpty {
+                        Text("·").opacity(0.7)
+                        Text(language)
+                    }
+                }
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(category.color)
             }
         }
         .overlay(alignment: .bottom) {

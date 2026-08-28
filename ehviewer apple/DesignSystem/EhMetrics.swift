@@ -99,10 +99,13 @@ enum EhSize {
     /// 预览网格列数与间距
     static let previewColumns = 3
     static let previewGap: CGFloat = 10
-    /// 历史行缩略图
-    static let historyThumbnail = CGSize(width: 52, height: 72)
-    /// 下载行缩略图
-    static let downloadThumbnail = CGSize(width: 56, height: 78)
+    /// 历史行 / 下载行的缩略图。
+    ///
+    /// 与列表缩略图同尺寸。设计稿给的是 52×72 与 56×78，但三处并排看时
+    /// 三种大小很扎眼——同一个东西在不同页面长得不一样，用户会以为是两类内容。
+    /// 统一到 listThumbnail，行高也因此一致。
+    static let historyThumbnail = listThumbnail
+    static let downloadThumbnail = listThumbnail
     /// 「继续阅读」条的小封面
     static let resumeThumbnail = CGSize(width: 40, height: 56)
 
