@@ -13,6 +13,8 @@ import EhSettings
 struct HistoryView: View {
     @State private var vm = HistoryViewModel()
     @State private var searchText = ""
+    /// 点续读钮时直接开阅读器，不经详情页
+    @State private var resumeItem: ReaderLaunchItem?
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
@@ -90,27 +92,57 @@ struct HistoryView: View {
     private var historyList: some View {
         List {
             ForEach(filteredRecords, id: \.gid) { record in
-                NavigationLink(value: record.toGalleryInfo()) {
-                    HStack(spacing: 12) {
-                        CachedAsyncImage(url: URL(string: record.thumb ?? "")) { img in
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        } placeholder: {
-                            Color(.tertiarySystemFill)
-                        }
-                        .frame(width: 52, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                // 零透明链接垫底，避免 List 给 NavigationLink 自动补 disclosure 箭头
+                ZStack {
+                    NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
+                        .opacity(0)
+
+                    HStack(spacing: EhSpacing.row) {
+                        // 封面底部的 2px 进度条把「读到哪了」直接画在缩略图上，
+                        // 不必再占一行文字
+                        EhCoverThumbnail(
+                            url: record.thumb,
+                            size: EhSize.historyThumbnail,
+                            cornerRadius: EhRadius.smallThumbnail,
+                            readProgress: readProgress(for: record)
+                        )
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(record.titleJpn ?? record.title)
-                                .font(.subheadline)
+                                .font(EhFont.body)
+                                .foregroundStyle(EhColor.label)
                                 .lineLimit(2)
 
                             Text(formattedTime(record.date))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(EhFont.meta)
+                                .foregroundStyle(EhColor.secondaryLabel)
                         }
+
+                        Spacer(minLength: 8)
+
+                        // 续读钮：历史页最主要的动作就是接着上次读，
+                        // 让它有个独立的落点而不是只能整行点进详情
+                        Button {
+                            Haptics.tap()
+                            resumeItem = ReaderLaunchItem(
+                                gid: record.gid, token: record.token,
+                                pages: record.pages, previewSet: nil,
+                                initialPage: UserDefaults.standard.object(
+                                    forKey: "reading_progress_\(record.gid)"
+                                ) as? Int
+                            )
+                        } label: {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(EhColor.accent)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(EhColor.fill))
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 4)
                 }
+                .overlay(alignment: .bottom) { EhHairline() }
                 .contextMenu {
                     // 对齐 Android HistoryScene 长按菜单
                     Button {
@@ -139,6 +171,23 @@ struct HistoryView: View {
             }
         }
         .listStyle(.plain)
+        #if os(iOS)
+        .fullScreenCover(item: $resumeItem) { item in
+            ImageReaderView(
+                gid: item.gid, token: item.token,
+                pages: item.pages, initialPage: item.initialPage
+            )
+        }
+        #endif
+    }
+
+    /// 0...1 的阅读进度；没读过或页数未知则不显示
+    private func readProgress(for record: HistoryRecord) -> Double? {
+        guard record.pages > 0,
+              let index = UserDefaults.standard.object(
+                forKey: "reading_progress_\(record.gid)"
+              ) as? Int, index > 0 else { return nil }
+        return Double(index + 1) / Double(record.pages)
     }
 
     private func formattedTime(_ date: Date) -> String {

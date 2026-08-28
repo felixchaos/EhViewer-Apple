@@ -920,81 +920,111 @@ struct DownloadTaskRow: View {
     let onRequestDelete: () -> Void   // 请求删除 (由父视图处理确认)
     let onShare: () -> Void           // 打包为 zip 并分享 (issue #2)
 
+    /// 已读比例，画在封面底部
+    private var readProgressFraction: Double? {
+        guard let page = readingPage, task.gallery.pages > 0 else { return nil }
+        return Double(page + 1) / Double(task.gallery.pages)
+    }
+
+    /// 状态色：完成绿 / 下载中琥珀 / 失败红 / 其余次级
+    private var statusColor: Color {
+        switch task.state {
+        case DownloadManager.stateFinish:   return EhColor.success
+        case DownloadManager.stateDownload: return EhColor.accent
+        case DownloadManager.stateFailed:   return EhColor.danger
+        default:                            return EhColor.secondaryLabel
+        }
+    }
+
+    private func circleActionButton(symbol: String, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(EhColor.accent)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(EhColor.fill))
+        }
+        .buttonStyle(.plain)
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
-            // 封面
-            CachedAsyncImage(url: URL(string: task.gallery.thumb ?? "")) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color(.tertiarySystemFill)
-            }
-            .frame(width: 52, height: 72)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        HStack(spacing: EhSpacing.row) {
+            EhCoverThumbnail(
+                url: task.gallery.thumb,
+                size: EhSize.downloadThumbnail,
+                cornerRadius: EhRadius.smallThumbnail,
+                readProgress: readProgressFraction
+            )
 
             VStack(alignment: .leading, spacing: 5) {
-                // 标题
                 Text(task.gallery.bestTitle)
-                    .font(.subheadline)
+                    .font(EhFont.body)
+                    .foregroundStyle(EhColor.label)
                     .lineLimit(2)
 
-                // 状态 + 页数 + 存储
-                HStack(spacing: 6) {
-                    statusIcon
+                // 状态用颜色表达，不再依赖图标 + 灰字：
+                // 「失败」和「已完成」在一列灰字里几乎分辨不出来
+                HStack(spacing: EhSpacing.meta) {
                     Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(EhFont.mono(11, weight: .medium))
+                        .foregroundStyle(statusColor)
 
-                    Spacer()
+                    Text("\(task.gallery.pages) 页")
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(EhColor.secondaryLabel)
 
-                    // 占用空间
                     if let size = storageSize, size > 0 {
                         Text(DownloadsView.formatFileSize(size))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .monospacedDigit()
+                            .font(EhFont.mono(11))
+                            .foregroundStyle(EhColor.tertiaryLabel)
                     }
 
-                    // 阅读进度 (已完成/暂停/失败 状态显示) — 与总页数去重
-                    if let page = readingPage, task.gallery.pages > 0,
-                       task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
-                        HStack(spacing: 4) {
-                            ProgressView(value: Double(page + 1), total: Double(task.gallery.pages))
-                                .tint(.green)
-                                .frame(maxWidth: 60)
-                            Text("\(page + 1)/\(task.gallery.pages) 页")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                    } else if task.state != DownloadManager.stateDownload && task.state != DownloadManager.stateWait {
-                        // 无阅读进度时才单独显示总页数
-                        Text("\(task.gallery.pages) 页")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Spacer(minLength: 0)
                 }
 
-                // 下载进度条 + 页数详情 (下载中/等待中)
+                // 下载中才画进度条：已完成的行画一条 100% 的条没有信息量，
+                // 只会让列表看起来更吵
                 if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                    VStack(spacing: 2) {
-                        ProgressView(value: downloadProgress)
-                            .tint(.accentColor)
-                        HStack {
-                            Text("\(task.downloadedPages)/\(task.gallery.pages)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if task.speed > 0 {
-                                Text(Self.formatSpeed(task.speed))
-                                    .font(.caption2)
-                                    .foregroundStyle(.blue)
+                    HStack(spacing: EhSpacing.meta) {
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(EhColor.fill)
+                            GeometryReader { geo in
+                                Capsule()
+                                    .fill(EhColor.accentFill)
+                                    .frame(width: geo.size.width * max(0, min(1, downloadProgress)))
                             }
-                            Text("\(Int(downloadProgress * 100))%")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                         }
+                        .frame(height: 3)
+
+                        Text("\(Int(downloadProgress * 100))%")
+                            .font(EhFont.mono(11, weight: .medium))
+                            .foregroundStyle(EhColor.accent)
+                            .frame(width: 34, alignment: .trailing)
+                    }
+
+                    HStack(spacing: EhSpacing.meta) {
+                        Text("\(task.downloadedPages)/\(task.gallery.pages)")
+                            .font(EhFont.mono(11))
+                            .foregroundStyle(EhColor.tertiaryLabel)
+                        if task.speed > 0 {
+                            Text(Self.formatSpeed(task.speed))
+                                .font(EhFont.mono(11))
+                                .foregroundStyle(EhColor.info)
+                        }
+                        Spacer(minLength: 0)
                     }
                 }
+            }
+
+            // 圆形动作钮：暂停/继续是这一行最常按的东西，
+            // 此前只能长按出上下文菜单
+            if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
+                circleActionButton(symbol: "pause.fill", action: onPause)
+            } else if task.state != DownloadManager.stateFinish {
+                circleActionButton(symbol: "arrow.clockwise", action: onResume)
             }
         }
         .contentShape(Rectangle())
