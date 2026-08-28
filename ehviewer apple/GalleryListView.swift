@@ -190,6 +190,10 @@ struct GalleryListView: View {
             // 异步执行 ViewModel 初始化 — 避免 .onAppear 同步变更 @Observable 导致 NavigationStack 多次更新
             viewModel.favSearchKeyword = favSearchKeyword
             viewModel.loadSearchHistory()
+            // 已下载标记要有数据才画得出来
+            if !DownloadStatusCache.shared.isLoaded {
+                await DownloadStatusCache.shared.reload()
+            }
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
             }
@@ -298,6 +302,24 @@ struct GalleryListView: View {
             }
             .sheet(isPresented: $showAdvancedSearch) {
                 AdvancedSearchView(state: advancedSearch)
+            }
+            .sheet(item: $pendingFavorite) { gallery in
+                FavoriteSlotPicker(
+                    onSelect: { slot in
+                        pendingFavorite = nil
+                        Task {
+                            if slot == -1 {
+                                GalleryActionService.shared.addLocalFavorite(gallery: gallery)
+                            } else {
+                                try? await GalleryActionService.shared.addFavorite(
+                                    gid: gallery.gid, token: gallery.token, slot: slot
+                                )
+                            }
+                            Haptics.success()
+                        }
+                    },
+                    onCancel: { pendingFavorite = nil }
+                )
             }
             .sheet(isPresented: $showTagSelector) {
                 TagSelectorView { keyword in
@@ -457,13 +479,17 @@ struct GalleryListView: View {
                 ZStack {
                     NavigationLink(value: gallery) { EmptyView() }
                         .opacity(0)
-                    GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
+                    GalleryRow(
+                        gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                        onRequestDownload: requestDownload,
+                        onRequestFavorite: requestFavorite
+                    )
                 }
                 .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     // 下载 (对齐 Android onItemLongClick: Download)
                     Button {
-                        Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+                        requestDownload(gallery)
                     } label: {
                         Label("下载", systemImage: "arrow.down.circle")
                     }
@@ -471,7 +497,7 @@ struct GalleryListView: View {
 
                     // 收藏 (对齐 Android onItemLongClick: Add to Favorites)
                     Button {
-                        Task { await GalleryActionService.shared.quickFavorite(gallery: gallery) }
+                        requestFavorite(gallery)
                     } label: {
                         Label(gallery.favoriteSlot >= 0 ? "取消收藏" : "收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.slash" : "heart")
                     }
@@ -544,7 +570,11 @@ struct GalleryListView: View {
                         }
 
                         ForEach(viewModel.galleries, id: \.gid) { gallery in
-                            GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb)
+                            GalleryRow(
+                        gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                        onRequestDownload: requestDownload,
+                        onRequestFavorite: requestFavorite
+                    )
                                 .tag(gallery)
                         }
 
@@ -631,6 +661,9 @@ struct GalleryListView: View {
     /// 同一个标签的文字」的重复显示。
     @State private var searchFieldText = ""
 
+    /// 等待选择收藏夹的画廊（没有设默认收藏夹时）
+    @State private var pendingFavorite: GalleryInfo?
+
 
     private var searchBarView: some View {
         EhSearchBar(
@@ -649,6 +682,30 @@ struct GalleryListView: View {
         .onChange(of: searchTokens) { _, _ in
             // token 变了就重搜：删掉一个标签本身就是一次条件变更
             submitSearch()
+        }
+    }
+
+    /// 收藏。没有设默认收藏夹时弹选择器——此前这里直接丢掉了
+    /// `quickFavorite` 的返回值（false 表示「需要弹选择器」），
+    /// 于是没设默认的用户点侧滑/长按收藏毫无反应。
+    private func requestFavorite(_ gallery: GalleryInfo) {
+        Task {
+            let done = await GalleryActionService.shared.quickFavorite(gallery: gallery)
+            if done {
+                Haptics.success()
+            } else {
+                pendingFavorite = gallery
+            }
+        }
+    }
+
+    /// 下载。补上触感反馈——此前下载确实发起了，但界面毫无动静，
+    /// 看起来就像按钮没响应。
+    private func requestDownload(_ gallery: GalleryInfo) {
+        Task {
+            await GalleryActionService.shared.startDownload(gallery: gallery)
+            DownloadStatusCache.shared.markDownloaded(gid: gallery.gid)
+            Haptics.success()
         }
     }
 
@@ -1100,6 +1157,10 @@ struct GalleryRow: View {
     let gallery: GalleryInfo
     let showJpnTitle: Bool
     let fixThumbUrl: Bool
+    /// 由父视图处理：收藏可能需要弹收藏夹选择器，下载需要移动网络确认，
+    /// 这些都不是一行自己能决定的。
+    var onRequestDownload: (GalleryInfo) -> Void = { _ in }
+    var onRequestFavorite: (GalleryInfo) -> Void = { _ in }
 
     @Environment(\.responsiveLayout) private var layout
 
@@ -1148,6 +1209,12 @@ struct GalleryRow: View {
         return CGSize(width: base.width * thumbScale, height: base.height * thumbScale)
     }
 
+    /// 本地是否已经下载过这一本。
+    /// 对齐 Android 列表项里的 downloaded 标记——扫列表时能直接看出哪本已在本地。
+    private var isDownloaded: Bool {
+        DownloadStatusCache.shared.isDownloaded(gid: gallery.gid)
+    }
+
     /// 元信息行：分类 / 页数 / 收藏 / 阅读进度。
     /// 语言不在这里——它已经叠在封面的分类角标上（与 Android 一致）。
     private var metaItems: [EhGalleryRow.MetaItem] {
@@ -1158,9 +1225,6 @@ struct GalleryRow: View {
         }
         if showPages {
             items.append(.init("\(gallery.pages)P"))
-        }
-        if gallery.favoriteSlot >= 0 {
-            items.append(.init("♥", color: EhColor.danger))
         }
         if let readProgress {
             items.append(.init("读至 \(readProgress)", color: EhColor.accent))
@@ -1177,6 +1241,8 @@ struct GalleryRow: View {
             subtitle: gallery.uploader,
             meta: metaItems,
             tags: gallery.simpleTags ?? [],
+            isDownloaded: isDownloaded,
+            isFavorited: gallery.favoriteSlot >= 0,
             rating: showRating ? gallery.rating : nil,
             trailingText: gallery.posted,
             thumbnailSize: thumbSize
@@ -1185,14 +1251,14 @@ struct GalleryRow: View {
         .contextMenu {
             // 下载
             Button {
-                Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+                onRequestDownload(gallery)
             } label: {
                 Label("下载", systemImage: "arrow.down.circle")
             }
 
             // 收藏
             Button {
-                Task { await GalleryActionService.shared.quickFavorite(gallery: gallery) }
+                onRequestFavorite(gallery)
             } label: {
                 Label("收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.fill" : "heart")
             }

@@ -348,7 +348,7 @@ struct ProfileHomeView: View {
 
 enum ProfileRoute: Hashable {
     case account, myTags, filters, hosts, news
-    case appearance, listAndThumbnail, downloads, reading, privacy, network, tagDatabase
+    case appearance, listAndThumbnail, downloads, reading, favorites, privacy, network, tagDatabase
 
     @ViewBuilder
     var destination: some View {
@@ -364,6 +364,7 @@ enum ProfileRoute: Hashable {
         case .listAndThumbnail: SettingsView(scope: .listThumbnail)
         case .downloads:        SettingsView(scope: .downloads)
         case .reading:          SettingsView(scope: .reading)
+        case .favorites:        SettingsView(scope: .favorites)
         case .privacy:          SettingsView(scope: .privacy)
         case .network:          SettingsView(scope: .network)
         case .tagDatabase:      SettingsView(scope: .tagDatabase)
@@ -387,6 +388,14 @@ private struct SettingsEntry {
         },
         .init(route: .downloads, symbol: "arrow.down.circle", title: "下载", tint: EhColor.success) { nil },
         .init(route: .reading, symbol: "book", title: "阅读", tint: EhColor.accent) { nil },
+        // 默认收藏夹在这里改：收藏对话框里勾了「记住」之后，
+        // 用户需要一个地方能改回「每次询问」
+        .init(route: .favorites, symbol: "heart", title: "收藏", tint: EhColor.danger) {
+            let slot = AppSettings.shared.defaultFavSlot
+            if slot == -2 { return "每次询问" }
+            if slot == -1 { return "本地收藏" }
+            return AppSettings.shared.favCatName(slot)
+        },
         .init(route: .privacy, symbol: "lock", title: "隐私与锁定", tint: EhColor.danger) { nil },
         .init(route: .network, symbol: "network", title: "网络与容灾", tint: EhColor.warning) { nil },
         .init(route: .tagDatabase, symbol: "character.book.closed", title: "标签翻译数据库", tint: EhColor.info) { nil },

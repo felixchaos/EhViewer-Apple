@@ -47,6 +47,11 @@ struct EhGalleryRow: View {
     /// 标签 chip。列表接口本来就带 simpleTags，此前一直没用上——
     /// 卡片里那块空间给了分类名，而分类名现在已经在封面角标上。
     var tags: [String] = []
+    /// 已下载 / 已收藏标记。对齐 Android item_gallery_list.xml 里的
+    /// downloaded 与 favourited 两个 16dp ImageView——iOS 端此前完全没有，
+    /// 用户在列表里看不出哪本已经下过。
+    var isDownloaded: Bool = false
+    var isFavorited: Bool = false
     var rating: Float? = nil             // nil = 不显示评分行
     var trailingText: String? = nil      // 发布时间，跟在评分条右侧
     var readProgress: Double? = nil      // 封面底部的阅读进度
@@ -119,6 +124,16 @@ struct EhGalleryRow: View {
 
                 if !meta.isEmpty {
                     HStack(spacing: EhSpacing.meta) {
+                        if isDownloaded {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EhColor.success)
+                        }
+                        if isFavorited {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EhColor.danger)
+                        }
                         ForEach(meta) { item in
                             Text(item.text)
                                 .font(item.isMonospaced
@@ -168,6 +183,10 @@ struct EhGalleryRow: View {
         }
         .padding(.horizontal, EhSpacing.page)
         .padding(.vertical, 10)
+        // 行高按内容决定，不跟着父容器拉伸。
+        // 内部那个撑开元信息的 Spacer 是贪心的，放进非 List 的 VStack
+        // （收藏页的「本地收藏」区块）里会把整行拉成半屏高。
+        .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
     }
 }

@@ -1343,13 +1343,26 @@ struct FavoriteSlotPicker: View {
     /// 是否显示本地收藏选项 (对齐 Android: slot -1 = 本地收藏)
     var showLocalOption: Bool = true
 
+    /// 「记住这个收藏夹，下次不再询问」。
+    ///
+    /// 对齐 Android CommonOperations.addToFavorites：它用的是
+    /// ListCheckBoxDialogBuilder，勾选后把所选 slot 存进 defaultFavSlot，
+    /// 之后收藏直接落到那个夹子不再弹窗；不勾则把默认清成 INVALID。
+    /// 我们此前完全没有这个开关，用户每次收藏都要选一遍。
+    @State private var remember = false
+
+    private func pick(_ slot: Int) {
+        AppSettings.shared.defaultFavSlot = remember ? slot : -2
+        onSelect(slot)
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 // 本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
                 if showLocalOption {
                     Button {
-                        onSelect(-1)
+                        pick(-1)
                     } label: {
                         HStack {
                             Image(systemName: "internaldrive")
@@ -1364,7 +1377,7 @@ struct FavoriteSlotPicker: View {
                 // 云端收藏 0-9 (对齐 Android favCatArray)
                 ForEach(0..<10) { slot in
                     Button {
-                        onSelect(slot)
+                        pick(slot)
                     } label: {
                         HStack {
                             Image(systemName: "heart.fill")
@@ -1380,6 +1393,13 @@ struct FavoriteSlotPicker: View {
                             }
                         }
                     }
+                }
+
+                Section {
+                    Toggle("记住这个收藏夹，下次不再询问", isOn: $remember)
+                        .tint(EhColor.accentFill)
+                } footer: {
+                    Text("之后收藏会直接放进所选收藏夹。可在「我的 → 下载」设置里改回每次询问。")
                 }
             }
             .navigationTitle("选择收藏夹")

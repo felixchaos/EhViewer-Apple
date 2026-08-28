@@ -36,6 +36,7 @@ struct SettingsView: View {
         case listThumbnail   // 列表与缩略图
         case downloads       // 下载与存储
         case reading         // 阅读
+        case favorites       // 收藏
         case privacy         // 隐私与锁定
         case network         // 网络与容灾
         case tagDatabase     // 标签翻译数据库
@@ -47,6 +48,7 @@ struct SettingsView: View {
             case .listThumbnail: return "列表与缩略图"
             case .downloads:     return "下载与存储"
             case .reading:       return "阅读"
+            case .favorites:     return "收藏"
             case .privacy:       return "隐私与锁定"
             case .network:       return "网络与容灾"
             case .tagDatabase:   return "标签翻译数据库"
@@ -106,6 +108,8 @@ struct SettingsView: View {
                 cacheSection
             case .reading:
                 readingSection
+            case .favorites:
+                favoritesSection
             case .privacy:
                 securitySection
             case .network:
@@ -580,6 +584,9 @@ struct SettingsView: View {
                 set: { AppSettings.shared.defaultFavSlot = $0 }
             )) {
                 Text("每次询问").tag(-2)
+                // 本地收藏 (slot -1)。收藏对话框一直支持它，
+                // 这个 Picker 却漏了，导致「默认放本地收藏」设不出来。
+                Text("本地收藏").tag(-1)
                 ForEach(0..<10) { slot in
                     Text(AppSettings.shared.favCatName(slot)).tag(slot)
                 }
