@@ -33,11 +33,19 @@ struct EhSearchBar: View {
     var placeholder: String = "搜索标签或标题"
     var showsCancelButton: Bool = true
 
-    @FocusState.Binding var isFocused: Bool
+    /// 聚焦状态。这里用普通 Binding 而不是 @FocusState.Binding：
+    /// iOS 侧的焦点由 UISearchTextField 自己持有，而 @FocusState.Binding
+    /// 在 UIViewRepresentable 的 delegate 回调里赋值会被 SwiftUI 丢掉，
+    /// 表现为「取消」按钮不出现、右侧图标不让位。
+    @Binding var isFocused: Bool
 
     /// 右侧附加按钮（标签选择器、高级搜索等）。聚焦时让位给「取消」。
     var trailingButtons: [(symbol: String, action: () -> Void)] = []
     var onSubmit: () -> Void = {}
+
+    #if !os(iOS)
+    @FocusState private var macFocus: Bool
+    #endif
 
     var body: some View {
         HStack(spacing: 8) {
@@ -58,8 +66,10 @@ struct EhSearchBar: View {
                 #else
                 TextField(placeholder, text: $text)
                     .textFieldStyle(.plain)
-                    .focused($isFocused)
+                    .focused($macFocus)
                     .onSubmit(onSubmit)
+                    .onChange(of: macFocus) { _, v in isFocused = v }
+                    .onChange(of: isFocused) { _, v in macFocus = v }
                 #endif
 
                 if !text.isEmpty || !tokens.isEmpty {
@@ -127,7 +137,7 @@ struct EhTokenSearchField: UIViewRepresentable {
     @Binding var text: String
     @Binding var tokens: [String]
     let placeholder: String
-    @FocusState.Binding var isFocused: Bool
+    @Binding var isFocused: Bool
     var onSubmit: () -> Void
 
     func makeUIView(context: Context) -> UISearchTextField {
@@ -211,12 +221,15 @@ struct EhTokenSearchField: UIViewRepresentable {
             }
         }
 
+        // 在 SwiftUI 的更新周期内直接写状态会被丢弃，派发到下一轮 runloop
         func textFieldDidBeginEditing(_ textField: UITextField) {
-            parent.isFocused = true
+            let binding = parent.$isFocused
+            DispatchQueue.main.async { binding.wrappedValue = true }
         }
 
         func textFieldDidEndEditing(_ textField: UITextField) {
-            parent.isFocused = false
+            let binding = parent.$isFocused
+            DispatchQueue.main.async { binding.wrappedValue = false }
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {

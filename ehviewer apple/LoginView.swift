@@ -158,8 +158,14 @@ struct LoginView: View {
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        .buttonStyle(.plain)
+        .foregroundStyle(EhColor.onAccentFill)
+        .padding(.horizontal, EhSpacing.page)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: EhRadius.card, style: .continuous)
+                .fill(EhColor.accentFill)
+        }
     }
 
     // MARK: - 其他方式

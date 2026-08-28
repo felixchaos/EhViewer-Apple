@@ -41,7 +41,9 @@ struct GalleryListView: View {
     @State private var advancedSearch = AdvancedSearchState()
     @State private var selectedQuickSearch: QuickSearchRecord?
     @State private var selectedGallery: GalleryInfo?
-    @FocusState private var isSearchFocused: Bool
+    /// 搜索框聚焦态。用 @State 而非 @FocusState：焦点实际由
+    /// UISearchTextField 持有，这里只是把它的状态镜像出来供布局使用。
+    @State private var isSearchFocused: Bool = false
     /// 跳页模式切换 (对齐 Android JumpDateSelector: DATE_PICKER_TYPE / DATE_NODE_TYPE)
     /// 跳页模式: 0 = 快捷跳转, 1 = 日期选择, 2 = 页码跳转
     @State private var jumpMode: Int = 0
