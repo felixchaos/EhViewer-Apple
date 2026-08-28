@@ -8,13 +8,20 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-latest
     
     steps:
     - uses: actions/checkout@v4
 
-    - name: Select Xcode
-      run: sudo xcode-select -s /Applications/Xcode_16.app
+    # 项目最低要求 iOS 26 SDK，钉死旧 Xcode 会导致
+    # "iOS 18.0 is not installed"。这里选镜像上最新的一个。
+    - name: Select newest Xcode
+      run: |
+        LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+        LATEST=${LATEST:-/Applications/Xcode.app}
+        sudo xcode-select -s "$LATEST"
+        xcodebuild -version
+        echo "可用 SDK:"; xcodebuild -showsdks | grep -i ios || true
 
     - name: Build for iOS
       run: |

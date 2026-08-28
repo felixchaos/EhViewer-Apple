@@ -25,6 +25,10 @@
 
 已发布的安装包见 [Releases](../../releases)。
 
+> 仓库里有一条 Ad-Hoc 自动构建流水线（`.github/workflows/deploy_ios.yml`），但它需要签名证书与描述文件作为
+> repository secrets 才能运行。目前这些 secret 未配置，流水线不会产出可用的包，现有 Release 资产是手工上传的。
+> 配置方法见 workflow 里的前置检查步骤。
+
 ### 只有 Windows 怎么办
 
 签名和打包必须在 macOS 上完成，Windows 无法自行构建。可选路径：

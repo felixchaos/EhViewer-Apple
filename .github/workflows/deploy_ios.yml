@@ -32,7 +32,7 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
@@ -41,8 +41,39 @@ jobs:
         uses: actions/checkout@v4
 
       # ─── 1. 环境准备: Xcode 版本 ──────────────────────────
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+      - name: Select newest Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          LATEST=${LATEST:-/Applications/Xcode.app}
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      # ─── 1.5 前置检查: 签名凭据是否配置 ──────────────────
+      # 缺 secret 时 security import 只会抛
+      # "SecKeychainItemImport: One or more parameters ... not valid"，
+      # 看不出根因。这里提前失败并说清楚缺什么。
+      - name: Verify signing secrets
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          MISSING=""
+          [ -z "$BUILD_CERTIFICATE_BASE64" ] && MISSING="$MISSING BUILD_CERTIFICATE_BASE64"
+          [ -z "$P12_PASSWORD" ] && MISSING="$MISSING P12_PASSWORD"
+          [ -z "$BUILD_PROVISION_PROFILE_BASE64" ] && MISSING="$MISSING BUILD_PROVISION_PROFILE_BASE64"
+          [ -z "$KEYCHAIN_PASSWORD" ] && MISSING="$MISSING KEYCHAIN_PASSWORD"
+          if [ -n "$MISSING" ]; then
+            echo "::error::缺少签名 Secret:$MISSING"
+            echo "在 Settings → Secrets and variables → Actions 中配置后重新运行。"
+            echo "  BUILD_CERTIFICATE_BASE64       — 导出的 .p12 证书，base64"
+            echo "  P12_PASSWORD                   — 导出 .p12 时设置的密码"
+            echo "  BUILD_PROVISION_PROFILE_BASE64 — Ad-Hoc .mobileprovision，base64"
+            echo "  KEYCHAIN_PASSWORD              — 任意字符串，仅用于 CI 临时钥匙串"
+            exit 1
+          fi
+          echo "✅ 签名凭据齐全"
 
       # ─── 2. 证书 & 描述文件注入 ────────────────────────────
       - name: Import certificate & provisioning profile
