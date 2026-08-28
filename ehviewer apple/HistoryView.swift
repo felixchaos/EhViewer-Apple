@@ -13,6 +13,8 @@ import EhSettings
 struct HistoryView: View {
     @State private var vm = HistoryViewModel()
     @State private var searchText = ""
+    /// 搜索以按钮形态存在，点开才展开输入框——设计稿的默认状态没有搜索栏
+    @State private var isSearching = false
     /// 点续读钮时直接开阅读器，不经详情页
     @State private var resumeItem: ReaderLaunchItem?
 
@@ -69,8 +71,12 @@ struct HistoryView: View {
             // 去掉 .searchable：iOS 26 把搜索栏放在屏幕**底部**，
             // 于是它和浮起导航条重叠，键盘弹出后也没有收起的落点。
             // 设计稿里历史页顶部只有标题与「清空」，检索靠时间分组完成。
+            .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索历史")
             .toolbar {
                 if !vm.records.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        EhSearchToggleButton(isActive: $isSearching)
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button("清空", role: .destructive) {
                             vm.showClearConfirm = true

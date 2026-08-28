@@ -55,15 +55,13 @@ struct MainTabView: View {
         /// 「设置」并入「我的」，底部因此空出一格给「历史」。
         private static let defaultBottomTabs: [Tab] = [.home, .favorites, .downloads, .history, .profile]
 
-        /// iPhone 底部显示的标签页 — 根据启动页面设置动态调整
-        /// 如果启动页不在默认底部栏中 (热门/排行榜/历史)，替换首页位置
-        static var bottomTabs: [Tab] {
-            let launchTab = fromLaunchPage(AppSettings.shared.launchPage)
-            guard !defaultBottomTabs.contains(launchTab) else { return defaultBottomTabs }
-            var tabs = defaultBottomTabs
-            tabs[0] = launchTab  // 替换 .home
-            return tabs
-        }
+        /// iPhone 底部标签固定为这五项。
+        ///
+        /// 此前会按「启动页面」设置把首页替换成热门/排行，但那两者现在是首页顶部的
+        /// 横向切页而非独立标签页；继续替换会让底部栏在不同设置下项数与顺序都不同，
+        /// 而底部栏是肌肉记忆最强的控件，不该随设置变形。
+        /// 启动页指向热门/排行时改为落到首页并选中对应切页，见 initialBrowseSource。
+        static var bottomTabs: [Tab] { defaultBottomTabs }
 
         /// "更多"菜单中的标签页 — 不在底部栏且非 .more 的标签
         static var moreTabs: [Tab] {
@@ -271,6 +269,30 @@ struct MainTabView: View {
         case .more:
             // macOS 不使用 "更多" 标签，不应出现
             EmptyView()
+        }
+    }
+    #endif
+
+    #if os(iOS)
+    /// 保留全部页面的视图状态：切走的页面只是隐藏而不销毁，
+    /// 回来时滚动位置与已加载数据都还在。
+    @ViewBuilder
+    private func tabLayer<Content: View>(
+        _ tab: Tab, @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .opacity(selectedTab == tab ? 1 : 0)
+            .allowsHitTesting(selectedTab == tab)
+            .accessibilityHidden(selectedTab != tab)
+    }
+
+    /// 启动页面设置指向「热门 / 排行」时，落到首页并选中对应的顶部切页。
+    /// 这两者已经不是独立标签页了，不能再去替换底部栏的第一项。
+    private static var initialBrowseSource: BrowseSource {
+        switch AppSettings.shared.launchPage {
+        case 1: return .popular
+        case 2: return .toplist
+        default: return .home
         }
     }
     #endif

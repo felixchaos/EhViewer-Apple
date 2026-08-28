@@ -34,6 +34,7 @@ struct DownloadsView: View {
     /// nil = 全部, "" = 默认(无标签), 其他 = 具体标签
     @State private var selectedLabel: String? = nil
     @State private var searchText = ""
+    @State private var isSearching = false
     @State private var statusFilter: DownloadStatusFilter = .all
 
     // MARK: - 批量操作
@@ -100,9 +101,14 @@ struct DownloadsView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.large)
             #endif
-                // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
-                // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
+            // 搜索改为按钮形态：设计稿的默认状态顶部只有标题与过滤胶囊，
+            // 点放大镜才展开统一搜索框。此前用 .searchable，iOS 26 会把它
+            // 渲染在屏幕底部，与浮起导航条重叠。
+            .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索标题或标签")
             .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    EhSearchToggleButton(isActive: $isSearching)
+                }
                 ToolbarItem(placement: .automatic) {
                     mainToolbarMenu
                 }
@@ -179,51 +185,87 @@ struct DownloadsView: View {
 
     // MARK: - 存储空间概览
 
+    /// 汇总条：正在下载 N 本 · 速度 · 剩余时间 · 网络 | 全部暂停
+    ///
+    /// 设计稿把这一条放在过滤胶囊下方。它回答的是「现在到底在干什么、还要多久」，
+    /// 此前只有「总计 xx MB / N 已完成」——那是静态统计，正在下载时最想知道的
+    /// 速度与剩余时间都没有。
     private var storageOverview: some View {
-        HStack(spacing: 12) {
-            // 总存储
-            HStack(spacing: 4) {
-                Image(systemName: "internaldrive")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if isCalculatingSize {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Text("总计 \(Self.formatFileSize(totalStorageSize))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
-
-            // 下载数统计
-            let activeCount = vm.tasks.filter { $0.state == DownloadManager.stateDownload || $0.state == DownloadManager.stateWait }.count
-            let finishedCount = vm.tasks.filter { $0.state == DownloadManager.stateFinish }.count
-            if activeCount > 0 {
-                Text("\(activeCount) 进行中")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-            }
-            Text("\(finishedCount)/\(vm.tasks.count) 已完成")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            // 刷新按钮
-            Button {
-                Task { await calculateStorageSizes() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+        let active = vm.tasks.filter {
+            $0.state == DownloadManager.stateDownload || $0.state == DownloadManager.stateWait
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .background(.bar)
+        let speed = active.reduce(0) { $0 + $1.speed }
+        let remainingBytes = active.reduce(Int64(0)) { sum, t in
+            guard t.gallery.pages > 0, t.downloadedPages < t.gallery.pages else { return sum }
+            // 用已下载页的平均大小估算剩余量；没有已完成页时按 300KB/页 兜底
+            let avg = t.downloadedPages > 0
+                ? Int64(1_200_000 / max(t.downloadedPages, 1))
+                : Int64(300_000)
+            return sum + avg * Int64(t.gallery.pages - t.downloadedPages)
+        }
+
+        return HStack(spacing: EhSpacing.meta) {
+            if active.isEmpty {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 11))
+                    .foregroundStyle(EhColor.tertiaryLabel)
+                if isCalculatingSize {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text("共 \(vm.tasks.count) 本 · \(Self.formatFileSize(totalStorageSize))")
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(EhColor.secondaryLabel)
+                }
+            } else {
+                Text("正在下载 \(active.count) 本")
+                    .font(EhFont.mono(11, weight: .medium))
+                    .foregroundStyle(EhColor.accent)
+                if speed > 0 {
+                    Text("· \(DownloadTaskRow.formatSpeed(speed))")
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(EhColor.secondaryLabel)
+                    if remainingBytes > 0 {
+                        Text("· 剩余约 \(Self.formatDuration(seconds: Double(remainingBytes) / Double(speed)))")
+                            .font(EhFont.mono(11))
+                            .foregroundStyle(EhColor.secondaryLabel)
+                    }
+                }
+                Text("· \(NetworkReachability.isConstrainedOrCellular ? "蜂窝" : "Wi-Fi")")
+                    .font(EhFont.mono(11))
+                    .foregroundStyle(EhColor.tertiaryLabel)
+            }
+
+            Spacer(minLength: 8)
+
+            if !active.isEmpty {
+                Button("全部暂停") {
+                    Haptics.tap()
+                    vm.pauseAll()
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(EhColor.accent)
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    Task { await calculateStorageSizes() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12))
+                        .foregroundStyle(EhColor.tertiaryLabel)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, EhSpacing.page)
+        .padding(.vertical, 8)
+    }
+
+    /// 把秒数说成人能读的时长
+    private static func formatDuration(seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "—" }
+        if seconds < 60 { return "\(Int(seconds)) 秒" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) 分钟" }
+        return String(format: "%.1f 小时", seconds / 3600)
     }
 
     // MARK: - 批量操作底栏
@@ -420,70 +462,88 @@ struct DownloadsView: View {
 
     // MARK: - 标签选择栏 (对齐 Android DownloadsScene Label Drawer)
 
+    /// 顶部胶囊：先按状态过滤，再按标签分组。
+    ///
+    /// 设计稿这一行是「全部 34 / 进行中 2 / 未读 5 / 收藏组」——带计数的状态过滤，
+    /// 而不是只有标签。计数很重要：不点进去就能知道有没有正在跑的、有多少没读，
+    /// 这正是打开下载页最常问的两个问题。
     private var labelPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // 全部
-                labelChip(title: "全部", isSelected: selectedLabel == nil) {
-                    selectedLabel = nil
-                    exitSelectMode()
+                statusChip(.all, title: "全部", count: vm.tasks.count)
+                statusChip(.downloading, title: "进行中", count: activeTaskCount)
+                statusChip(.finished, title: "已完成", count: finishedTaskCount)
+
+                if !labels.isEmpty || selectedLabel != nil {
+                    Rectangle()
+                        .fill(EhColor.hairline)
+                        .frame(width: 1, height: 18)
+                        .padding(.horizontal, 2)
                 }
 
-                // 默认 (无标签)
                 labelChip(title: "默认", isSelected: selectedLabel == "") {
-                    selectedLabel = ""
+                    selectedLabel = selectedLabel == "" ? nil : ""
                     exitSelectMode()
                 }
-
-                // 自定义标签
                 ForEach(labels, id: \.id) { label in
                     labelChip(title: label.label, isSelected: selectedLabel == label.label) {
-                        selectedLabel = label.label
+                        selectedLabel = selectedLabel == label.label ? nil : label.label
                         exitSelectMode()
                     }
-                    .contextMenu {
-                        Button {
-                            renamingLabel = label
-                            renameText = label.label
-                            showRenameLabelAlert = true
-                        } label: {
-                            Label("重命名", systemImage: "pencil")
-                        }
-
-                        Button(role: .destructive) {
-                            deletingLabel = label
-                            showDeleteLabelConfirm = true
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                }
-
-                // 新增标签按钮
-                Button {
-                    showNewLabelAlert = true
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(Color.accentColor)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, EhSpacing.page)
         }
-        .background(.bar)
+        .frame(height: 46)
+    }
+
+    private var activeTaskCount: Int {
+        vm.tasks.filter {
+            $0.state == DownloadManager.stateDownload || $0.state == DownloadManager.stateWait
+        }.count
+    }
+
+    private var finishedTaskCount: Int {
+        vm.tasks.filter { $0.state == DownloadManager.stateFinish }.count
+    }
+
+    private func statusChip(_ filter: DownloadStatusFilter, title: String, count: Int) -> some View {
+        let isSelected = statusFilter == filter
+        return Button {
+            statusFilter = filter
+            exitSelectMode()
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 5) {
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(
+                            isSelected ? EhColor.onAccentFill.opacity(0.7) : EhColor.tertiaryLabel
+                        )
+                }
+            }
+            .foregroundStyle(isSelected ? EhColor.onAccentFill : EhColor.secondaryLabel)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background { Capsule().fill(isSelected ? EhColor.accentFill : EhColor.fill) }
+        }
+        .buttonStyle(.plain)
     }
 
     private func labelChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            action()
+            Haptics.tap()
+        } label: {
             Text(title)
-                .font(.subheadline)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill))
-                .foregroundStyle(isSelected ? .white : .primary)
-                .clipShape(Capsule())
+                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? EhColor.onAccentFill : EhColor.secondaryLabel)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background { Capsule().fill(isSelected ? EhColor.accentFill : EhColor.fill) }
         }
         .buttonStyle(.plain)
     }

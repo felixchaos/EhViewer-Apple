@@ -240,3 +240,76 @@ struct EhTokenSearchField: UIViewRepresentable {
 }
 
 #endif
+
+// MARK: - 页面级搜索
+
+/// 给一个页面加上「工具栏放大镜 → 激活统一搜索框」的行为。
+///
+/// 设计稿里各页的**默认**状态没有搜索栏（下载/收藏/历史顶部是「大标题 + 动作 + 过滤胶囊」），
+/// 但搜索入口是需要的——只是以按钮形态存在，点开才展开输入。
+/// 这样默认状态干净，激活后各页又是同一套 UI，不像此前首页自绘、其余用 .searchable
+/// 那样有两种长相。
+struct EhPageSearchModifier: ViewModifier {
+    @Binding var isActive: Bool
+    @Binding var text: String
+    var placeholder: String
+
+    @State private var tokens: [String] = []
+    @State private var isFocused = false
+
+    func body(content: Content) -> some View {
+        VStack(spacing: 0) {
+            if isActive {
+                EhSearchBar(
+                    text: $text,
+                    tokens: $tokens,
+                    placeholder: placeholder,
+                    isFocused: $isFocused,
+                    onSubmit: { isFocused = false }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            content
+        }
+        .animation(.easeInOut(duration: 0.2), value: isActive)
+        .onChange(of: isActive) { _, active in
+            if active {
+                // 展开后自动聚焦，省一次点击
+                isFocused = true
+            } else {
+                text = ""
+                tokens = []
+                isFocused = false
+            }
+        }
+        .onChange(of: isFocused) { _, focused in
+            // 点「取消」收起输入时，一并收起整条搜索栏
+            if !focused && text.isEmpty && tokens.isEmpty {
+                isActive = false
+            }
+        }
+    }
+}
+
+extension View {
+    /// 页面级搜索：与 `ehSearchToggleButton` 配合使用
+    func ehPageSearch(
+        isActive: Binding<Bool>, text: Binding<String>, placeholder: String
+    ) -> some View {
+        modifier(EhPageSearchModifier(isActive: isActive, text: text, placeholder: placeholder))
+    }
+}
+
+/// 工具栏里的搜索开关按钮
+struct EhSearchToggleButton: View {
+    @Binding var isActive: Bool
+
+    var body: some View {
+        Button {
+            isActive.toggle()
+        } label: {
+            Image(systemName: isActive ? "magnifyingglass.circle.fill" : "magnifyingglass")
+        }
+        .accessibilityLabel(isActive ? "关闭搜索" : "搜索")
+    }
+}

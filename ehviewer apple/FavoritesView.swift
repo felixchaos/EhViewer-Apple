@@ -16,6 +16,7 @@ struct FavoritesView: View {
     /// selectedSlot: -2 = 本地收藏, -1 = 全部, 0-9 = 云收藏夹
     @State private var selectedSlot = -1
     @State private var searchText = ""
+    @State private var isSearching = false
     @State private var localFavorites: [LocalFavoriteRecord] = []
     @State private var isLoadingLocal = false
 
@@ -58,6 +59,7 @@ struct FavoritesView: View {
                 }
             }
             .navigationTitle("收藏")
+            .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
                 // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
                 // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
             .onChange(of: searchText) { _, _ in
@@ -79,6 +81,7 @@ struct FavoritesView: View {
                     }
                 }
                 .navigationTitle("收藏")
+                .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.large)
                 #endif
@@ -88,6 +91,9 @@ struct FavoritesView: View {
                     if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
                 }
                 .toolbar {
+                    ToolbarItem(placement: .automatic) {
+                        EhSearchToggleButton(isActive: $isSearching)
+                    }
                     // 本地收藏批量操作工具栏 (对齐 Android FavoritesScene FAB)
                     if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
                         ToolbarItem(placement: .automatic) {
