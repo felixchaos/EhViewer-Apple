@@ -155,6 +155,16 @@ struct EhTokenSearchField: UIViewRepresentable {
         // 否则会并排出现两个放大镜。
         field.leftView = nil
         field.leftViewMode = .never
+        // token 多了要能横向拖动查看。UISearchTextField 继承自 UITextField，
+        // 默认只在编辑时随光标滚动；这里放开滚动并允许拖拽，
+        // 未聚焦时也能左右划着看完整条件。
+        field.adjustsFontSizeToFitWidth = false
+        field.allowsDeletingTokens = true
+        if let scroll = field.subviews.compactMap({ $0 as? UIScrollView }).first {
+            scroll.isScrollEnabled = true
+            scroll.alwaysBounceHorizontal = true
+            scroll.showsHorizontalScrollIndicator = false
+        }
         field.delegate = context.coordinator
         field.addTarget(
             context.coordinator,

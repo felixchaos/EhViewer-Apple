@@ -479,6 +479,10 @@ struct GalleryListView: View {
         }
         .listStyle(.plain)
         #if os(iOS)
+        // 向下滚收起底部导航条，向上滚放出来
+        .ehTabBarAutoHide()
+        #endif
+        #if os(iOS)
         .scrollDismissesKeyboard(.immediately)
         #endif
         .refreshable {
@@ -641,8 +645,16 @@ struct GalleryListView: View {
     private func submitSearch() {
         isSearchFocused = false
         let typed = searchFieldText.trimmingCharacters(in: .whitespaces)
-        let query = (searchTokens + (typed.isEmpty ? [] : [typed]))
-            .joined(separator: " ")
+
+        // 打出来的自由文本若本身就是一个标签，收成 token；
+        // 提交后 token 留在输入框里，这样从列表回来仍能看到当前搜索条件，
+        // 也能逐个删掉某一条重搜，而不必整串清空重打。
+        if !typed.isEmpty, !searchTokens.contains(typed) {
+            searchTokens.append(typed)
+        }
+        searchFieldText = ""
+
+        let query = searchTokens.joined(separator: " ")
         viewModel.performSearch(query: query, advanced: advancedSearch)
     }
 

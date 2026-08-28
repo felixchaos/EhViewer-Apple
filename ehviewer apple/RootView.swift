@@ -74,9 +74,7 @@ struct RootView: View {
         let initState = AppState()
         if step == .main {
             initState.checkLoginStatus()
-            if !initState.isSignedIn {
-                initState.isSignedIn = settings.skipSignIn
-            }
+            // 访客不再冒充已登录，门禁由 canEnterApp 判断
         }
         _appState = State(initialValue: initState)
     }
@@ -106,6 +104,9 @@ struct RootView: View {
             if appState.isSignedIn && !AppSettings.shared.skipSignIn {
                 await postLoginActions()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ehGuestModeEntered)) { _ in
+            flowStep = .main
         }
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             if isSignedIn {
@@ -343,9 +344,8 @@ struct RootView: View {
         appState.checkLoginStatus()
         
         // 如果设置了跳过登录 (游客模式)，直接进入主界面
-        if appState.isSignedIn || AppSettings.shared.skipSignIn {
-            if !appState.isSignedIn {
-                appState.isSignedIn = true  // 仅在值不同时写入，避免 withMutation 触发无效重渲染
+        if appState.canEnterApp {
+            if false {  // 访客不再改写 isSignedIn
             }
             flowStep = .main
         } else {
@@ -425,12 +425,30 @@ struct RootView: View {
     }
 }
 
+extension Notification.Name {
+    /// 用户选择了访客模式。此前靠把 isSignedIn 写成 true 来驱动流程推进，
+    /// 那会让「我的」页误显示为已登录；改用显式通知。
+    static let ehGuestModeEntered = Notification.Name("EhGuestModeEntered")
+}
+
 // MARK: - 全局应用状态
 
 @MainActor
 @Observable
 final class AppState {
+    /// 是否持有有效的登录 Cookie。
+    ///
+    /// 访客模式**不**置这个标志——此前访客会把它设成 true 以通过引导门禁，
+    /// 结果「我的」页显示「已登录」、点账号也没有登录入口。
+    /// 引导门禁改用 `canEnterApp` 判断。
     var isSignedIn = false
+
+    /// 访客模式（跳过登录）。与 isSignedIn 互斥语义：一个是「登录了」，
+    /// 一个是「明确选择不登录」。
+    var isGuest: Bool { AppSettings.shared.skipSignIn && !isSignedIn }
+
+    /// 能否进入主界面：登录了，或明确选择了访客
+    var canEnterApp: Bool { isSignedIn || AppSettings.shared.skipSignIn }
     var currentSite: SiteChoice = .eHentai
 
     enum SiteChoice: Int {

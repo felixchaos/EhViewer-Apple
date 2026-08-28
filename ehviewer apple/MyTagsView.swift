@@ -65,16 +65,17 @@ struct MyTagsView: View {
         }
         .task { await load() }
         .refreshable { await load() }
-        .alert("添加订阅标签", isPresented: $showAddSheet) {
-            TextField("如 female:big breasts", text: $newTagName)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-            Button("添加") { Task { await add() } }
-            Button("取消", role: .cancel) { newTagName = "" }
-        } message: {
-            Text("填 E-Hentai 的完整标签名，带命名空间，例如 artist:xxx。")
+        // 用标签选择器而不是让用户手打完整标签名。
+        //
+        // 原来是个只有输入框的 alert，要求用户自己写出 `female:big breasts`
+        // 这种带命名空间的完整名——记不住就填错，填错了服务端静默忽略。
+        // 标签选择器本来就有：按命名空间浏览、带中文翻译、能搜索，
+        // 而且是同一套已经调好的 UI。
+        .sheet(isPresented: $showAddSheet) {
+            TagSelectorView { keyword in
+                newTagName = Self.plainTagName(from: keyword)
+                Task { await add() }
+            }
         }
     }
 
@@ -93,6 +94,24 @@ struct MyTagsView: View {
                 Text("共 \(tags.count) 个标签。左滑删除。")
             }
         }
+    }
+
+    /// 把搜索语法还原成裸标签名。
+    ///
+    /// 标签选择器产出的是可直接搜索的 `female:"glasses$"`，
+    /// 而订阅接口要的是 `female:glasses`——引号与结尾锚点得去掉，
+    /// 带着它们提交服务端会静默忽略。
+    static func plainTagName(from keyword: String) -> String {
+        var t = keyword.trimmingCharacters(in: .whitespaces)
+        if let colon = t.firstIndex(of: ":") {
+            let ns = String(t[t.startIndex..<colon])
+            var name = String(t[t.index(after: colon)...])
+            name = name.trimmingCharacters(in: CharacterSet(charactersIn: "\"$"))
+            t = ns + ":" + name
+        } else {
+            t = t.trimmingCharacters(in: CharacterSet(charactersIn: "\"$"))
+        }
+        return t
     }
 
     private func row(_ tag: UserTag) -> some View {

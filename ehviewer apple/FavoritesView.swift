@@ -232,6 +232,9 @@ struct FavoritesView: View {
                     }
                 }
                 .listStyle(.plain)
+                #if os(iOS)
+                .ehTabBarAutoHide()
+                #endif
             }
         }
         .onAppear { loadLocalFavorites() }

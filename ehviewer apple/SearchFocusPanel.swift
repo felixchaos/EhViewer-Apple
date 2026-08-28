@@ -42,7 +42,10 @@ struct SearchFocusPanel: View {
                     }
                 }
 
-                if text.isEmpty && !history.isEmpty {
+                // 历史与建议并存，不因为输入框有字就把历史藏起来——
+                // 设计稿这一屏的标题就是「聚焦：历史 + 标签建议」，
+                // 而且用户常常是打了一半才想起「上次搜的那条是什么」
+                if !history.isEmpty {
                     sectionHeader("最近搜索", action: ("清除", onClearHistory))
                     // 历史用胶囊平铺而不是逐行列出：它们通常很短，
                     // 一行一条会把面板撑得很长，而用户是在里面找一个眼熟的

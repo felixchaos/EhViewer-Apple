@@ -288,10 +288,16 @@ struct ImageReaderView: View {
             }
         }
         #if os(iOS)
-        // 边缘侧滑返回 — 仅在工具栏可见时启用，避免与翻页手势冲突
-        .overlay {
+        // 边缘侧滑返回 — 仅在工具栏可见时启用，避免与翻页手势冲突。
+        //
+        // 必须限制在左边缘 24pt 内：它此前铺满整屏且 allowsHitTesting(true)，
+        // 作为最上层 overlay 把顶栏按钮的点击全吃了——返回键点不动就是这个原因。
+        // 边缘侧滑本来也只需要边缘那一条。
+        .overlay(alignment: .leading) {
             if showOverlay {
                 EdgeSwipeDismissView { dismiss() }
+                    .frame(width: 24)
+                    .frame(maxHeight: .infinity)
                     .allowsHitTesting(true)
             }
         }

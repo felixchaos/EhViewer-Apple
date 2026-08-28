@@ -23,6 +23,7 @@ struct ProfileHomeView: View {
     @State private var downloadCount: Int = 0
     @State private var downloadBytes: Int64 = 0
     @State private var isLoadingQuota = false
+    @State private var showLogin = false
     private var updateChecker: AppUpdateChecker { .shared }
 
     var body: some View {
@@ -43,6 +44,10 @@ struct ProfileHomeView: View {
                 .padding(.bottom, 24)
             }
             .background(EhColor.groupedBackground)
+            #if os(iOS)
+            // 浮起导航条只在 iOS 存在，macOS 是侧边栏
+            .ehTabBarAutoHide()
+            #endif
             .navigationTitle("我的")
             .scrollContentBackground(.hidden)
             .navigationDestination(for: ProfileRoute.self) { route in
@@ -50,6 +55,10 @@ struct ProfileHomeView: View {
             }
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery).id(gallery.gid)
+            }
+            .sheet(isPresented: $showLogin) {
+                LoginView()
+                    .environment(appState)
             }
             .task {
                 await loadSummary()
@@ -82,15 +91,19 @@ struct ProfileHomeView: View {
 
                 Spacer()
 
-                NavigationLink(value: ProfileRoute.account) {
-                    Text("账号")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(EhColor.accent)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .overlay(Capsule().strokeBorder(EhColor.accent.opacity(0.5), lineWidth: 1))
+                // 未登录（含访客）时这里必须是「登录」并真的能进登录页——
+                // 此前不论登录与否都指向账号资料页，访客点进去是一片空白
+                if appState.isSignedIn {
+                    NavigationLink(value: ProfileRoute.account) {
+                        capsuleLabel("账号", filled: false)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button { showLogin = true } label: {
+                        capsuleLabel("登录", filled: true)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(EhSpacing.page)
 
@@ -157,7 +170,10 @@ struct ProfileHomeView: View {
             // 「我的标签」→「订阅标签」：顶部切页叫「订阅」，这里管理的正是
             // 它背后的标签列表，两处用同一个词才对得上
             quickEntry(.myTags, symbol: "bell", title: "订阅标签")
-            quickEntry(.filters, symbol: "line.3.horizontal.decrease.circle", title: "筛选器")
+            // 「过滤器」而非「筛选器」：这里管理的是**屏蔽**规则（把不想看的挡掉），
+            // 「筛选」在中文里更像是从结果里挑出想要的，方向相反。
+            // 图标同样换成表示"挡掉"的斜杠眼，不用漏斗。
+            quickEntry(.filters, symbol: "eye.slash", title: "过滤器")
             quickEntry(.hosts, symbol: "globe", title: "Hosts")
             quickEntry(.news, symbol: "envelope", title: "站内公告")
         }
@@ -232,8 +248,26 @@ struct ProfileHomeView: View {
 
     // MARK: - 数据
 
+    private func capsuleLabel(_ title: String, filled: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(filled ? EhColor.onAccentFill : EhColor.accent)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background {
+                if filled {
+                    Capsule().fill(EhColor.accentFill)
+                } else {
+                    Capsule().strokeBorder(EhColor.accent.opacity(0.5), lineWidth: 1)
+                }
+            }
+    }
+
     private var displayName: String {
-        AppSettings.shared.displayName ?? (appState.isSignedIn ? "已登录" : "未登录")
+        if appState.isSignedIn {
+            return AppSettings.shared.displayName ?? "已登录"
+        }
+        return appState.isGuest ? "访客" : "未登录"
     }
 
     private var initial: String {
@@ -242,7 +276,8 @@ struct ProfileHomeView: View {
 
     private var siteStatusText: String {
         let site = AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
-        return "\(site) · \(appState.isSignedIn ? "已登录" : "访客")"
+        if appState.isSignedIn { return "\(site) · 已登录" }
+        return "\(site) · 登录后可用收藏与配额"
     }
 
     private var quotaValueText: String {

@@ -262,7 +262,10 @@ struct LoginView: View {
         AppSettings.shared.gallerySite = .eHentai
         AppSettings.shared.skipSignIn = true
         EhCookieManager.shared.injectNWCookie()
-        appState.isSignedIn = true
+        // 不写 isSignedIn —— 访客没有登录，写成 true 会让「我的」显示「已登录」
+        // 且拿不到登录入口。引导门禁读的是 AppState.canEnterApp。
+        appState.checkLoginStatus()
+        NotificationCenter.default.post(name: .ehGuestModeEntered, object: nil)
     }
 }
 

@@ -533,21 +533,83 @@ struct GalleryDetailView: View {
     /// 标签按钮 — Split/三栏布局: 推入左侧导航栈; iPhone compact: NavigationLink 推入当前栈
     @ViewBuilder
     private func tagButton(label: String, fullTag: String) -> some View {
-        if let tagNav = tagNavigationAction {
-            // iPad/macOS Split 布局: 用 Button 推入左侧 content/sidebar 列的 NavigationStack
+        Group {
+            if let tagNav = tagNavigationAction {
+                // iPad/macOS Split 布局: 用 Button 推入左侧 content/sidebar 列的 NavigationStack
+                Button {
+                    tagNav.navigate(fullTag)
+                } label: {
+                    tagLabel(label)
+                }
+                .buttonStyle(.plain)
+            } else {
+                // iPhone compact: value-based NavigationLink 推入同一 NavigationStack
+                // ★ 必须使用 value-based 而非 destination-based，避免与 galleryList 的
+                //   NavigationLink(value: GalleryInfo) 混用导致路径混乱
+                NavigationLink(value: TagSearchDestination(tag: fullTag)) {
+                    tagLabel(label)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        // 短按搜索，长按给出「订阅 / 屏蔽」——这两件事此前只能到「我的」页
+        // 分别进两个二级页手动填标签名，而用户产生这个念头的时刻就是在这里
+        // 看到某个标签的时候。
+        .contextMenu {
             Button {
-                tagNav.navigate(fullTag)
+                Task { await subscribeTag(fullTag) }
             } label: {
-                tagLabel(label)
+                Label("订阅这个标签", systemImage: "bell")
             }
-            .buttonStyle(.plain)
-        } else {
-            // iPhone compact: value-based NavigationLink 推入同一 NavigationStack
-            // ★ 必须使用 value-based 而非 destination-based，避免与 galleryList 的 NavigationLink(value: GalleryInfo) 混用导致路径混乱
-            NavigationLink(value: TagSearchDestination(tag: fullTag)) {
-                tagLabel(label)
+            Button(role: .destructive) {
+                blockTag(fullTag)
+            } label: {
+                Label("屏蔽这个标签", systemImage: "eye.slash")
             }
-            .buttonStyle(.plain)
+            Divider()
+            Button {
+                #if os(iOS)
+                UIPasteboard.general.string = fullTag
+                #else
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(fullTag, forType: .string)
+                #endif
+            } label: {
+                Label("复制标签", systemImage: "doc.on.doc")
+            }
+        }
+    }
+
+    /// 订阅标签（加入「我的标签」，出现在订阅列表里）
+    private func subscribeTag(_ fullTag: String) async {
+        let name = MyTagsView.plainTagName(from: fullTag)
+        guard !name.isEmpty else { return }
+        do {
+            var tag = UserTag()
+            tag.tagName = name
+            tag.watched = true
+            _ = try await EhAPI.shared.addTag(
+                url: EhURL.myTagsUrl(for: AppSettings.shared.gallerySite), tag: tag
+            )
+            Haptics.success()
+        } catch {
+            Haptics.error()
+            print("[GalleryDetail] 订阅标签失败: \(error)")
+        }
+    }
+
+    /// 屏蔽标签（写入本地过滤器，列表里带此标签的画廊会被挡掉）
+    private func blockTag(_ fullTag: String) {
+        let name = MyTagsView.plainTagName(from: fullTag)
+        guard !name.isEmpty else { return }
+        do {
+            try EhDatabase.shared.insertFilter(
+                FilterRecord(mode: 2, text: name, enable: true)
+            )
+            Haptics.impact()
+        } catch {
+            Haptics.error()
+            print("[GalleryDetail] 屏蔽标签失败: \(error)")
         }
     }
 
