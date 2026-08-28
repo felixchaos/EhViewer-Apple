@@ -154,6 +154,10 @@ class ReaderViewModel {
     @ObservationIgnored private var usedSkipHathKeys: [Int: Set<String>] = [:]
     @ObservationIgnored private var loadingPages: Set<Int> = []
     @ObservationIgnored private var downloadingImages: Set<Int> = []
+    /// 后台预加载任务 —— 翻页时取消上一轮，避免快速翻页堆积并发请求
+    @ObservationIgnored private var preloadTask: Task<Void, Never>?
+    /// 上一次预加载的锚点页 —— 用来推断翻页方向
+    @ObservationIgnored private var lastPreloadAnchor: Int?
     @ObservationIgnored private var downloadDir: URL?
 
     /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
@@ -429,19 +433,21 @@ class ReaderViewModel {
     /// 主动释放距当前页过远的图片，防止 OOM
     /// Perf: 批量移除 — 构建新字典后一次性赋值，避免 N 次 Observable 通知
     func evictDistantPages(from page: Int) {
-        // 保留当前页前后各 5 页 (双页模式下约 2.5 个 spread)
-        let lo = max(0, page - 5)
-        let hi = min(max(0, totalPages - 1), page + 5)
+        // 保留范围跟随预加载窗口，避免刚预取的页被立刻淘汰
+        let radius = retentionRadius
+        let lo = max(0, page - radius)
+        let hi = min(max(0, totalPages - 1), page + radius)
         let keepRange = lo...hi
 
-        let beforeCount = cachedImages.count
-        var filtered = cachedImages
-        for (p, _) in filtered where !keepRange.contains(p) {
-            filtered.removeValue(forKey: p)
-        }
-        // 仅在确实有淘汰时才赋值 (单次 Observable 通知)
-        if filtered.count != beforeCount {
-            cachedImages = filtered
+        // 先只挑出要删的 key —— 不整份拷贝字典。
+        // 大画廊里 cachedImages 可能有几十项，每次翻页都拷一遍是白花的开销。
+        let doomed = cachedImages.keys.filter { !keepRange.contains($0) }
+        guard !doomed.isEmpty else { return }
+
+        // 图片本体仍在 NSCache 里，这里只是把它移出 Observable 层，
+        // 回头翻回来由 restoreCachedImages 直接取回，不需要重新下载。
+        for p in doomed {
+            cachedImages.removeValue(forKey: p)
         }
     }
 
@@ -449,8 +455,9 @@ class ReaderViewModel {
     /// 切换阅读模式 (水平 ↔ 垂直) 时调用，避免已下载的图片因 eviction 被移出
     /// cachedImages 后需要重新网络下载
     func restoreCachedImages(around page: Int) {
-        let lo = max(0, page - 5)
-        let hi = min(max(0, totalPages - 1), page + 5)
+        let radius = retentionRadius
+        let lo = max(0, page - radius)
+        let hi = min(max(0, totalPages - 1), page + radius)
         var restored = false
         for p in lo...hi {
             if cachedImages[p] == nil {
@@ -522,6 +529,9 @@ class ReaderViewModel {
         showKeys.removeAll()
         skipHathKeys.removeAll()
         usedSkipHathKeys.removeAll()
+        preloadTask?.cancel()
+        preloadTask = nil
+        lastPreloadAnchor = nil
         loadingPages.removeAll()
         downloadingImages.removeAll()
         downloadDir = nil
@@ -599,7 +609,12 @@ class ReaderViewModel {
     func loadCurrentPage() async {
         await loadPage(currentPage)
         await downloadImageData(currentPage)
-        await preload(around: currentPage)
+
+        preloadTask?.cancel()
+        preloadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.preload(around: self.currentPage)
+        }
     }
 
     func onPageChange(_ page: Int) async {
@@ -621,10 +636,16 @@ class ReaderViewModel {
             }
         }
 
-        await preload(around: page)
-
         // 释放远处页面
         evictDistantPages(from: page)
+
+        // 预加载不阻塞翻页: 原先 await preload 会把整个 TaskGroup 等完
+        // (默认 5 页 = 6 次网络往返)，翻页手势要等它结束才算完成，大画廊尤其明显。
+        // 改为后台推进，并在下次翻页时取消上一次未完成的预加载。
+        preloadTask?.cancel()
+        preloadTask = Task { [weak self] in
+            await self?.preload(around: page)
+        }
     }
 
     /// 下载图片数据到 NSCache，带进度追踪
@@ -983,22 +1004,74 @@ class ReaderViewModel {
     }
 
     /// 预加载 — 前 1 页 + 后 preloadImage 页 (并行)
+    // MARK: - 动态预加载
+
+    /// 设备档位决定预加载窗口 —— Mac / iPad 内存和带宽都更宽裕，
+    /// iPhone 上激进预加载反而会挤掉当前页的解码时机
+    static var platformPreloadBudget: Int {
+        #if os(macOS)
+        return 12
+        #else
+        let memoryGB = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        if UIDevice.current.userInterfaceIdiom == .pad { return memoryGB >= 8 ? 10 : 7 }
+        return memoryGB >= 6 ? 6 : 4
+        #endif
+    }
+
+    /// 实际生效的预加载页数 = 用户设置与设备预算取较小值
+    private var effectivePreloadCount: Int {
+        max(1, min(AppSettings.shared.preloadImage, Self.platformPreloadBudget))
+    }
+
+    /// 需要常驻 Observable 层的页数 —— 必须 ≥ 预加载窗口，
+    /// 否则刚预加载好的页会被 evictDistantPages 立刻扔掉，来回空转
+    var retentionRadius: Int {
+        max(5, effectivePreloadCount + 2)
+    }
+
+    /// 预加载 —— 方向感知 + 由近及远
+    ///
+    /// 相比原来的固定窗口有三点改进:
+    ///   1. 按翻页方向倾斜: 往后翻就多备后面的页，回头页只留 1~2 页兜底
+    ///   2. 按距离排序后分批发出，保证「下一页」永远排在「下五页」前面拿到带宽
+    ///   3. 每批之间检查取消，快速连翻时上一轮会被立刻中止
     func preload(around page: Int) async {
-        let preloadNum = AppSettings.shared.preloadImage
-        let lo = max(0, page - 1)
-        let hi = min(totalPages - 1, page + preloadNum)
+        let budget = effectivePreloadCount
+        let forward = lastPreloadAnchor.map { page >= $0 } ?? true
+        lastPreloadAnchor = page
+
+        // 顺着阅读方向多铺，逆向只留少量回看余量
+        let ahead = forward ? budget : max(1, budget / 3)
+        let behind = forward ? max(1, budget / 4) : budget
+
+        let lo = max(0, page - behind)
+        let hi = min(totalPages - 1, page + ahead)
         guard lo <= hi else { return }
 
-        var pagesToLoad: [Int] = []
-        for i in lo...hi where imageURLs[i] == nil && !loadingPages.contains(i) {
-            pagesToLoad.append(i)
-        }
+        let candidates = (lo...hi)
+            .filter { $0 != page && imageURLs[$0] == nil && !loadingPages.contains($0) }
+            // 距离近的先来；同距离时优先阅读方向那一侧
+            .sorted {
+                let d0 = abs($0 - page), d1 = abs($1 - page)
+                if d0 != d1 { return d0 < d1 }
+                return forward ? ($0 > $1) : ($0 < $1)
+            }
+        guard !candidates.isEmpty else { return }
 
-        await withTaskGroup(of: Void.self) { group in
-            for p in pagesToLoad {
-                group.addTask {
-                    await self.loadPage(p)
-                    await self.downloadImageData(p)
+        // 分批而不是一次性全丢进 TaskGroup:
+        // 全量并发时第 6 页可能比第 1 页先回来，用户等的恰恰是第 1 页
+        let batchSize = 3
+        for chunk in stride(from: 0, to: candidates.count, by: batchSize) {
+            if Task.isCancelled { return }
+            let batch = candidates[chunk..<min(chunk + batchSize, candidates.count)]
+            await withTaskGroup(of: Void.self) { group in
+                for p in batch {
+                    group.addTask { [weak self] in
+                        guard let self, !Task.isCancelled else { return }
+                        await self.loadPage(p)
+                        guard !Task.isCancelled else { return }
+                        await self.downloadImageData(p)
+                    }
                 }
             }
         }

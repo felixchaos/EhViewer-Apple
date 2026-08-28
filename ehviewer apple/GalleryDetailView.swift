@@ -1171,101 +1171,57 @@ struct RatingSheet: View {
 /// 多个预览图片共用一张大图，通过 offsetX 裁剪显示不同部分
 struct SpritePreviewView: View {
     let preview: NormalPreview
-    @State private var spriteImage: PlatformImage?
-    
+
+    /// 只保存**裁剪好**的那一小块，不再持有整张精灵图
+    @State private var thumbnail: PlatformImage?
+    @State private var didFail = false
+
     var body: some View {
         Group {
-            if let spriteImage = spriteImage {
-                // 从精灵图中裁剪出对应的部分
-                if let croppedImage = cropSprite(from: spriteImage) {
-                    #if os(iOS)
-                    Image(uiImage: croppedImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                    #else
-                    Image(nsImage: croppedImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                    #endif
-                } else {
-                    placeholderView
-                }
+            if let thumbnail {
+                #if os(iOS)
+                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+                #else
+                Image(nsImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+                #endif
             } else {
                 placeholderView
-                    .onAppear {
-                        loadSpriteImage()
-                    }
+            }
+        }
+        // 用 .task 而不是 .onAppear: 视图消失时自动取消，滚动飞快时不会堆积任务
+        .task(id: cacheIdentity) {
+            guard thumbnail == nil, !didFail else { return }
+            let image = await SpriteSheetCache.shared.thumbnail(
+                urlString: preview.imageUrl,
+                offsetX: preview.offsetX,
+                offsetY: preview.offsetY,
+                clipWidth: preview.clipWidth,
+                clipHeight: preview.clipHeight
+            )
+            guard !Task.isCancelled else { return }
+            if let image {
+                thumbnail = image
+            } else {
+                didFail = true
             }
         }
     }
-    
+
+    /// 同一张精灵图的不同区域要各自缓存，身份要带上裁剪参数
+    private var cacheIdentity: String {
+        "\(preview.imageUrl)|\(preview.offsetX),\(preview.offsetY),\(preview.clipWidth),\(preview.clipHeight)"
+    }
+
     private var placeholderView: some View {
         Color(.tertiarySystemFill)
             .overlay {
-                ProgressView()
-            }
-    }
-    
-    private func loadSpriteImage() {
-        guard let url = URL(string: preview.imageUrl) else { return }
-        
-        // 检查缓存
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30  // 增加超时时间
-        if let cachedResponse = URLCache.shared.cachedResponse(for: request),
-           let image = PlatformImage(data: cachedResponse.data) {
-            self.spriteImage = image
-            return
-        }
-        
-        // 下载图片
-        Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                // 缓存响应
-                let cachedResponse = CachedURLResponse(response: response, data: data)
-                URLCache.shared.storeCachedResponse(cachedResponse, for: request)
-                
-                if let image = PlatformImage(data: data) {
-                    await MainActor.run {
-                        self.spriteImage = image
-                    }
+                if didFail {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ProgressView()
                 }
-            } catch {
-                print("Failed to load sprite image: \(error)")
             }
-        }
-    }
-    
-    /// 从精灵图中裁剪出对应的预览部分
-    private func cropSprite(from image: PlatformImage) -> PlatformImage? {
-        #if os(iOS)
-        let scale = image.scale
-        let cropRect = CGRect(
-            x: CGFloat(preview.offsetX) * scale,
-            y: CGFloat(preview.offsetY) * scale,
-            width: CGFloat(preview.clipWidth) * scale,
-            height: CGFloat(preview.clipHeight) * scale
-        )
-        guard let cgImage = image.cgImage,
-              let croppedCGImage = cgImage.cropping(to: cropRect) else {
-            return nil
-        }
-        return UIImage(cgImage: croppedCGImage, scale: scale, orientation: image.imageOrientation)
-        #else
-        // macOS: NSImage 没有 scale 属性，直接使用像素坐标
-        let cropRect = CGRect(
-            x: CGFloat(preview.offsetX),
-            y: CGFloat(preview.offsetY),
-            width: CGFloat(preview.clipWidth),
-            height: CGFloat(preview.clipHeight)
-        )
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              let croppedCGImage = cgImage.cropping(to: cropRect) else {
-            return nil
-        }
-        return NSImage(cgImage: croppedCGImage, size: NSSize(width: preview.clipWidth, height: preview.clipHeight))
-        #endif
     }
 }
 

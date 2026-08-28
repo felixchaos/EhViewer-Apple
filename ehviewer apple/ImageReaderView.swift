@@ -45,6 +45,9 @@ struct ImageReaderView: View {
     // 跳页输入
     @State private var showJumpPageAlert = false
     @State private var jumpPageText = ""
+    /// 进度条拖动中的本地值 —— 松手才提交给 ViewModel
+    @State private var isSeeking = false
+    @State private var seekValue: Double = 0
 
     // 从设置读取
     @State private var readingDirection: ReadingDirection = .topToBottom
@@ -293,6 +296,13 @@ struct ImageReaderView: View {
             }
         }
         #endif
+    }
+
+    /// 页码标签用的页号 —— 拖进度条时显示拖到的目标页，
+    /// 否则松手前数字一直不动，会让人以为拖动没生效
+    private var displayedPage: Int {
+        guard isSeeking else { return vm.currentPage }
+        return min(max(0, Int(seekValue.rounded())), max(0, vm.totalPages - 1))
     }
 
     /// 护眼滤镜色 —— 设置里存的是 ARGB 整数 (对齐 Android colorFilterColor)
@@ -1240,7 +1250,7 @@ struct ImageReaderView: View {
                             Text("\(spread.primaryPage + 1) / \(vm.totalPages)")
                         }
                     } else {
-                        Text("\(vm.currentPage + 1) / \(vm.totalPages)")
+                        Text("\(displayedPage + 1) / \(vm.totalPages)")
                     }
                 }
                 .font(.subheadline.monospacedDigit())
@@ -1306,18 +1316,32 @@ struct ImageReaderView: View {
                 }
                 .disabled(vm.currentPage == 0)
 
+                // 拖动期间只更新本地 state，不碰 vm.currentPage。
+                // currentPage 是 @Observable，每动一像素写一次会让整个阅读器
+                // (ScrollView + 所有页视图) 重新求值 —— 这正是拖进度条卡顿的原因。
                 Slider(
                     value: Binding(
-                        get: { Double(vm.currentPage) },
-                        set: { vm.currentPage = Int($0) }
+                        get: { isSeeking ? seekValue : Double(vm.currentPage) },
+                        // setter 自己置 isSeeking —— 不能依赖 onEditingChanged(true)
+                        // 先于第一次 set 到达，否则它会把刚拖到的值清回当前页
+                        set: { newValue in
+                            isSeeking = true
+                            seekValue = newValue
+                        }
                     ),
                     in: 0...Double(max(vm.totalPages - 1, 1)),
                     step: 1
-                ) { isEditing in
-                    if !isEditing {
-                        if vm.isDoublePageEnabled { vm.syncSpreadIndex() }
-                        Task { await vm.onPageChange(vm.currentPage) }
-                    }
+                ) { editing in
+                    guard !editing else { return }
+                    isSeeking = false
+                    let target = Int(seekValue.rounded())
+                    guard target != vm.currentPage,
+                          target >= 0, target < vm.totalPages else { return }
+                    vm.currentPage = target
+                    vm.lazyCurrentPage = target
+                    vm.verticalScrollPage = target
+                    if vm.isDoublePageEnabled { vm.syncSpreadIndex() }
+                    Task { await vm.onPageChange(target) }
                 }
                 .tint(.white)
 
@@ -1412,7 +1436,7 @@ struct ImageReaderView: View {
                         jumpPageText = "\(vm.currentPage + 1)"
                         showJumpPageAlert = true
                     } label: {
-                        Text("\(vm.currentPage + 1) / \(vm.totalPages)")
+                        Text("\(displayedPage + 1) / \(vm.totalPages)")
                             .font(.system(size: 12, weight: .medium).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.7))
                             .frame(minWidth: 64, maxHeight: 40)

@@ -37,13 +37,17 @@ struct GalleryPreviewsView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: previewWidth, maximum: previewWidth + 20), spacing: 8)], spacing: 16) {
                 ForEach(vm.allPreviews, id: \.position) { preview in
                     previewItem(preview: preview)
+                }
+
+                // 触底哨兵 —— 只有它出现时才拉下一页。
+                // 原先把 onAppear 挂在每个格子上，滚动时每露出一个格子就要
+                // 比较一次尾部位置并可能起一个 Task，纯属浪费。
+                if !vm.allPreviews.isEmpty && !vm.isLoadingMore {
+                    Color.clear
+                        .frame(height: 1)
                         .onAppear {
-                            // 懒加载: 当预览出现时检查是否需要加载更多 (对齐 Android RecyclerView 懒加载)
-                            let lastPosition = vm.allPreviews.last?.position ?? 0
-                            if preview.position >= lastPosition - 5 {
-                                Task {
-                                    await vm.loadNextPageIfNeeded(gid: gid, token: token, totalPages: totalPages)
-                                }
+                            Task {
+                                await vm.loadNextPageIfNeeded(gid: gid, token: token, totalPages: totalPages)
                             }
                         }
                 }

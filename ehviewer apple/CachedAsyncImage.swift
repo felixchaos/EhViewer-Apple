@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import ImageIO
 import EhAPI
 import EhSettings
 #if os(macOS)
@@ -46,6 +47,45 @@ private final class ThumbnailMemoryCache: @unchecked Sendable {
     func set(_ image: PlatformImage, for url: URL) {
         let cost = image.size.width * image.size.height * 4
         cache.setObject(image, forKey: url as NSURL, cost: Int(cost))
+    }
+}
+
+/// 离主线程的降采样解码
+///
+/// `CachedAsyncImage` 是 View，`load()` 自然跑在 MainActor 上，
+/// 原先三处 `PlatformImage(data:)` 都在主线程做全尺寸解码 ——
+/// 网格里几十张图一起滚动时必然掉帧。
+/// 这里改为在 detached 任务里用 ImageIO 直接解出目标尺寸的缩略图：
+/// 既不占主线程，也不会把整张原图的位图留在内存里。
+enum ThumbnailDecoder {
+    /// 缩略图长边上限。列表缩略图、预览格子、封面都远小于此，
+    /// 取一个宽松值保证清晰度，同时避免把 4000px 原图整张解进内存。
+    static let defaultMaxPixel: CGFloat = 1200
+
+    static func decode(_ data: Data, maxPixel: CGFloat = defaultMaxPixel) async -> PlatformImage? {
+        await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+                return nil
+            }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                source, 0, options as CFDictionary
+            ) else {
+                // GIF 等 ImageIO 缩略图失败的格式回退到整图解码
+                return PlatformImage(data: data)
+            }
+            #if os(macOS)
+            return NSImage(cgImage: cgImage,
+                           size: NSSize(width: cgImage.width, height: cgImage.height))
+            #else
+            return UIImage(cgImage: cgImage)
+            #endif
+        }.value
     }
 }
 
@@ -138,7 +178,7 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         // 2. URLCache 磁盘缓存 (直接检查, 避免网络请求)
         let cacheRequest = URLRequest(url: url)
         if let cached = URLCache.shared.cachedResponse(for: cacheRequest),
-           let img = PlatformImage(data: cached.data) {
+           let img = await ThumbnailDecoder.decode(cached.data) {
             ThumbnailMemoryCache.shared.set(img, for: url)
             self.image = img
             return
@@ -154,7 +194,7 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
             }
             let fbRequest = URLRequest(url: fallback)
             if let cached = URLCache.shared.cachedResponse(for: fbRequest),
-               let img = PlatformImage(data: cached.data) {
+               let img = await ThumbnailDecoder.decode(cached.data) {
                 ThumbnailMemoryCache.shared.set(img, for: fallback)
                 self.image = img
                 return
@@ -205,7 +245,7 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
                 let cachedResponse = CachedURLResponse(response: response, data: data)
                 URLCache.shared.storeCachedResponse(cachedResponse, for: request)
 
-                if let img = PlatformImage(data: data) {
+                if let img = await ThumbnailDecoder.decode(data) {
                     return img
                 } else {
                     // 数据无法解码为图片 — 此 URL 无效

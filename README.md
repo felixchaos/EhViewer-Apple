@@ -1,7 +1,7 @@
 # EhViewer-Apple
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.0-brightgreen" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-1.3.1-brightgreen" alt="Version"/>
   <img src="https://img.shields.io/badge/platform-iOS%2026%2B%20%7C%20macOS%2026%2B-blue" alt="Platform"/>
   <img src="https://img.shields.io/badge/swift-6.0-orange" alt="Swift 6.0"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
