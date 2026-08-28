@@ -155,6 +155,9 @@ struct RootView: View {
         // 对齐 Android: 深色模式支持 (Settings.KEY_THEME)
         // 0=跟随系统, 1=浅色, 2=深色  (使用 cachedColorScheme 避免 body 直接读 AppSettings)
         .preferredColorScheme(cachedColorScheme)
+        // 强调色提到根视图：引导流程（站点选择、18+ 警告、登录）在
+        // MainTabView 之外，此前不受它的 .tint 影响，第一屏还是系统蓝
+        .tint(EhColor.accent)
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // 记录进入后台的时间
