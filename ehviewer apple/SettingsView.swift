@@ -88,6 +88,7 @@ struct SettingsView: View {
                 siteSection
                 filterSection
                 displaySection
+                listThumbnailSection
                 favoritesSection
                 networkSection
                 readingSection
@@ -96,10 +97,10 @@ struct SettingsView: View {
                 securitySection
                 advancedSection
                 aboutSection
-            case .appearance, .listThumbnail:
-                // 外观与列表呈现耦合得很紧（缩略图大小同时影响列表与详情），
-                // 拆成两个入口但落到同一组，避免用户在两页之间来回找
+            case .appearance:
                 displaySection
+            case .listThumbnail:
+                listThumbnailSection
             case .downloads:
                 downloadSection
                 cacheSection
@@ -521,7 +522,16 @@ struct SettingsView: View {
                 get: { AppSettings.shared.showReadProgress },
                 set: { AppSettings.shared.showReadProgress = $0 }
             ))
+        }
+    }
 
+    /// 列表与缩略图。
+    ///
+    /// 设计稿把它与「外观」分成两个二级页。此前我让两个入口落到同一组，
+    /// 理由是缩略图大小同时影响列表与详情；但那条理由对用户不成立——
+    /// 他点「列表与缩略图」就是想调列表，不该先滚过一堆主题与显示开关。
+    private var listThumbnailSection: some View {
+        Section("列表与缩略图") {
             Picker("缩略图大小", selection: Binding(
                 get: { AppSettings.shared.thumbSize },
                 set: { AppSettings.shared.thumbSize = $0 }

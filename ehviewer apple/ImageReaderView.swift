@@ -1229,12 +1229,18 @@ struct ImageReaderView: View {
         // 通栏会在图上压出一条硬边，胶囊只占它需要的宽度。
         HStack(spacing: 10) {
             HStack(spacing: 6) {
-                // 设计稿这枚胶囊里还有画廊标题，但阅读器只拿到 gid/token，
-                // 标题需要额外查一次库；先留返回键，标题待后续补数据源
                 Button(action: { dismiss() }) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(EhColor.label)
+                }
+
+                if let title = readerTitle {
+                    Text(title)
+                        .font(EhFont.caption)
+                        .foregroundStyle(EhColor.label)
+                        .lineLimit(1)
+                        .frame(maxWidth: 150, alignment: .leading)
                 }
             }
             .padding(.horizontal, 14)
@@ -1277,6 +1283,17 @@ struct ImageReaderView: View {
         }
         .padding(.horizontal, EhSpacing.page)
         .padding(.top, 50)
+    }
+
+    /// 顶栏胶囊里的画廊标题。
+    ///
+    /// 阅读器只拿到 gid/token，标题从详情缓存里取——这份缓存在进阅读器之前
+    /// 必然已经填好（详情页是唯一入口），所以不必为它多发一次请求。
+    /// 取不到就不显示，胶囊缩成只有返回键，不占无谓的宽度。
+    private var readerTitle: String? {
+        guard let info = GalleryCache.shared.getDetail(gid: gid)?.info else { return nil }
+        let title = info.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle)
+        return title.isEmpty ? nil : title
     }
 
     /// 底部页码文案 —— 双页时显示成 "12–13"

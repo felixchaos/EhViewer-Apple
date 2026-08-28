@@ -1338,6 +1338,15 @@ class GalleryListViewModel {
     private var currentCategory: Int = 0
     private var currentSearchMode: SearchMode = .normal
 
+    /// 云收藏夹拉取成功时记下时刻，供收藏页显示「云端同步 · N 分钟前」。
+    ///
+    /// 只记 slot >= 0 的云收藏夹：本地收藏与「全部」不经网络同步，
+    /// 给它们盖一个同步时间是误导。
+    func recordFavoriteSyncIfNeeded(mode: GalleryListView.ListMode) {
+        guard case .favorites(let slot) = mode, slot >= 0 else { return }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "fav_last_sync")
+    }
+
     func loadGalleries(mode: GalleryListView.ListMode) {
         guard !isLoading else {
             print("[EhVM] loadGalleries: SKIPPED (already loading)")
@@ -1725,6 +1734,7 @@ class GalleryListViewModel {
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: href)
                 self.galleries = result.galleries
+                recordFavoriteSyncIfNeeded(mode: mode)
                 self.hasMore = result.nextHref != nil
                 self.prevHref = result.prevHref
                 self.nextHref = result.nextHref
@@ -1754,6 +1764,7 @@ class GalleryListViewModel {
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: jumpUrl)
                 self.galleries = result.galleries
+                recordFavoriteSyncIfNeeded(mode: mode)
                 // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
                 if result.nextHref != nil {
                     self.hasMore = true
@@ -1885,6 +1896,7 @@ class GalleryListViewModel {
         do {
             let result = try await EhAPI.shared.getGalleryList(url: seekUrl)
             self.galleries = result.galleries
+            recordFavoriteSyncIfNeeded(mode: mode)
             // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
             if result.nextHref != nil {
                 self.hasMore = true
@@ -2014,6 +2026,7 @@ class GalleryListViewModel {
 
             if page == 0 {
                 self.galleries = result.galleries
+                recordFavoriteSyncIfNeeded(mode: mode)
             } else {
                 self.galleries.append(contentsOf: result.galleries)
             }

@@ -846,11 +846,16 @@ struct CookieLoginView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            Text("登录").bold()
+                            Text("验证并登录").bold()
                             Spacer()
                         }
                     }
                     .disabled(!parsed.isUsable)
+                } footer: {
+                    // 设计稿这句写的是「仅保存在本机 Keychain」，但实现用的是
+                    // HTTPCookieStorage（App 沙盒内的 Cookie 容器），不是钥匙串。
+                    // 照抄就是把一句不实的安全承诺印在界面上，这里如实写。
+                    Text("Cookie 保存在本机的 App 沙盒内，不会上传到任何第三方。ExHentai 需要 igneous 才能访问，缺它只能浏览 E-Hentai。")
                 }
             }
             .navigationTitle("Cookie 登录")
