@@ -297,12 +297,15 @@ enum ProfileRoute: Hashable {
         case .filters:          FilterView()
         case .hosts:            HostsView()
         case .news:             EhNewsView()
-        // 设置的二级页暂时统一落到设置主页；后续按设计稿拆成独立页面时
-        // 只需在此处替换目标，入口与路由不必再动。
+        // 设置二级页用 scope 过滤同一个 SettingsView。
         // （SecurityView 是启动时的锁屏认证页，不是隐私设置页，别混用。）
-        case .appearance, .listAndThumbnail, .downloads, .reading,
-             .privacy, .network, .tagDatabase:
-            SettingsView(isPushed: true)
+        case .appearance:       SettingsView(scope: .appearance)
+        case .listAndThumbnail: SettingsView(scope: .listThumbnail)
+        case .downloads:        SettingsView(scope: .downloads)
+        case .reading:          SettingsView(scope: .reading)
+        case .privacy:          SettingsView(scope: .privacy)
+        case .network:          SettingsView(scope: .network)
+        case .tagDatabase:      SettingsView(scope: .tagDatabase)
         }
     }
 }

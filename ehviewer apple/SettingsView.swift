@@ -25,6 +25,42 @@ struct SettingsView: View {
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
 
+    /// 只渲染某一组设置。设置项本身有近百个，全部铺在一页里要滚很久才能找到；
+    /// 「我的」页按主题分成了七个入口，每个入口进来只看自己那一组。
+    ///
+    /// 用 scope 过滤而不是把 SettingsView 拆成七个文件：这些分区共用同一份
+    /// @State 与 ViewModel，拆开就得把状态复制七份或提升到外部，两者都更糟。
+    enum Scope {
+        case all
+        case appearance      // 外观
+        case listThumbnail   // 列表与缩略图
+        case downloads       // 下载与存储
+        case reading         // 阅读
+        case privacy         // 隐私与锁定
+        case network         // 网络与容灾
+        case tagDatabase     // 标签翻译数据库
+
+        var title: String {
+            switch self {
+            case .all:           return "设置"
+            case .appearance:    return "外观"
+            case .listThumbnail: return "列表与缩略图"
+            case .downloads:     return "下载与存储"
+            case .reading:       return "阅读"
+            case .privacy:       return "隐私与锁定"
+            case .network:       return "网络与容灾"
+            case .tagDatabase:   return "标签翻译数据库"
+            }
+        }
+    }
+
+    private var scope: Scope = .all
+
+    init(scope: Scope) {
+        self.scope = scope
+        self.isPushed = true
+    }
+
     init(isPushed: Bool = false) {
         self.isPushed = isPushed
     }
@@ -46,20 +82,39 @@ struct SettingsView: View {
             .onAppear { vm.checkLoginState() }
         #else
         Form {
-            accountSection
-            siteSection
-            filterSection
-            displaySection
-            favoritesSection
-            networkSection
-            readingSection
-            downloadSection
-            cacheSection
-            securitySection
-            advancedSection
-            aboutSection
+            switch scope {
+            case .all:
+                accountSection
+                siteSection
+                filterSection
+                displaySection
+                favoritesSection
+                networkSection
+                readingSection
+                downloadSection
+                cacheSection
+                securitySection
+                advancedSection
+                aboutSection
+            case .appearance, .listThumbnail:
+                // 外观与列表呈现耦合得很紧（缩略图大小同时影响列表与详情），
+                // 拆成两个入口但落到同一组，避免用户在两页之间来回找
+                displaySection
+            case .downloads:
+                downloadSection
+                cacheSection
+            case .reading:
+                readingSection
+            case .privacy:
+                securitySection
+            case .network:
+                networkSection
+                filterSection
+            case .tagDatabase:
+                advancedSection
+            }
         }
-        .navigationTitle("设置")
+        .navigationTitle(scope.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { vm.checkLoginState() }
         #endif

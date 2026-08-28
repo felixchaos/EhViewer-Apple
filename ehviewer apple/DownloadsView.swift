@@ -228,110 +228,63 @@ struct DownloadsView: View {
     // MARK: - 批量操作底栏
 
     private var batchActionBar: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 0) {
-                // 全选/取消全选
-                Button {
-                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
-                    if selectedGids == allGids {
-                        selectedGids.removeAll()
-                    } else {
-                        selectedGids = allGids
-                    }
-                } label: {
-                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
-                    VStack(spacing: 2) {
-                        Image(systemName: selectedGids == allGids ? "checkmark.circle" : "checkmark.circle.fill")
-                            .font(.title3)
-                        Text(selectedGids == allGids ? "取消全选" : "全选")
-                            .font(.caption2)
-                    }
-                }
-                .frame(maxWidth: .infinity)
+        // 浮起玻璃条而非通栏工具栏：与底部导航条同一语言，
+        // 且多选态下它是临时出现的，浮条更像「临时接管」而不是常驻结构
+        HStack(spacing: 0) {
+            let allGids = Set(filteredTasks.map { $0.gallery.gid })
+            let isAll = !allGids.isEmpty && selectedGids == allGids
 
-                // 开始
-                Button {
-                    batchResume()
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "play.fill")
-                            .font(.title3)
-                        Text("开始")
-                            .font(.caption2)
-                    }
-                }
-                .disabled(selectedGids.isEmpty)
-                .frame(maxWidth: .infinity)
-
-                // 暂停
-                Button {
-                    batchPause()
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "pause.fill")
-                            .font(.title3)
-                        Text("暂停")
-                            .font(.caption2)
-                    }
-                }
-                .disabled(selectedGids.isEmpty)
-                .frame(maxWidth: .infinity)
-
-                // 移动标签
-                Button {
-                    showMoveLabelSheet = true
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "tag")
-                            .font(.title3)
-                        Text("标签")
-                            .font(.caption2)
-                    }
-                }
-                .disabled(selectedGids.isEmpty)
-                .frame(maxWidth: .infinity)
-
-                // 删除
-                Button {
-                    showBatchDeleteConfirm = true
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "trash")
-                            .font(.title3)
-                        Text("删除")
-                            .font(.caption2)
-                    }
-                    .foregroundColor(selectedGids.isEmpty ? .secondary : .red)
-                }
-                .disabled(selectedGids.isEmpty)
-                .frame(maxWidth: .infinity)
-
-                // 退出选择
-                Button {
-                    exitSelectMode()
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "xmark.circle")
-                            .font(.title3)
-                        Text("退出")
-                            .font(.caption2)
-                    }
-                }
-                .frame(maxWidth: .infinity)
+            batchButton(
+                symbol: isAll ? "checkmark.circle.fill" : "checkmark.circle",
+                title: isAll ? "取消全选" : "全选",
+                enabled: !filteredTasks.isEmpty
+            ) {
+                selectedGids = isAll ? [] : allGids
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 4)
-            .background(.bar)
 
-            // 已选计数
-            if !selectedGids.isEmpty {
-                Text("已选择 \(selectedGids.count) 项")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 4)
+            batchButton(symbol: "play.fill", title: "开始", enabled: !selectedGids.isEmpty) {
+                batchResume()
+            }
+            batchButton(symbol: "pause.fill", title: "暂停", enabled: !selectedGids.isEmpty) {
+                batchPause()
+            }
+            batchButton(symbol: "tag", title: "标签", enabled: !selectedGids.isEmpty) {
+                showMoveLabelSheet = true
+            }
+            batchButton(
+                symbol: "trash", title: "删除",
+                enabled: !selectedGids.isEmpty, tint: EhColor.danger
+            ) {
+                showBatchDeleteConfirm = true
             }
         }
+        .frame(height: EhSize.tabBarHeight)
+        .ehGlass(cornerRadius: EhSize.tabBarRadius)
+        .padding(.horizontal, EhSize.tabBarSideInset)
+        .padding(.bottom, EhSize.tabBarBottomInset)
+    }
+
+    private func batchButton(
+        symbol: String, title: String, enabled: Bool,
+        tint: Color = EhColor.accent, action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                    .font(.system(size: 17))
+                Text(title)
+                    .font(EhFont.tiny)
+            }
+            .foregroundStyle(enabled ? tint : EhColor.tertiaryLabel)
+            .frame(maxWidth: .infinity)
+            .frame(height: EhSize.tabBarHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     // MARK: - 存储计算

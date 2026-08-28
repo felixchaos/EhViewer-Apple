@@ -782,20 +782,36 @@ struct GalleryListView: View {
     ]
     @State private var selectedJumpNode: String = "1d"
 
+    /// 把 "2w" 这样的相对跨度换算成实际日期，显示在快捷项下面
+    private static func targetDateHint(for node: String) -> String {
+        guard let unit = node.last,
+              let amount = Int(node.dropLast()) else { return "" }
+        var component = DateComponents()
+        switch unit {
+        case "d": component.day = -amount
+        case "w": component.day = -amount * 7
+        case "m": component.month = -amount
+        case "y": component.year = -amount
+        default: return ""
+        }
+        guard let date = Calendar.current.date(byAdding: component, to: Date()) else { return "" }
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd"
+        return f.string(from: date)
+    }
+
     private var jumpSheet: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     // 模式切换 (对齐 Android JumpDateSelector 的 toggle 按钮)
-                    Picker("跳页模式", selection: $jumpMode) {
-                        Text("快捷跳转").tag(0)
-                        Text("日期选择").tag(1)
-                        if viewModel.totalPages > 0 {
-                            Text("页码跳转").tag(2)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
+                    EhSegmented(
+                        items: viewModel.totalPages > 0
+                            ? [(0, "快捷"), (1, "按日期"), (2, "按页码")]
+                            : [(0, "快捷"), (1, "按日期")],
+                        selection: $jumpMode
+                    )
+                    .padding(.horizontal, EhSpacing.page)
                     .padding(.top, 8)
 
                     if jumpMode == 0 {
@@ -813,19 +829,26 @@ struct GalleryListView: View {
                                     Button {
                                         selectedJumpNode = node.value
                                     } label: {
-                                        Text(node.label)
-                                            .font(.body)
+                                        VStack(spacing: 2) {
+                                            Text(node.label)
+                                                .font(EhFont.body)
+                                            // 「1 周」不如「跳到 08-21」直观：
+                                            // 用户脑子里想的是日期，不是相对天数
+                                            Text(Self.targetDateHint(for: node.value))
+                                                .font(EhFont.mono(11))
+                                                .foregroundStyle(EhColor.tertiaryLabel)
+                                        }
                                             .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 12)
+                                            .padding(.vertical, 10)
                                             .background(
                                                 selectedJumpNode == node.value
-                                                    ? Color.accentColor.opacity(0.15)
-                                                    : Color.secondary.opacity(0.08)
+                                                    ? EhColor.accentWash
+                                                    : EhColor.fill
                                             )
                                             .foregroundStyle(
                                                 selectedJumpNode == node.value
-                                                    ? Color.accentColor
-                                                    : .primary
+                                                    ? EhColor.accent
+                                                    : EhColor.label
                                             )
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
                                             .overlay(
