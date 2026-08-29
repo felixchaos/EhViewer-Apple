@@ -625,6 +625,37 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "built_ex_hosts") }
     }
 
+    // MARK: - 代理 (对齐 Android Settings.getProxyType/Ip/Port)
+
+    /// 代理模式：0 = 跟随系统，1 = 手动 HTTP 代理。
+    ///
+    /// Android 的代理设置还支持 SOCKS，iOS 这边只做 HTTP(S)：
+    /// URLSession 的 connectionProxyDictionary 只有 HTTP/HTTPS 那组键是
+    /// 受支持的，SOCKS 相关键属于 CFStream 时代的遗留，对 URLSession 不生效。
+    /// 与其做一个点了没用的 SOCKS 选项，不如不给。
+    @ObservationIgnored
+    public var proxyMode: Int {
+        get { _defaults.integer(forKey: "proxy_mode") }
+        set { _defaults.set(newValue, forKey: "proxy_mode") }
+    }
+
+    @ObservationIgnored
+    public var proxyHost: String {
+        get { _defaults.string(forKey: "proxy_host") ?? "" }
+        set { _defaults.set(newValue, forKey: "proxy_host") }
+    }
+
+    @ObservationIgnored
+    public var proxyPort: Int {
+        get { _defaults.integer(forKey: "proxy_port") }
+        set { _defaults.set(newValue, forKey: "proxy_port") }
+    }
+
+    /// 手动代理是否配置完整。不完整就当没配，绝不能半配着把网络搞挂。
+    public var manualProxyIsUsable: Bool {
+        proxyMode == 1 && !proxyHost.isEmpty && proxyPort > 0 && proxyPort <= 65535
+    }
+
     // media_scan 与 apply_nav_bar_theme_color 两项已移除：
     //
     //   media_scan  控制是否往下载目录放 .nomedia，用来决定系统相册扫不扫描

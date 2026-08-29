@@ -14,23 +14,79 @@ public actor EhAPI {
     /// 通用 URLSession (对应 Android mOkHttpClient)
     /// 不使用自定义 delegate — 与 Safari 等系统 App 行为完全一致
     /// 让系统自动处理 TLS 验证和代理路由
-    private let session: URLSession
+    private var session: URLSession
 
     /// 图片专用 URLSession (对应 Android mImageOkHttpClient，不跟随重定向)
     /// 仅使用最小化 delegate 控制重定向行为
-    private let imageSession: URLSession
+    private var imageSession: URLSession
 
     /// 域名前置专用 URLSession (内置 DNS 直连 + 自定义 TLS 验证)
     /// 对应 Android: OkHttp 的 Dns 接口 (EhDns.kt) 在 socket 层用内置 IP 解析域名
     /// iOS 无等效接口，因此通过 URL 中替换 IP + Host header 保留域名 + 自定义证书验证实现
     /// 用于: VPN 规则模式分流不当 / DNS 污染 / GFW SNI 拦截时，作为自动回退方案
-    private let directSession: URLSession
+    private var directSession: URLSession
 
     /// 域名前置 + 不跟随重定向 (图片请求的回退)
-    private let directImageSession: URLSession
+    private var directImageSession: URLSession
 
     /// 最大重试次数 (超时/连接错误时自动重试)
     private static let maxRetries = 1
+
+    /// 手动代理字典。没配置完整时返回 nil —— 让系统按自己的规则走。
+    ///
+    /// 只给 HTTP/HTTPS 两组键：URLSession 支持的就这些。
+    nonisolated static func manualProxyDictionary() -> [AnyHashable: Any]? {
+        let settings = AppSettings.shared
+        guard settings.manualProxyIsUsable else { return nil }
+        let host = settings.proxyHost
+        let port = settings.proxyPort
+        return [
+            kCFNetworkProxiesHTTPEnable as String: 1,
+            kCFNetworkProxiesHTTPProxy as String: host,
+            kCFNetworkProxiesHTTPPort as String: port,
+            "HTTPSEnable": 1,
+            "HTTPSProxy": host,
+            "HTTPSPort": port,
+        ]
+    }
+
+    /// 代理设置改了之后重建会话。
+    ///
+    /// URLSessionConfiguration 是在创建会话时拷贝的，改设置不会影响已建好的
+    /// 会话——不重建的话用户改完代理要重启 App 才生效。
+    /// 已经在飞的请求仍走旧会话，让它们自己跑完。
+    public func applyProxySettings() {
+        let old = session
+        let oldImage = imageSession
+        rebuildProxiedSessions()
+        // 旧会话等在途请求结束后自行释放，不要 invalidateAndCancel：
+        // 那会把用户正在看的那一页也打断
+        old.finishTasksAndInvalidate()
+        oldImage.finishTasksAndInvalidate()
+    }
+
+    private func rebuildProxiedSessions() {
+        let proxy = Self.manualProxyDictionary()
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        config.httpCookieStorage = .shared
+        config.urlCache = URLCache.shared
+        config.allowsCellularAccess = true
+        config.connectionProxyDictionary = proxy
+        session = URLSession(configuration: config)
+
+        let imgConfig = URLSessionConfiguration.default
+        imgConfig.timeoutIntervalForRequest = 15
+        imgConfig.timeoutIntervalForResource = 20
+        imgConfig.httpCookieStorage = .shared
+        imgConfig.urlCache = URLCache.shared
+        imgConfig.allowsCellularAccess = true
+        imgConfig.connectionProxyDictionary = proxy
+        imageSession = URLSession(configuration: imgConfig,
+                                  delegate: RedirectBlockDelegate(), delegateQueue: nil)
+    }
 
     private init() {
         // 共享缓存
@@ -50,6 +106,10 @@ public actor EhAPI {
         config.httpCookieStorage = .shared
         config.urlCache = sharedCache
         config.allowsCellularAccess = true
+        // 手动代理（对齐 Android 的 proxy 设置）。没配就保持 nil，
+        // 让系统按自己的规则走 VPN / 系统代理 —— 这正是原来那条
+        // 「不设置 connectionProxyDictionary」注释想保住的行为。
+        config.connectionProxyDictionary = Self.manualProxyDictionary()
         // 不使用 waitsForConnectivity — 立即尝试，快速失败后交由域名前置回退
         session = URLSession(configuration: config)
 
@@ -60,6 +120,7 @@ public actor EhAPI {
         imgConfig.httpCookieStorage = .shared
         imgConfig.urlCache = sharedCache
         imgConfig.allowsCellularAccess = true
+        imgConfig.connectionProxyDictionary = Self.manualProxyDictionary()
         imageSession = URLSession(configuration: imgConfig, delegate: RedirectBlockDelegate(), delegateQueue: nil)
 
         // === 域名前置回退 Session (对应 Android OkHttp Dns 接口内置域名解析) ===

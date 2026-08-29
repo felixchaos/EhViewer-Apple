@@ -439,6 +439,45 @@ struct SettingsView: View {
 
     private var networkSection: some View {
         Section("网络") {
+            // App 内代理 (对齐 Android advanced_settings.xml 的 ProxyPreference)。
+            // 此前只能被动显示系统代理，没法给 App 单独指一个。
+            Picker("代理", selection: $vm.proxyMode) {
+                Text("跟随系统").tag(0)
+                Text("手动 HTTP").tag(1)
+            }
+            .pickerStyle(.segmented)
+
+            if vm.proxyMode == 1 {
+                HStack {
+                    Text("地址")
+                    TextField("127.0.0.1", text: $vm.proxyHost)
+                        .multilineTextAlignment(.trailing)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                }
+                HStack {
+                    Text("端口")
+                    TextField("7890", value: $vm.proxyPort, format: .number.grouping(.never))
+                        .multilineTextAlignment(.trailing)
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        #endif
+                }
+                Button("应用代理设置") {
+                    Task { await EhAPI.shared.applyProxySettings() }
+                    EhToast.success(AppSettings.shared.manualProxyIsUsable
+                                    ? "已切换到 \(AppSettings.shared.proxyHost):\(AppSettings.shared.proxyPort)"
+                                    : "地址或端口不完整，仍按跟随系统处理")
+                }
+                Text("只支持 HTTP/HTTPS 代理。URLSession 不支持 SOCKS，"
+                     + "所以这里没有 SOCKS 选项——给一个点了没用的开关更糟。"
+                     + "地址或端口填不全时按「跟随系统」处理，不会把网络配死。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Toggle("域名前置", isOn: $vm.domainFronting)
 
             Toggle("DNS over HTTPS", isOn: $vm.dnsOverHttps)
@@ -1521,6 +1560,22 @@ class SettingsViewModel {
         }
     }
     
+    /// 代理三项走 ViewModel 而不是直接读 AppSettings：
+    /// AppSettings 的这些属性是 @ObservationIgnored 的，直接在 body 里读，
+    /// 改了不会触发重绘——切到「手动 HTTP」之后地址/端口输入框不会出现。
+    var proxyMode: Int = 0 {
+        didSet {
+            AppSettings.shared.proxyMode = proxyMode
+            Task { await EhAPI.shared.applyProxySettings() }
+        }
+    }
+    var proxyHost: String = "" {
+        didSet { AppSettings.shared.proxyHost = proxyHost }
+    }
+    var proxyPort: Int = 0 {
+        didSet { AppSettings.shared.proxyPort = proxyPort }
+    }
+
     var domainFronting: Bool = false {
         didSet { AppSettings.shared.domainFronting = domainFronting }
     }
@@ -1615,6 +1670,9 @@ class SettingsViewModel {
         listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
+        proxyMode = AppSettings.shared.proxyMode
+        proxyHost = AppSettings.shared.proxyHost
+        proxyPort = AppSettings.shared.proxyPort
         domainFronting = AppSettings.shared.domainFronting
         dnsOverHttps = AppSettings.shared.dnsOverHttps
         builtInHosts = AppSettings.shared.builtInHosts
@@ -2118,6 +2176,9 @@ class SettingsViewModel {
         listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
+        proxyMode = AppSettings.shared.proxyMode
+        proxyHost = AppSettings.shared.proxyHost
+        proxyPort = AppSettings.shared.proxyPort
         domainFronting = AppSettings.shared.domainFronting
         dnsOverHttps = AppSettings.shared.dnsOverHttps
         builtInHosts = AppSettings.shared.builtInHosts

@@ -71,6 +71,7 @@
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
 				"ehviewer appleTests/CredentialStorageTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
+				"ehviewer appleTests/ProxySettingsTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 				Info.plist,
@@ -83,6 +84,7 @@
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
 				"ehviewer appleTests/CredentialStorageTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
+				"ehviewer appleTests/ProxySettingsTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 			);
