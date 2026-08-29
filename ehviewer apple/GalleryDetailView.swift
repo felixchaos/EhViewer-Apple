@@ -208,12 +208,12 @@ struct GalleryDetailView: View {
             )
 
             VStack(alignment: .leading, spacing: 5) {
-                // 分类从填充方块改为小字：详情页封面已经带了分类色条，
-                // 再来一个实心方块是同一信息说两遍
-                Text(gallery.category.name)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(gallery.category.labelColor)
-
+                // 分类只在封面角标上出现一次。
+                //
+                // 这里原本还有一行分类名小字，注释写的是「封面带的是分类色条，
+                // 所以文字不重复」——但对齐 Android 那一版之后 EhCoverThumbnail
+                // 画的已经是分类角标（右上角那块 Western），文字于是成了
+                // 同一个词并排出现两遍。
                 Text(gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle))
                     .font(EhFont.title)
                     .foregroundStyle(EhColor.label)
