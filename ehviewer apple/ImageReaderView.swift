@@ -413,6 +413,41 @@ struct ImageReaderView: View {
         saveReadingProgress()
     }
 
+    /// 从本地已有的记录里凑出一条历史。
+    ///
+    /// 依次找：已有的历史行（续读同一本，保留原信息只更新时间）→ 下载记录 →
+    /// 本地收藏。三处都没有就返回 nil，宁可不记，也不要往历史里塞一行认不出来的空记录。
+    private static func historyRecordFromLocalSources(
+        gid: Int64, token: String, pages: Int
+    ) -> HistoryRecord? {
+        if let existing = (try? EhDatabase.shared.getHistory(gid: gid)) ?? nil {
+            return existing
+        }
+        if let dl = (try? EhDatabase.shared.getDownload(gid: gid)) ?? nil {
+            var r = HistoryRecord(gid: gid, token: dl.token, title: dl.title,
+                                  titleJpn: dl.titleJpn, thumb: dl.thumb,
+                                  category: dl.category, posted: dl.posted,
+                                  uploader: dl.uploader, rating: dl.rating,
+                                  simpleLanguage: dl.simpleLanguage,
+                                  pages: dl.pages > 0 ? dl.pages : pages,
+                                  mode: 0, date: Date())
+            r.simpleTags = dl.simpleTags
+            return r
+        }
+        if let fav = (try? EhDatabase.shared.getLocalFavorite(gid: gid)) ?? nil {
+            var r = HistoryRecord(gid: gid, token: fav.token, title: fav.title,
+                                  titleJpn: fav.titleJpn, thumb: fav.thumb,
+                                  category: fav.category, posted: fav.posted,
+                                  uploader: fav.uploader, rating: fav.rating,
+                                  simpleLanguage: fav.simpleLanguage,
+                                  pages: fav.pages > 0 ? fav.pages : pages,
+                                  mode: 0, date: Date())
+            r.simpleTags = fav.simpleTags
+            return r
+        }
+        return nil
+    }
+
     /// Fix F2-2: 只有真正打开阅读器才计入历史 (从 GalleryDetailViewModel.loadDetail 迁移至此)
     private func recordReadingHistory() {
         // 从缓存中获取画廊信息
@@ -428,8 +463,6 @@ struct ImageReaderView: View {
             record.posted = info.posted
             record.uploader = info.uploader
             record.rating = info.rating
-        record.simpleTags = info.simpleTags
-        record.simpleLanguage = info.simpleLanguage
             record.simpleTags = info.simpleTags
             record.simpleLanguage = info.simpleLanguage
             do {
@@ -439,13 +472,13 @@ struct ImageReaderView: View {
             } catch {
                 debugLog("Failed to record reading history: \(error)")
             }
-        } else {
-            // 没有缓存时使用最少的信息 (从下载列表直接打开的情况)
-            let record = HistoryRecord(
-                gid: gid, token: token,
-                title: "", category: 0,
-                pages: pages, mode: 0, date: Date()
-            )
+        } else if var record = Self.historyRecordFromLocalSources(gid: gid, token: token, pages: pages) {
+            // 没有详情缓存（从下载列表 / 收藏直接打开阅读器）时，去本地已有的记录里取。
+            //
+            // 此前这里直接写一条 title: "" / category: 0 的空记录，
+            // 历史页上就是一行「Untitled · Unknown · 0.00」——比不记还糟：
+            // 用户既认不出是哪一本，那行还占着位置。
+            record.date = Date()
             do {
                 try EhDatabase.shared.insertHistory(record)
                 try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
@@ -969,8 +1002,9 @@ struct ImageReaderView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: estimatedHeight)
+            // 同上：看护到出结果为止，不是只试一次
             .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
-                await vm.downloadImageData(index)
+                await vm.superviseLoading(of: index)
             }
         } else {
             VStack(spacing: 8) {
@@ -985,8 +1019,9 @@ struct ImageReaderView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: estimatedHeight)
+            // 同上：解析地址这一步被取消后也要有人接着管
             .task {
-                await vm.loadPageWithRetry(index)
+                await vm.superviseLoading(of: index)
             }
         }
     }
@@ -1114,8 +1149,11 @@ struct ImageReaderView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 看护到出结果为止。此前这里是一次性的 .task：下载被取消之后
+                // 占位符还在屏幕上（它从没消失过），id 也没变，于是不会重跑，
+                // 这一页就永远停在转圈上。
                 .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
-                    await vm.downloadImageData(index)
+                    await vm.superviseLoading(of: index)
                 }
             } else {
                 VStack(spacing: 8) {
@@ -1129,8 +1167,10 @@ struct ImageReaderView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 解析 pToken / 图片地址这一步同样会被翻页取消，
+                // 一样交给看护，不然卡在这一层也是永久转圈
                 .task {
-                    await vm.loadPageWithRetry(index)
+                    await vm.superviseLoading(of: index)
                 }
             }
         }

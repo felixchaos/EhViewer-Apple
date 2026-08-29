@@ -1043,6 +1043,50 @@ class ReaderViewModel {
         max(5, effectivePreloadCount + 2)
     }
 
+    /// 这一页卡死了吗 —— 没图、没报错、也没有任何人在为它干活。
+    ///
+    /// 这个状态是真实存在的，不是理论上的：`downloadImageData` 开头有
+    /// `guard !downloadingImages.contains(index) else { return }`，而下载任务
+    /// 被取消时（翻页会 `preloadTask?.cancel()`）走的是 CancellationError 分支，
+    /// 那里只清掉 downloadProgress，`defer` 再把 index 从 downloadingImages 摘掉。
+    /// 于是出现这样一串：
+    ///
+    ///   1. 预加载正在下第 N 页，进度已经到 100%
+    ///   2. 用户翻页 → preloadTask 取消
+    ///   3. onPageChange(N) 调 downloadImageData(N)，但此刻 N 还在
+    ///      downloadingImages 里 → 直接 return
+    ///   4. 被取消的那个任务收尾：清进度、从 downloadingImages 移除
+    ///
+    /// 最后没有任何任务在跑，进度是 nil，图也没有——视图落到
+    /// 「下载图片中…」那个无限转圈的分支，而且永远不会自己好。
+    func isStalled(_ index: Int) -> Bool {
+        !isImageReady(index)
+            && !errorPages.contains(index)
+            && !downloadingImages.contains(index)
+            && !loadingPages.contains(index)
+    }
+
+    /// 盯着某一页，直到它出图或出错。
+    ///
+    /// 由占位视图的 `.task` 驱动：占位符在屏幕上就一直看着，视图消失时
+    /// SwiftUI 取消这个 Task，看护自然结束。用轮询而不是一次性重试，是因为
+    /// 卡死可以发生在任意时刻（取消随时可能来），一次性的 `.task` 只在
+    /// 出现时跑一次，之后再卡就没人管了。
+    func superviseLoading(of index: Int) async {
+        while !Task.isCancelled {
+            if isImageReady(index) || errorPages.contains(index) { return }
+            if isStalled(index) {
+                if imageURLs[index] == nil {
+                    await loadPageWithRetry(index)
+                } else {
+                    await downloadImageData(index)
+                }
+            }
+            // 只在占位符还挂着时轮询，间隔取得比人眼察觉卡顿的阈值大一点
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
     /// 这一页的图片已经在手上了吗（Observable 层或 NSCache 里）。
     /// 预加载的取舍全看它——问「URL 有没有」是问错了问题。
     func isImageReady(_ index: Int) -> Bool {

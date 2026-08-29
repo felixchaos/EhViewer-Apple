@@ -287,6 +287,14 @@ public final class EhDatabase: Sendable {
         }
     }
 
+    /// 按 gid 取单条历史。续读同一本时用它保住原有的标题/封面/评分——
+    /// 阅读器没有详情缓存时（从下载或收藏直接打开）只知道 gid 和 token。
+    public func getHistory(gid: Int64) throws -> HistoryRecord? {
+        try dbQueue.read { db in
+            try HistoryRecord.fetchOne(db, key: gid)
+        }
+    }
+
     public func deleteHistory(gid: Int64) throws {
         try dbQueue.write { db in
             _ = try HistoryRecord.deleteOne(db, key: gid)
