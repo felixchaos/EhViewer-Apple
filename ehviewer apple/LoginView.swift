@@ -541,20 +541,30 @@ struct WebViewLogin: UIViewRepresentable {
                 var passHash: String?
 
                 for cookie in cookies {
+                    // 认证 Cookie 一律经 EhCookieManager 写：它会写成会话 Cookie
+                    // 并把持久副本放进钥匙串。直接塞进 HTTPCookieStorage 会
+                    // 带着 WebView 给的过期时间落盘，pass hash 就又明文躺在容器里了。
                     if cookie.name == "ipb_member_id" {
                         memberId = cookie.value
-                        HTTPCookieStorage.shared.setCookie(cookie)
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
                     }
                     if cookie.name == "ipb_pass_hash" {
                         passHash = cookie.value
-                        HTTPCookieStorage.shared.setCookie(cookie)
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
                     }
-                    if cookie.name == "igneous" || cookie.name == "sk" || cookie.name == "star" {
+                    if cookie.name == "igneous" {
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
+                    }
+                    if cookie.name == "sk" || cookie.name == "star" {
                         HTTPCookieStorage.shared.setCookie(cookie)
                     }
                 }
 
                 if memberId != nil && passHash != nil {
+                    EhCookieManager.shared.persistCredentials()
                     self.hasDetected = true
                     // 尝试从页面提取用户名
                     DispatchQueue.main.async {
@@ -635,20 +645,30 @@ struct WebViewLogin: NSViewRepresentable {
                 var passHash: String?
 
                 for cookie in cookies {
+                    // 认证 Cookie 一律经 EhCookieManager 写：它会写成会话 Cookie
+                    // 并把持久副本放进钥匙串。直接塞进 HTTPCookieStorage 会
+                    // 带着 WebView 给的过期时间落盘，pass hash 就又明文躺在容器里了。
                     if cookie.name == "ipb_member_id" {
                         memberId = cookie.value
-                        HTTPCookieStorage.shared.setCookie(cookie)
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
                     }
                     if cookie.name == "ipb_pass_hash" {
                         passHash = cookie.value
-                        HTTPCookieStorage.shared.setCookie(cookie)
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
                     }
-                    if cookie.name == "igneous" || cookie.name == "sk" || cookie.name == "star" {
+                    if cookie.name == "igneous" {
+                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
+                                                        domain: cookie.domain)
+                    }
+                    if cookie.name == "sk" || cookie.name == "star" {
                         HTTPCookieStorage.shared.setCookie(cookie)
                     }
                 }
 
                 if memberId != nil && passHash != nil {
+                    EhCookieManager.shared.persistCredentials()
                     self.hasDetected = true
                     DispatchQueue.main.async {
                         webView.evaluateJavaScript(
@@ -855,10 +875,7 @@ struct CookieLoginView: View {
                     }
                     .disabled(!parsed.isUsable)
                 } footer: {
-                    // 设计稿这句写的是「仅保存在本机 Keychain」，但实现用的是
-                    // HTTPCookieStorage（App 沙盒内的 Cookie 容器），不是钥匙串。
-                    // 照抄就是把一句不实的安全承诺印在界面上，这里如实写。
-                    Text("Cookie 保存在本机的 App 沙盒内，不会上传到任何第三方。ExHentai 需要 igneous 才能访问，缺它只能浏览 E-Hentai。")
+                    Text("凭据保存在本机钥匙串，仅本设备可用，不进 iCloud、不随备份迁移，也不会上传到任何第三方。ExHentai 需要 igneous 才能访问，缺它只能浏览 E-Hentai。")
                 }
             }
             .navigationTitle("Cookie 登录")
@@ -915,6 +932,10 @@ struct CookieLoginView: View {
         if let igneous = cookies.igneous, !igneous.isEmpty {
             cookieManager.setCookie(name: EhCookieManager.keyIgneous, value: igneous, domain: EhCookieManager.domainExhentai)
         }
+
+        // 落到钥匙串。setCookie 写的是会话 Cookie，不持久化，
+        // 不存钥匙串的话下次启动就登出了。
+        cookieManager.persistCredentials()
 
         AppSettings.shared.isLogin = true
         appState.isSignedIn = true

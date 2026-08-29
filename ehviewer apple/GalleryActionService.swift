@@ -108,12 +108,25 @@ final class GalleryActionService {
 
     // MARK: - 下载
 
+    /// 下载前要不要先问标签。对齐 Android CommonOperations.startDownload：
+    /// 设了默认标签 → 直接下；一个标签都没建过 → 直接下；否则弹选择器。
+    ///
+    /// iOS 端此前完全没有这一步：建了下载标签也没用，所有本子一律进默认组。
+    func downloadLabelChoiceNeeded() -> Bool {
+        if AppSettings.shared.hasDefaultDownloadLabel { return false }
+        let labels = (try? EhDatabase.shared.getAllDownloadLabels()) ?? []
+        return !labels.isEmpty
+    }
+
     /// 快速下载 (Fix A-1: 已失败/已暂停的任务允许重新启动)
     ///
     /// 提示与状态缓存写在这里而不是各调用方：列表、历史、收藏、详情页
     /// 都会调它，此前只有详情页做了反馈，其余三处点下去屏幕毫无变化。
-    func startDownload(gallery: GalleryInfo) async {
-        await DownloadManager.shared.startDownload(gallery: gallery)
+    func startDownload(gallery: GalleryInfo, label: String? = nil) async {
+        // 没显式指定标签时用默认标签（可能是 nil = 默认分组）
+        let resolved = label ?? (AppSettings.shared.hasDefaultDownloadLabel
+                                 ? AppSettings.shared.defaultDownloadLabel : nil)
+        await DownloadManager.shared.startDownload(gallery: gallery, label: resolved)
         NotificationCenter.default.post(name: .galleryDownloadChanged, object: nil,
                                         userInfo: ["gid": gallery.gid, "downloading": true])
         // 对齐 Android added_to_download_list

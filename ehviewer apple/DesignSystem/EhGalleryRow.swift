@@ -63,6 +63,11 @@ struct EhGalleryRow: View {
 
     /// 行右侧的按钮（续读、暂停/重试…）
     var accessory: AnyView? = nil
+    /// 点标签 chip 的去向。nil = chip 只是展示，不可点。
+    ///
+    /// 只有「点了能搜」的页面才传它。收藏、下载、历史三页点标签要跨 Tab
+    /// 跳到首页再搜，那是另一件事，不在这一版里。
+    var onTagTap: ((String) -> Void)? = nil
 
     @Environment(\.responsiveLayout) private var layout
 
@@ -93,6 +98,33 @@ struct EhGalleryRow: View {
         if let zh = EhTagDatabase.shared.getTranslation(tag), zh != tag { return zh }
         guard let colon = tag.firstIndex(of: ":") else { return tag }
         return String(tag[tag.index(after: colon)...])
+    }
+
+    /// 标签 chip。可点时用 Button 包起来，并把纵向内边距撑到 6pt——
+    /// 10pt 的字加 2pt 内边距只有 14pt 高，手指按不中。
+    @ViewBuilder
+    private func tagChip(_ tag: String) -> some View {
+        let label = Text(Self.tagLabel(tag))
+            .font(.system(size: 10))
+            .foregroundStyle(onTagTap == nil ? EhColor.secondaryLabel : EhColor.accent)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, onTagTap == nil ? 2 : 6)
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(onTagTap == nil ? EhColor.fill : EhColor.accentWash)
+            }
+
+        if let onTagTap {
+            Button {
+                Haptics.tap()
+                onTagTap(tag)
+            } label: { label }
+            // .plain 之外的样式会让 List 把整行的点击也算进来
+            .buttonStyle(.plain)
+        } else {
+            label
+        }
     }
 
     /// 状态标记要不要占一行
@@ -133,16 +165,7 @@ struct EhGalleryRow: View {
                     // 铺满标签会把标题挤成配角
                     HStack(spacing: 4) {
                         ForEach(tags.prefix(4), id: \.self) { tag in
-                            Text(Self.tagLabel(tag))
-                                .font(.system(size: 10))
-                                .foregroundStyle(EhColor.secondaryLabel)
-                                .lineLimit(1)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background {
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(EhColor.fill)
-                                }
+                            tagChip(tag)
                         }
                         Spacer(minLength: 0)
                     }
@@ -234,7 +257,8 @@ extension EhGalleryRow {
         extraMeta: [MetaItem] = [],
         progress: Double? = nil,
         progressLabel: String? = nil,
-        accessory: AnyView? = nil
+        accessory: AnyView? = nil,
+        onTagTap: ((String) -> Void)? = nil
     ) {
         let settings = AppSettings.shared
         var meta = extraMeta
@@ -262,7 +286,8 @@ extension EhGalleryRow {
             trailingText: gallery.posted,
             progress: progress,
             progressLabel: progressLabel,
-            accessory: accessory
+            accessory: accessory,
+            onTagTap: onTagTap
         )
     }
 }

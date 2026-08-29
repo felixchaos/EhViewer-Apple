@@ -311,6 +311,15 @@ struct GalleryListView: View {
             .sheet(isPresented: $showAdvancedSearch) {
                 AdvancedSearchView(state: advancedSearch)
             }
+            .sheet(item: $pendingDownload) { gallery in
+                DownloadLabelPicker(
+                    onSelect: { label in
+                        pendingDownload = nil
+                        Task { await GalleryActionService.shared.startDownload(gallery: gallery, label: label) }
+                    },
+                    onCancel: { pendingDownload = nil }
+                )
+            }
             .sheet(item: $pendingFavorite) { gallery in
                 FavoriteSlotPicker(
                     onSelect: { slot in
@@ -489,7 +498,8 @@ struct GalleryListView: View {
                     GalleryRow(
                         gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                         onRequestDownload: requestDownload,
-                        onRequestFavorite: requestFavorite
+                        onRequestFavorite: requestFavorite,
+                        onTagTap: searchTag
                     )
                 }
                 .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
@@ -580,7 +590,8 @@ struct GalleryListView: View {
                             GalleryRow(
                         gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                         onRequestDownload: requestDownload,
-                        onRequestFavorite: requestFavorite
+                        onRequestFavorite: requestFavorite,
+                        onTagTap: searchTag
                     )
                                 .tag(gallery)
                         }
@@ -670,6 +681,8 @@ struct GalleryListView: View {
 
     /// 等待选择收藏夹的画廊（没有设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
+    /// 待选下载标签的画廊（对齐 Android 的下载标签对话框）
+    @State private var pendingDownload: GalleryInfo?
 
 
     private var searchBarView: some View {
@@ -703,9 +716,24 @@ struct GalleryListView: View {
         }
     }
 
-    /// 下载
+    /// 点列表行里的标签 chip：把它收成一枚 token 并立刻搜。
+    /// 标签在列表里一直只是装饰，看到感兴趣的还得自己回搜索框打一遍。
+    private func searchTag(_ tag: String) {
+        let quoted = tag.contains(":") ? tag : "\"\(tag)$\""
+        searchTokens = [quoted]
+        searchFieldText = ""
+        isSearchFocused = false
+        viewModel.performSearch(query: quoted, advanced: advancedSearch)
+    }
+
+    /// 下载。建过下载标签且没设默认时先问放哪个标签——
+    /// 对齐 Android CommonOperations.startDownload。
     private func requestDownload(_ gallery: GalleryInfo) {
-        Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+        if GalleryActionService.shared.downloadLabelChoiceNeeded() {
+            pendingDownload = gallery
+        } else {
+            Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+        }
     }
 
     /// 提交搜索。
@@ -1160,6 +1188,8 @@ struct GalleryRow: View {
     /// 这些都不是一行自己能决定的。
     var onRequestDownload: (GalleryInfo) -> Void = { _ in }
     var onRequestFavorite: (GalleryInfo) -> Void = { _ in }
+    /// 点标签直接按这个标签搜
+    var onTagTap: ((String) -> Void)? = nil
 
     /// 行的显示全部交给 EhGalleryRow(gallery:)，这里只负责把封面 URL 修正好。
     /// 显示开关、缩略图缩放、已下载/已收藏都在那个组件里统一处理——
@@ -1188,7 +1218,7 @@ struct GalleryRow: View {
     }
 
     var body: some View {
-        EhGalleryRow(gallery: displayGallery)
+        EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap)
             .contentShape(Rectangle())
         .contextMenu {
             // 下载

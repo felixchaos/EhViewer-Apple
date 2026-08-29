@@ -41,6 +41,8 @@ struct ImageReaderView: View {
     /// 页面网格（对齐 Android 阅读器的「目录」）——
     /// 此前跳页只有底部那条 slider，200 页的本子要靠手感拖
     @State private var showPageGrid = false
+    /// 单页分享/存储用的临时文件（对齐 Android page_menu_share / save_to）
+    @State private var shareItem: ReaderShareItem?
     @State private var hasAppliedInitialPage = false
     @State private var isZoomed = false
     @State private var showTutorial = false
@@ -187,6 +189,11 @@ struct ImageReaderView: View {
                 autoPageEnabled: $autoPageEnabled
             )
         }
+        #if os(iOS)
+        .sheet(item: $shareItem) { item in
+            ShareSheet(items: [item.url])
+        }
+        #endif
         .sheet(isPresented: $showPageGrid) {
             ReaderPageGrid(total: vm.totalPages, current: vm.currentPage) { target in
                 showPageGrid = false
@@ -979,6 +986,52 @@ struct ImageReaderView: View {
 
     // MARK: - Single Page Image (翻页模式单页)
 
+    /// 单页菜单。四项与 Android GalleryActivity.showPageDialog 一一对应：
+    /// 刷新本页 / 分享 / 保存到相册 / 存储到文件。
+    @ViewBuilder
+    private func pageMenu(index: Int, image: PlatformImage) -> some View {
+        #if os(iOS)
+        Button {
+            // 对齐 Android: removeCache(page) + forceRequest(page)
+            Task { await vm.retryLoadPage(index) }
+        } label: {
+            Label("刷新本页", systemImage: "arrow.clockwise")
+        }
+
+        Button {
+            if let url = ReaderImageSaver.temporaryFile(for: image, gid: gid, page: index) {
+                shareItem = ReaderShareItem(url: url)
+            } else {
+                EhToast.failure("无法准备图片")
+            }
+        } label: {
+            Label("分享", systemImage: "square.and.arrow.up")
+        }
+
+        Button {
+            Task { await ReaderImageSaver.saveToPhotos(image) }
+        } label: {
+            Label("保存到相册", systemImage: "photo.badge.arrow.down")
+        }
+
+        Button {
+            // 「存储到文件」走的也是系统面板，那里有「存储到文件」这一项，
+            // 对应 Android 的 page_menu_save_to
+            if let url = ReaderImageSaver.temporaryFile(for: image, gid: gid, page: index) {
+                shareItem = ReaderShareItem(url: url)
+            }
+        } label: {
+            Label("存储到文件", systemImage: "folder.badge.plus")
+        }
+        #else
+        Button {
+            Task { await vm.retryLoadPage(index) }
+        } label: {
+            Label("刷新本页", systemImage: "arrow.clockwise")
+        }
+        #endif
+    }
+
     private func pageImage(index: Int) -> some View {
         Group {
             if vm.errorPages.contains(index) {
@@ -1009,6 +1062,11 @@ struct ImageReaderView: View {
                         isZoomed = zoomed
                     }
                 )
+                // 单页菜单（对齐 Android GalleryActivity.showPageDialog）。
+                // 此前一项都没有：一页加载坏了只能退出重进，想留一张也没出口。
+                .contextMenu {
+                    pageMenu(index: index, image: cachedImage)
+                }
                 #else
                 ZoomableImageView(
                     image: cachedImage,
@@ -1596,7 +1654,60 @@ struct ReaderSettingsSheet: View {
                     ))
                 }
 
+                // Android dialog_gallery_menu.xml 里有而我们缺的三项：
+                // 屏幕方向、音量键翻页、护眼滤镜。前两项一直没有入口，
+                // 护眼滤镜的开关此前只在底栏那排模式块里。
+                Section("屏幕方向") {
+                    Picker("方向", selection: Binding(
+                        get: { AppSettings.shared.screenRotation },
+                        set: {
+                            AppSettings.shared.screenRotation = $0
+                            applyScreenRotation($0)
+                        }
+                    )) {
+                        Text("跟随系统").tag(0)
+                        Text("锁定竖屏").tag(1)
+                        Text("锁定横屏").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("护眼滤镜") {
+                    Toggle("启用", isOn: Binding(
+                        get: { AppSettings.shared.colorFilter },
+                        set: { AppSettings.shared.colorFilter = $0 }
+                    ))
+                    if AppSettings.shared.colorFilter {
+                        // 存的是 ARGB，这里只让调不透明度——色相固定为暖黄，
+                        // 和 Android 默认的 0x20000000 语义一致
+                        HStack {
+                            Text("强度").font(EhFont.caption)
+                            Slider(value: Binding(
+                                get: {
+                                    Double((AppSettings.shared.colorFilterColor >> 24) & 0xFF)
+                                },
+                                set: { alpha in
+                                    let rgb = AppSettings.shared.colorFilterColor & 0x00FFFFFF
+                                    AppSettings.shared.colorFilterColor = (Int(alpha) << 24) | rgb
+                                }
+                            ), in: 0...128)
+                        }
+                    }
+                }
+
                 Section("行为") {
+                    #if os(iOS)
+                    Toggle("音量键翻页", isOn: Binding(
+                        get: { AppSettings.shared.volumePage },
+                        set: { AppSettings.shared.volumePage = $0 }
+                    ))
+                    if AppSettings.shared.volumePage {
+                        Toggle("反转音量键方向", isOn: Binding(
+                            get: { AppSettings.shared.reverseVolumePage },
+                            set: { AppSettings.shared.reverseVolumePage = $0 }
+                        ))
+                    }
+                    #endif
                     Toggle("屏幕常亮", isOn: Binding(
                         get: { AppSettings.shared.keepScreenOn },
                         set: { AppSettings.shared.keepScreenOn = $0 }

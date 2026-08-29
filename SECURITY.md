@@ -29,16 +29,21 @@
 
 以下不是漏洞，而是当前设计的既定事实，列在这里以便你评估风险。如果你的威胁模型不接受其中某一条，请不要使用本项目。
 
-### 登录凭据存放在 Cookie 容器而非钥匙串
+### 登录凭据存放在钥匙串
 
-登录状态由 E-Hentai 的会话 Cookie（`ipb_member_id`、`ipb_pass_hash`、`igneous`）承载，保存在 `HTTPCookieStorage` 中，即 App 沙盒容器内的 Cookie 存储。
+登录状态由 E-Hentai 的会话 Cookie（`ipb_member_id`、`ipb_pass_hash`、`igneous`）承载。`ipb_pass_hash` 是长期凭据，泄露等同于账号被接管。
 
-- **iOS / iPadOS**：受 App 沙盒与文件保护保护，其他 App 读不到。但越狱设备、未加密的本地备份，或能访问容器的取证工具可以取出。
-- **macOS**：见下条，风险更高。
+这三个 Cookie 的**持久副本**存在系统钥匙串里，属性为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`：
 
-`ipb_pass_hash` 是长期凭据，泄露等同于账号被接管。改用钥匙串存储是已知的改进方向，尚未实施。
+- 设备开机后解锁过一次才可读；
+- 不进 iCloud 钥匙串，也不随备份迁移到别的设备；
+- 退出登录会一并删除。
 
-**缓解措施**：不要在不受你控制的设备上登录；退出登录会清除 Cookie。
+`HTTPCookieStorage` 里仍然有一份，但被写成**会话 Cookie**（`discard = TRUE`），只存在于内存，不写进容器里的 `Cookies.binarycookies`。进程退出即消失，下次启动从钥匙串恢复。
+
+**仍然存在的风险**：进程运行期间凭据在内存中；能在设备解锁状态下执行代码的攻击者（越狱、调试器附加）仍可读取钥匙串条目。macOS 版未启用沙盒，见下条。
+
+**缓解措施**：不要在不受你控制的设备上登录；退出登录会同时清除 Cookie 与钥匙串条目。
 
 ### macOS 版本未启用 App 沙盒
 

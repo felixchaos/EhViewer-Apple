@@ -32,10 +32,71 @@ public final class EhCookieManager: @unchecked Sendable {
     public static let domainExhentai = ".exhentai.org"
     public static let domainForums = "forums.e-hentai.org"
 
+    /// 三个认证 Cookie。它们的持久副本在钥匙串里，Cookie 罐里只放会话副本。
+    private static let authCookieNames: Set<String> = [
+        keyIPBMemberId, keyIPBPassHash, keyIgneous,
+    ]
+
     private init() {
         storage = HTTPCookieStorage.shared
+        // 先把钥匙串里的凭据放回 Cookie 罐——它们是会话 Cookie，
+        // 上次进程退出时就没了
+        restoreCredentialsFromKeychain()
         // 在初始化时确保 nw=1 已注入
         injectNWCookie()
+    }
+
+    // MARK: - 钥匙串凭据
+
+    /// 把当前的认证 Cookie 落到钥匙串。任何写入认证 Cookie 的路径都要调它。
+    @discardableResult
+    public func persistCredentials() -> Bool {
+        guard EhCredentialStore.isAvailable else { return false }
+        return EhCredentialStore.save(EhCredentials(
+            memberId: memberId,
+            passHash: passHash,
+            igneous: igneous
+        ))
+    }
+
+    /// 启动时从钥匙串恢复。
+    ///
+    /// 已经有值就不覆盖——迁移期间旧版本留在 Cookie 罐里的持久 Cookie
+    /// 仍然有效，此时应该以它为准并顺手写进钥匙串。
+    private func restoreCredentialsFromKeychain() {
+        // 钥匙串用不了时什么都不做：此时认证 Cookie 走的是持久 Cookie，
+        // 它们本来就还在罐子里
+        guard EhCredentialStore.isAvailable else { return }
+
+        let existing = getCookies(for: Self.domainEhentai)
+        if existing[Self.keyIPBMemberId] != nil, existing[Self.keyIPBPassHash] != nil {
+            // 旧版本遗留的持久 Cookie：迁移到钥匙串，并把落盘的那份换成会话副本
+            let creds = EhCredentials(memberId: existing[Self.keyIPBMemberId],
+                                      passHash: existing[Self.keyIPBPassHash],
+                                      igneous: igneous)
+            EhCredentialStore.save(creds)
+            rewriteAuthCookiesAsSession(creds)
+            return
+        }
+
+        guard let creds = EhCredentialStore.load(), !creds.isEmpty else { return }
+        rewriteAuthCookiesAsSession(creds)
+    }
+
+    /// 用会话 Cookie 的形式重新写入三个认证 Cookie。
+    /// 会话 Cookie 不落盘，容器里的 Cookies.binarycookies 因此不再有 pass hash。
+    private func rewriteAuthCookiesAsSession(_ creds: EhCredentials) {
+        if let memberId = creds.memberId {
+            setCookie(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainEhentai)
+            setCookie(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainExhentai)
+        }
+        if let passHash = creds.passHash {
+            setCookie(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainEhentai)
+            setCookie(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainExhentai)
+        }
+        if let igneous = creds.igneous {
+            setCookie(name: Self.keyIgneous, value: igneous, domain: Self.domainExhentai)
+        }
     }
 
     // MARK: - 登录状态检查
@@ -96,14 +157,24 @@ public final class EhCookieManager: @unchecked Sendable {
 
     /// 设置单个 Cookie
     public func setCookie(name: String, value: String, domain: String, path: String = "/") {
-        let properties: [HTTPCookiePropertyKey: Any] = [
+        var properties: [HTTPCookiePropertyKey: Any] = [
             .name: name,
             .value: value,
             .domain: domain,
             .path: path,
             .secure: "TRUE",
-            .expires: Date.distantFuture,
         ]
+        if Self.authCookieNames.contains(name), EhCredentialStore.isAvailable {
+            // 认证 Cookie 写成会话 Cookie：不落盘，容器里的
+            // Cookies.binarycookies 因此不再有明文 pass hash。
+            // 持久副本在钥匙串里，下次启动由它恢复。
+            properties[.discard] = "TRUE"
+        } else {
+            // 钥匙串不可用时退回旧行为（持久 Cookie）。
+            // 安全性回到改动前的水平，但登录不会丢——两害相权，
+            // 悄悄把用户登出比 Cookie 落盘更糟。
+            properties[.expires] = Date.distantFuture
+        }
         if let cookie = HTTPCookie(properties: properties) {
             writeQueue.async { [storage] in
                 storage.setCookie(cookie)
@@ -172,6 +243,8 @@ public final class EhCookieManager: @unchecked Sendable {
         clearCookies(for: Self.domainEhentai)
         clearCookies(for: Self.domainExhentai)
         clearCookies(for: Self.domainForums)
+        // 钥匙串里的凭据也要一起清，否则下次启动又被恢复回来
+        EhCredentialStore.clear()
     }
 
     /// 清除 igneous Cookie — Sad Panda 检测后自动调用 (V-15)
@@ -186,6 +259,11 @@ public final class EhCookieManager: @unchecked Sendable {
                     storage.deleteCookie(cookie)
                 }
             }
+        }
+        // 钥匙串里的 igneous 也要失效，否则重启又活过来
+        if var creds = EhCredentialStore.load() {
+            creds.igneous = nil
+            EhCredentialStore.save(creds)
         }
     }
 

@@ -69,6 +69,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
+				"ehviewer appleTests/CredentialStorageTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 				Info.plist,
@@ -79,6 +80,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
+				"ehviewer appleTests/CredentialStorageTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 			);

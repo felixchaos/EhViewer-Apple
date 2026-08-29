@@ -9,6 +9,7 @@ import SwiftUI
 import EhModels
 import EhDownload
 import EhDatabase
+import EhSettings
 #if os(macOS)
 import AppKit
 #endif
@@ -659,6 +660,19 @@ struct DownloadsView: View {
                     selectedGids.removeAll()
                 } label: {
                     Label("批量操作", systemImage: "checkmark.circle")
+                }
+
+                // 勾了「记住这个标签」之后要有地方改回来，
+                // 否则那个选择就是单向的
+                if AppSettings.shared.hasDefaultDownloadLabel {
+                    let name = AppSettings.shared.defaultDownloadLabel ?? "默认分组"
+                    Button {
+                        AppSettings.shared.hasDefaultDownloadLabel = false
+                        AppSettings.shared.defaultDownloadLabel = nil
+                        EhToast.info("下载时会重新询问标签")
+                    } label: {
+                        Label("默认标签：\(name) · 改回每次询问", systemImage: "tag.slash")
+                    }
                 }
 
                 Divider()
