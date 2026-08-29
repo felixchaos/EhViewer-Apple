@@ -118,12 +118,16 @@ struct ProfileHomeView: View {
             EhHairline(inset: EhSpacing.page)
 
             HStack(alignment: .top, spacing: 0) {
-                statColumn(
-                    title: "图片配额",
-                    value: quotaValueText,
-                    footnote: quotaFootnote,
-                    progress: quotaProgress
-                )
+                // 配额受 showEhLimits 控制（对齐 Android show_eh_limits）。
+                // 这个设置一直只有声明、没有任何地方读它，配额卡片无条件显示。
+                if AppSettings.shared.showEhLimits {
+                    statColumn(
+                        title: "图片配额",
+                        value: quotaValueText,
+                        footnote: quotaFootnote,
+                        progress: quotaProgress
+                    )
+                }
                 statColumn(
                     title: "缓存",
                     value: Self.formatBytes(cacheBytes),
@@ -183,7 +187,10 @@ struct ProfileHomeView: View {
             // 图标同样换成表示"挡掉"的斜杠眼，不用漏斗。
             quickEntry(.filters, symbol: "eye.slash", title: "过滤器")
             quickEntry(.hosts, symbol: "globe", title: "Hosts")
-            quickEntry(.news, symbol: "envelope", title: "站内公告")
+            // 站内公告受 showEhEvents 控制（对齐 Android show_eh_events）
+            if AppSettings.shared.showEhEvents {
+                quickEntry(.news, symbol: "envelope", title: "站内公告")
+            }
         }
     }
 

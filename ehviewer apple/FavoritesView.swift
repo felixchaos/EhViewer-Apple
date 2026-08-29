@@ -22,6 +22,12 @@ struct FavoritesView: View {
 
     // MARK: - 批量操作状态 (对齐 Android FavoritesScene 选择模式)
     @State private var isSelectMode = false
+    /// 云端收藏夹的多选状态（与本地收藏的 isSelectMode 分开：
+    /// 两者的批量动作完全不同，本地是删库、云端是调接口换收藏夹）
+    @State private var isCloudSelecting = false
+    @State private var cloudSelection: Set<Int64> = []
+    /// 当前云端收藏夹列表的内容，用来把选中的 gid 解析回 GalleryInfo
+    @State private var cloudGalleries: [GalleryInfo] = []
     @State private var selectedGids: Set<Int64> = []
     @State private var showMoveSheet = false
     @State private var showDeleteConfirm = false
@@ -78,6 +84,12 @@ struct FavoritesView: View {
                         if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
                             localBatchToolbar
                         }
+                        // 云端收藏夹的批量操作（对齐 Android FavoritesScene 的
+                        // 长按多选 + 次级 FAB：批量下载 / 移出收藏 / 换收藏夹）。
+                        // 此前只有本地收藏有批量操作，云端收藏夹连多选都没有。
+                        if selectedSlot >= 0 {
+                            cloudBatchToolbar
+                        }
                     }
 
                     slotPicker
@@ -88,8 +100,15 @@ struct FavoritesView: View {
                         // "全部": 合并本地收藏 + 在线收藏
                         allFavoritesContent(embedded: false)
                     } else {
-                        GalleryListView(mode: .favorites(slot: selectedSlot), searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
-                            .id(selectedSlot)
+                        GalleryListView(
+                            mode: .favorites(slot: selectedSlot),
+                            searchKeyword: searchText.isEmpty ? nil : searchText,
+                            hidesOwnSearchBar: true,
+                            isSelecting: $isCloudSelecting,
+                            selectedGids: $cloudSelection,
+                            visibleGalleries: $cloudGalleries
+                        )
+                        .id(selectedSlot)
                     }
                 }
                 .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
@@ -101,6 +120,104 @@ struct FavoritesView: View {
                 }
                 // 动作已并入页头，不再用系统工具栏
             }
+        }
+    }
+
+    // MARK: - 云端收藏夹批量操作
+
+    private var cloudBatchToolbar: some View {
+        Menu {
+            if isCloudSelecting {
+                Button {
+                    isCloudSelecting = false
+                    cloudSelection.removeAll()
+                } label: {
+                    Label("退出选择", systemImage: "xmark.circle")
+                }
+
+                Divider()
+
+                Button {
+                    batchDownloadCloud()
+                } label: {
+                    Label("下载选中 (\(cloudSelection.count))", systemImage: "arrow.down.circle")
+                }
+                .disabled(cloudSelection.isEmpty)
+
+                // 换收藏夹和移出，走的都是 addFavorites：
+                // dstCat 0–9 = 移动到该收藏夹，-1 = 移出收藏
+                Menu {
+                    ForEach(0..<10) { slot in
+                        if slot != selectedSlot {
+                            Button(AppSettings.shared.favCatName(slot)) {
+                                batchMoveCloud(to: slot)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("移动到… (\(cloudSelection.count))", systemImage: "folder")
+                }
+                .disabled(cloudSelection.isEmpty)
+
+                Divider()
+
+                Button(role: .destructive) {
+                    batchMoveCloud(to: -1)
+                } label: {
+                    Label("移出收藏 (\(cloudSelection.count))", systemImage: "heart.slash")
+                }
+                .disabled(cloudSelection.isEmpty)
+            } else {
+                Button {
+                    isCloudSelecting = true
+                    cloudSelection.removeAll()
+                } label: {
+                    Label("批量操作", systemImage: "checkmark.circle")
+                }
+            }
+        } label: {
+            Image(systemName: isCloudSelecting ? "checkmark.circle.fill" : "ellipsis.circle")
+        }
+    }
+
+    /// 批量下载选中的云端收藏
+    private func batchDownloadCloud() {
+        let gids = cloudSelection
+        guard !gids.isEmpty else { return }
+        Task {
+            for info in cloudGalleries where gids.contains(info.gid) {
+                await GalleryActionService.shared.startDownload(gallery: info)
+            }
+            isCloudSelecting = false
+            cloudSelection.removeAll()
+        }
+    }
+
+    /// 批量移动 / 移出。slot == -1 表示移出收藏。
+    private func batchMoveCloud(to slot: Int) {
+        let gids = cloudSelection
+        guard !gids.isEmpty else { return }
+        Task {
+            var moved = 0
+            for info in cloudGalleries where gids.contains(info.gid) {
+                do {
+                    try await EhAPI.shared.addFavorites(
+                        gid: info.gid, token: info.token, dstCat: slot)
+                    moved += 1
+                    NotificationCenter.default.post(
+                        name: .galleryFavoriteChanged, object: nil,
+                        userInfo: ["gid": info.gid, "favorited": slot >= 0, "slot": slot])
+                } catch {
+                    debugLog("[Favorites] 批量操作失败 gid=\(info.gid): \(error)")
+                }
+            }
+            if moved == gids.count {
+                EhToast.success(slot >= 0 ? "已移动 \(moved) 本" : "已移出 \(moved) 本")
+            } else {
+                EhToast.failure("成功 \(moved) / \(gids.count) 本")
+            }
+            isCloudSelecting = false
+            cloudSelection.removeAll()
         }
     }
 

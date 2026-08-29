@@ -523,6 +523,19 @@ struct SettingsView: View {
                 set: { AppSettings.shared.showGalleryRating = $0 }
             ))
 
+            // 这两项对齐 Android show_eh_limits / show_eh_events。
+            // 此前只在 AppSettings 里声明过，没有任何界面读它们，
+            // 也没有开关——「我的」页的配额卡片和站内公告入口一直是写死显示的。
+            Toggle("显示图片配额", isOn: Binding(
+                get: { AppSettings.shared.showEhLimits },
+                set: { AppSettings.shared.showEhLimits = $0 }
+            ))
+
+            Toggle("显示站内公告入口", isOn: Binding(
+                get: { AppSettings.shared.showEhEvents },
+                set: { AppSettings.shared.showEhEvents = $0 }
+            ))
+
             Toggle("显示阅读进度", isOn: Binding(
                 get: { AppSettings.shared.showReadProgress },
                 set: { AppSettings.shared.showReadProgress = $0 }

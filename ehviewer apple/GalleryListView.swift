@@ -71,6 +71,13 @@ struct GalleryListView: View {
     /// 收藏页的「全部」把本地收藏区块和这个在线列表叠在一起：没登录时在线
     /// 列表永远是空的，于是本地收藏下面永远吊着一句「这个收藏夹是空的」。
     private var hidesEmptyState = false
+    /// 多选模式。由父视图（收藏页）驱动：云端收藏夹此前完全没有批量操作，
+    /// 想从收藏夹里删掉一本只能一本本进详情页。
+    private var selectionBindings: (isSelecting: Binding<Bool>, selected: Binding<Set<Int64>>)?
+    /// 把当前列表内容回传给父视图。
+    /// 批量操作需要 token，而 gid 是查不到 token 的：GalleryCache 里只有
+    /// 用户点开过的那几本，靠它去解析会静默跳过绝大多数选中项。
+    private var visibleGalleries: Binding<[GalleryInfo]>?
 
     /// 顶部横向切页的选中项。非 nil 时在搜索栏下方渲染「首页/订阅/热门/排行」切页条。
     /// 只有作为浏览容器的根列表才传入；标签列表、搜索结果等推入的列表不显示切页条。
@@ -116,12 +123,19 @@ struct GalleryListView: View {
 
     /// 收藏搜索模式
     init(mode: ListMode, searchKeyword: String?, hidesOwnSearchBar: Bool = false,
-         hidesEmptyState: Bool = false) {
+         hidesEmptyState: Bool = false,
+         isSelecting: Binding<Bool>? = nil,
+         selectedGids: Binding<Set<Int64>>? = nil,
+         visibleGalleries: Binding<[GalleryInfo]>? = nil) {
         self.mode = mode
         self.favSearchKeyword = searchKeyword
         self.externalSelection = nil
         self.hidesOwnSearchBar = hidesOwnSearchBar
         self.hidesEmptyState = hidesEmptyState
+        self.visibleGalleries = visibleGalleries
+        if let isSelecting, let selectedGids {
+            self.selectionBindings = (isSelecting, selectedGids)
+        }
     }
 
     /// 收藏搜索模式 (嵌入)
@@ -211,6 +225,9 @@ struct GalleryListView: View {
                 // 用 mode 会忽略它，首次进入收藏搜索页会加载成整个收藏夹
                 viewModel.loadGalleries(mode: effectiveMode)
             }
+        }
+        .onChange(of: viewModel.galleries) { _, list in
+            visibleGalleries?.wrappedValue = list
         }
         .onChange(of: showAdvancedSearch) { _, isShowing in
             if !isShowing {
@@ -494,15 +511,41 @@ struct GalleryListView: View {
                 // NavigationLink 在 List 里会自动补一个 disclosure 箭头，设计稿没有它，
                 // 而且每行右侧多出的 20pt 会挤压元信息行。把链接藏成零透明的底层，
                 // 行本身画在它上面——点按仍由链接接收。
-                ZStack {
-                    NavigationLink(value: gallery) { EmptyView() }
-                        .opacity(0)
-                    GalleryRow(
-                        gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
-                        onRequestDownload: requestDownload,
-                        onRequestFavorite: toggleFavorite,
-                        onTagTap: searchTag
-                    )
+                Group {
+                    if let sel = selectionBindings, sel.isSelecting.wrappedValue {
+                        // 多选中：整行点按切换选中，不再进详情
+                        HStack(spacing: 0) {
+                            Image(systemName: sel.selected.wrappedValue.contains(gallery.gid)
+                                  ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(sel.selected.wrappedValue.contains(gallery.gid)
+                                                 ? EhColor.accent : EhColor.tertiaryLabel)
+                                .padding(.leading, EhSpacing.page)
+                            GalleryRow(
+                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb
+                            )
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            Haptics.tap()
+                            if sel.selected.wrappedValue.contains(gallery.gid) {
+                                sel.selected.wrappedValue.remove(gallery.gid)
+                            } else {
+                                sel.selected.wrappedValue.insert(gallery.gid)
+                            }
+                        }
+                    } else {
+                        ZStack {
+                            NavigationLink(value: gallery) { EmptyView() }
+                                .opacity(0)
+                            GalleryRow(
+                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                onRequestDownload: requestDownload,
+                                onRequestFavorite: toggleFavorite,
+                                onTagTap: searchTag
+                            )
+                        }
+                    }
                 }
                 .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {

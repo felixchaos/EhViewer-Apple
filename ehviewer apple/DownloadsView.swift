@@ -33,7 +33,10 @@ struct DownloadsView: View {
     // MARK: - 标签/搜索/过滤
     @State private var labels: [DownloadLabelRecord] = []
     /// nil = 全部, "" = 默认(无标签), 其他 = 具体标签
-    @State private var selectedLabel: String? = nil
+    /// 当前标签筛选。nil = 全部，"" = 默认(无标签)。
+    /// 初值取自上次退出时的选择（对齐 Android Settings.getRecentDownloadLabel）——
+    /// 这个设置此前声明了但从没被读写过，下载页每次打开都回到「全部」。
+    @State private var selectedLabel: String? = AppSettings.shared.recentDownloadLabel
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var statusFilter: DownloadStatusFilter = .all
@@ -42,6 +45,7 @@ struct DownloadsView: View {
     @State private var isSelectMode = false
     @State private var selectedGids: Set<Int64> = []
     @State private var showBatchDeleteConfirm = false
+    @State private var showResetProgressConfirm = false
     @State private var showMoveLabelSheet = false
 
     // MARK: - 单项删除确认 (Fix: 从 Row 移至父视图，避免 Timer 刷新销毁 @State)
@@ -114,6 +118,13 @@ struct DownloadsView: View {
                 batchMoveLabelSheet
             }
             // 批量删除确认
+            .confirmationDialog(
+                "重置全部阅读进度？所有下载的画廊都会回到第 1 页，已下载的文件不受影响。",
+                isPresented: $showResetProgressConfirm, titleVisibility: .visible
+            ) {
+                Button("重置", role: .destructive) { resetAllReadingProgress() }
+                Button("取消", role: .cancel) {}
+            }
             .confirmationDialog("确认删除 \(selectedGids.count) 个下载？", isPresented: $showBatchDeleteConfirm, titleVisibility: .visible) {
                 Button("仅删除记录", role: .destructive) {
                     batchDelete(withFiles: false)
@@ -170,6 +181,9 @@ struct DownloadsView: View {
                     }
                 }
             }
+        }
+        .onChange(of: selectedLabel) { _, newValue in
+            AppSettings.shared.recentDownloadLabel = newValue
         }
         .task {
             await vm.loadTasks()
@@ -662,17 +676,44 @@ struct DownloadsView: View {
                     Label("批量操作", systemImage: "checkmark.circle")
                 }
 
-                // 勾了「记住这个标签」之后要有地方改回来，
-                // 否则那个选择就是单向的
-                if AppSettings.shared.hasDefaultDownloadLabel {
-                    let name = AppSettings.shared.defaultDownloadLabel ?? "默认分组"
+                // 默认下载标签：随时可改，不必等到下一次下载时用「记住」勾选。
+                // 对齐 Android DownloadsScene 抽屉里的 action_default_download_label。
+                Menu {
                     Button {
                         AppSettings.shared.hasDefaultDownloadLabel = false
                         AppSettings.shared.defaultDownloadLabel = nil
                         EhToast.info("下载时会重新询问标签")
                     } label: {
-                        Label("默认标签：\(name) · 改回每次询问", systemImage: "tag.slash")
+                        Label("每次询问", systemImage: "questionmark.circle")
                     }
+                    Button {
+                        AppSettings.shared.hasDefaultDownloadLabel = true
+                        AppSettings.shared.defaultDownloadLabel = nil
+                        EhToast.success("默认下载到「默认分组」")
+                    } label: {
+                        Label("默认分组", systemImage: "tray")
+                    }
+                    ForEach(labels, id: \.label) { record in
+                        Button {
+                            AppSettings.shared.hasDefaultDownloadLabel = true
+                            AppSettings.shared.defaultDownloadLabel = record.label
+                            EhToast.success("默认下载到「\(record.label)」")
+                        } label: {
+                            Label(record.label, systemImage: "tag")
+                        }
+                    }
+                } label: {
+                    let name = AppSettings.shared.hasDefaultDownloadLabel
+                        ? (AppSettings.shared.defaultDownloadLabel ?? "默认分组")
+                        : "每次询问"
+                    Label("默认下载标签：\(name)", systemImage: "tag")
+                }
+
+                // 批量重置阅读进度 (对齐 Android action_reset_reading_progress)
+                Button {
+                    showResetProgressConfirm = true
+                } label: {
+                    Label("重置全部阅读进度", systemImage: "arrow.counterclockwise")
                 }
 
                 Divider()
@@ -856,6 +897,20 @@ struct DownloadsView: View {
     }
 
     // MARK: - 标签管理
+
+    /// 重置所有下载画廊的阅读进度 (对齐 Android DownloadManager.resetAllReadingProgress)
+    ///
+    /// 阅读进度存在 UserDefaults 的 reading_progress_<gid> 里，
+    /// 只清进度，不动已下载的文件。
+    private func resetAllReadingProgress() {
+        for task in vm.tasks {
+            UserDefaults.standard.removeObject(forKey: "reading_progress_\(task.gallery.gid)")
+        }
+        Task {
+            await loadReadingProgress()
+            EhToast.success("已重置 \(vm.tasks.count) 本的阅读进度")
+        }
+    }
 
     private func loadLabels() {
         labels = (try? EhDatabase.shared.getAllDownloadLabels()) ?? []
