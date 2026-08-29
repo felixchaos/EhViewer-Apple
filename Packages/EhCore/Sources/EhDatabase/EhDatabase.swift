@@ -434,6 +434,15 @@ public final class EhDatabase: Sendable {
         }
     }
 
+    /// 原地更新一条过滤规则。
+    /// 此前切换启用状态是「删掉再插入」，id 会变、顺序会跳，
+    /// 列表看起来像是自己重排了。
+    public func updateFilter(_ record: FilterRecord) throws {
+        try dbQueue.write { db in
+            try record.update(db)
+        }
+    }
+
     public func deleteFilter(id: Int64) throws {
         try dbQueue.write { db in
             _ = try FilterRecord.deleteOne(db, key: id)

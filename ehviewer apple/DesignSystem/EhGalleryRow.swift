@@ -68,6 +68,9 @@ struct EhGalleryRow: View {
     /// 只有「点了能搜」的页面才传它。收藏、下载、历史三页点标签要跨 Tab
     /// 跳到首页再搜，那是另一件事，不在这一版里。
     var onTagTap: ((String) -> Void)? = nil
+    /// 当前搜索命中的标签。这些会排到最前面并高亮——
+    /// 搜某个标签时，最想确认的就是「这本是因为哪个标签被搜出来的」。
+    var highlightedTags: Set<String> = []
 
     @Environment(\.responsiveLayout) private var layout
 
@@ -104,15 +107,18 @@ struct EhGalleryRow: View {
     /// 10pt 的字加 2pt 内边距只有 14pt 高，手指按不中。
     @ViewBuilder
     private func tagChip(_ tag: String) -> some View {
+        let hit = isHighlighted(tag)
         let label = Text(Self.tagLabel(tag))
-            .font(.system(size: 10))
-            .foregroundStyle(onTagTap == nil ? EhColor.secondaryLabel : EhColor.accent)
+            .font(.system(size: 10, weight: hit ? .semibold : .regular))
+            .foregroundStyle(hit ? EhColor.onAccentFill
+                             : (onTagTap == nil ? EhColor.secondaryLabel : EhColor.accent))
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, onTagTap == nil ? 2 : 6)
             .background {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(onTagTap == nil ? EhColor.fill : EhColor.accentWash)
+                    .fill(hit ? EhColor.accentFill
+                          : (onTagTap == nil ? EhColor.fill : EhColor.accentWash))
             }
 
         if let onTagTap {
@@ -125,6 +131,28 @@ struct EhGalleryRow: View {
         } else {
             label
         }
+    }
+
+    /// 命中搜索的标签排前面，其余保持原顺序
+    private var orderedTags: [String] {
+        guard !highlightedTags.isEmpty else { return tags }
+        let hit = tags.filter { isHighlighted($0) }
+        let rest = tags.filter { !isHighlighted($0) }
+        return hit + rest
+    }
+
+    /// 标签是否命中当前搜索。比较时去掉命名空间与引号/$，
+    /// 因为搜索式里是 `female:"big ass$"`，而 simpleTags 里是 `big ass`。
+    private func isHighlighted(_ tag: String) -> Bool {
+        guard !highlightedTags.isEmpty else { return false }
+        let normalized = Self.normalizeForMatch(tag)
+        return highlightedTags.contains { Self.normalizeForMatch($0) == normalized }
+    }
+
+    static func normalizeForMatch(_ s: String) -> String {
+        var t = s.lowercased()
+        if let colon = t.firstIndex(of: ":") { t = String(t[t.index(after: colon)...]) }
+        return t.trimmingCharacters(in: CharacterSet(charactersIn: "\"$ "))
     }
 
     /// 状态标记要不要占一行
@@ -161,14 +189,22 @@ struct EhGalleryRow: View {
                 Spacer(minLength: 6)
 
                 if !tags.isEmpty {
-                    // 只铺一行，多的截断——列表行的价值是快速判断「要不要点进去」，
-                    // 铺满标签会把标题挤成配角
-                    HStack(spacing: 4) {
-                        ForEach(tags.prefix(4), id: \.self) { tag in
-                            tagChip(tag)
+                    // 一行，但可以横向滑到后面的标签。
+                    //
+                    // 此前是 `tags.prefix(4)` 直接截断：多出来的标签既看不到、
+                    // 也没有任何办法看到。列表行确实不该被标签占满，但「放不下」
+                    // 和「不给看」是两回事。
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(orderedTags, id: \.self) { tag in
+                                tagChip(tag)
+                            }
                         }
-                        Spacer(minLength: 0)
+                        // 让最后一枚 chip 也能滑到视野中央，不贴着边
+                        .padding(.trailing, 8)
                     }
+                    // 横向滚动区不能吃掉列表的纵向滑动
+                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                     .padding(.bottom, 4)
                 }
 
@@ -260,7 +296,8 @@ extension EhGalleryRow {
         progress: Double? = nil,
         progressLabel: String? = nil,
         accessory: AnyView? = nil,
-        onTagTap: ((String) -> Void)? = nil
+        onTagTap: ((String) -> Void)? = nil,
+        highlightedTags: Set<String> = []
     ) {
         let settings = AppSettings.shared
         var meta = extraMeta
@@ -289,7 +326,8 @@ extension EhGalleryRow {
             progress: progress,
             progressLabel: progressLabel,
             accessory: accessory,
-            onTagTap: onTagTap
+            onTagTap: onTagTap,
+            highlightedTags: highlightedTags
         )
     }
 }

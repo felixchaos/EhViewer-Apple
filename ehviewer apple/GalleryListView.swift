@@ -563,7 +563,8 @@ struct GalleryListView: View {
                                 gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                                 onRequestDownload: requestDownload,
                                 onRequestFavorite: toggleFavorite,
-                                onTagTap: searchTag
+                                onTagTap: searchTag,
+                                highlightedTags: activeSearchTags
                             )
                         }
                     }
@@ -658,7 +659,8 @@ struct GalleryListView: View {
                         gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                         onRequestDownload: requestDownload,
                         onRequestFavorite: toggleFavorite,
-                        onTagTap: searchTag
+                        onTagTap: searchTag,
+                        highlightedTags: activeSearchTags
                     )
                                 .tag(gallery)
                         }
@@ -746,6 +748,10 @@ struct GalleryListView: View {
     /// 同一个标签的文字」的重复显示。
     @State private var searchFieldText = ""
 
+    /// 正在把外部查询回填进输入框。回填期间要挡住 token 变化触发的重搜，
+    /// 否则会把快速搜索自带的分类/评分条件冲掉，还白跑一次网络。
+    @State private var isSyncingField = false
+
     /// 等待选择收藏夹的画廊（没有设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
     /// 待选下载标签的画廊（对齐 Android 的下载标签对话框）
@@ -767,9 +773,63 @@ struct GalleryListView: View {
             viewModel.updateSuggestions(for: text)
         }
         .onChange(of: searchTokens) { _, _ in
+            guard !isSyncingField else { return }
             // token 变了就重搜：删掉一个标签本身就是一次条件变更
             submitSearch()
         }
+        // 外部改了查询就回填到输入框。
+        //
+        // 输入框显示的是 searchTokens + searchFieldText，而不是
+        // viewModel.searchText（两者当初为了修「同一标签既是 token 又是文字」
+        // 的重复显示而解耦）。于是任何只写 viewModel.searchText 的路径
+        // ——快速搜索、收藏夹内搜索、从详情页点标签进来——输入框都是空的。
+        // 与其逐条去补，不如在这里统一回填：新增路径也自动生效。
+        .onChange(of: viewModel.searchText) { _, newValue in
+            guard newValue != fieldQuery else { return }
+            syncField(from: newValue)
+        }
+    }
+
+    /// 当前搜索里用到的标签。用于把命中的 chip 排到前面并高亮——
+    /// 搜某个标签时，最想确认的就是「这本是因为哪个标签被搜出来的」，
+    /// 而它常常排在第五个之后，根本看不见。
+    private var activeSearchTags: Set<String> {
+        Set(searchTokens)
+    }
+
+    /// 输入框当前表达的查询（token + 正在打的字）
+    private var fieldQuery: String {
+        let typed = searchFieldText.trimmingCharacters(in: .whitespaces)
+        return (searchTokens + (typed.isEmpty ? [] : [typed])).joined(separator: " ")
+    }
+
+    /// 把一条查询摆进输入框，拆成 token 显示
+    private func syncField(from query: String) {
+        isSyncingField = true
+        searchTokens = Self.splitQuery(query)
+        searchFieldText = ""
+        // 下一个 runloop 再解锁：onChange(searchTokens) 是在本次更新之后才跑的
+        DispatchQueue.main.async { isSyncingField = false }
+    }
+
+    /// 按空格拆查询，但引号内的空格不拆。
+    /// `female:"big ass$" translated` → [`female:"big ass$"`, `translated`]
+    static func splitQuery(_ query: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inQuotes = false
+        for ch in query {
+            if ch == "\"" {
+                inQuotes.toggle()
+                current.append(ch)
+            } else if ch == " " && !inQuotes {
+                if !current.isEmpty { tokens.append(current); current = "" }
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        return tokens
     }
 
     /// 这一本收藏过没有。云端收藏夹或本地收藏都算。
@@ -1298,6 +1358,8 @@ struct GalleryRow: View {
     var onRequestFavorite: (GalleryInfo) -> Void = { _ in }
     /// 点标签直接按这个标签搜
     var onTagTap: ((String) -> Void)? = nil
+    /// 当前搜索用到的标签，命中的 chip 会排前并高亮
+    var highlightedTags: Set<String> = []
 
     /// 行的显示全部交给 EhGalleryRow(gallery:)，这里只负责把封面 URL 修正好。
     /// 显示开关、缩略图缩放、已下载/已收藏都在那个组件里统一处理——
@@ -1326,7 +1388,8 @@ struct GalleryRow: View {
     }
 
     var body: some View {
-        EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap)
+        EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap,
+                     highlightedTags: highlightedTags)
             .contentShape(Rectangle())
         .contextMenu {
             // 下载
@@ -1369,7 +1432,25 @@ struct GalleryRow: View {
 @MainActor
 @Observable
 class GalleryListViewModel {
-    var galleries: [GalleryInfo] = []
+    /// 列表内容。**写进来的东西会先过一遍过滤器。**
+    ///
+    /// 过滤在 didSet 里做，而不是在那 8 处赋值点上分别调一次：
+    /// 分散写就意味着以后新增一条取数路径必然会漏掉，而「漏掉」的表现
+    /// 是屏蔽悄悄失效——用户根本看不出来是哪一页没生效。
+    var galleries: [GalleryInfo] = [] {
+        didSet {
+            // 里面还会再写一次 galleries，靠这个标记挡住重入
+            guard !isApplyingFilters else { return }
+            isApplyingFilters = true
+            defer { isApplyingFilters = false }
+            let hidden = GalleryFilterEngine.shared.apply(to: &galleries)
+            filteredOutCount = hidden
+        }
+    }
+
+    @ObservationIgnored private var isApplyingFilters = false
+    /// 最近一次加载被过滤器挡掉的条数，用来在列表底部说明「少了几本」
+    var filteredOutCount = 0
     var isLoading = false
     var errorMessage: String?
     var searchText = ""

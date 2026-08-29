@@ -70,6 +70,7 @@
 			membershipExceptions = (
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
 				"ehviewer appleTests/CredentialStorageTests.swift",
+				"ehviewer appleTests/GalleryFilterTests.swift",
 				"ehviewer appleTests/LaunchTabTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/TopListParsingTests.swift",
@@ -85,6 +86,7 @@
 			membershipExceptions = (
 				"ehviewer appleTests/AndroidUpstreamAlignmentTests.swift",
 				"ehviewer appleTests/CredentialStorageTests.swift",
+				"ehviewer appleTests/GalleryFilterTests.swift",
 				"ehviewer appleTests/LaunchTabTests.swift",
 				"ehviewer appleTests/PaginationAndSearchTests.swift",
 				"ehviewer appleTests/TopListParsingTests.swift",

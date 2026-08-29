@@ -14,86 +14,97 @@ struct FilterView: View {
 
     var body: some View {
         List {
-            // 快速屏蔽 (对齐 Android: BlackListActivity)
-            Section("快速屏蔽") {
-                ForEach(vm.quickBlockPresets, id: \.tag) { preset in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(preset.displayName)
-                                .font(.body)
-                            Text(preset.tag)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if vm.isTagBlocked(preset.tag) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        } else {
-                            Button("屏蔽") {
-                                vm.quickBlock(tag: preset.tag)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.red)
-                        }
-                    }
-                }
-            }
-
-            // 启用的过滤器
             Section {
-                ForEach(vm.filters.filter { $0.enable }, id: \.id) { filter in
-                    FilterRow(filter: filter) {
-                        vm.toggleFilter(filter)
+                Text("命中规则的画廊会从所有列表里挡掉——首页、搜索、订阅、排行都算。"
+                     + "规则只在本机生效，不会同步到 E-Hentai 账号。")
+                    .font(EhFont.caption)
+                    .foregroundStyle(EhColor.secondaryLabel)
+            }
+
+            // 快速屏蔽 (对齐 Android BlackListActivity)
+            Section("常用屏蔽") {
+                ForEach(vm.quickBlockPresets, id: \.tag) { preset in
+                    Button {
+                        vm.toggleQuickBlock(tag: preset.tag)
+                    } label: {
+                        HStack(spacing: EhSpacing.row) {
+                            Image(systemName: vm.isTagBlocked(preset.tag)
+                                  ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(vm.isTagBlocked(preset.tag)
+                                                 ? EhColor.accent : EhColor.tertiaryLabel)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.displayName).foregroundStyle(EhColor.label)
+                                Text(preset.tag)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(EhColor.tertiaryLabel)
+                            }
+                            Spacer()
+                        }
                     }
-                }
-                .onDelete { indexSet in
-                    vm.deleteEnabled(at: indexSet)
-                }
-            } header: {
-                Text("已启用")
-            } footer: {
-                if vm.filters.filter({ $0.enable }).isEmpty {
-                    Text("没有启用的过滤器")
+                    .buttonStyle(.plain)
                 }
             }
 
-            // 禁用的过滤器
-            let disabledFilters = vm.filters.filter { !$0.enable }
-            if !disabledFilters.isEmpty {
-                Section("已禁用") {
-                    ForEach(disabledFilters, id: \.id) { filter in
-                        FilterRow(filter: filter) {
-                            vm.toggleFilter(filter)
+            // 按类型分组，而不是按「已启用 / 已禁用」分。
+            //
+            // 原来那样分有两个问题：同一条规则会在两个区之间跳来跳去，
+            // 用户找不到刚才那条；而且要判断「我到底屏蔽了哪些标签」，
+            // 得把两个区合起来看。按类型分组之后，「我屏蔽了哪些标签」
+            // 一眼就能数清，启用与否由行上的开关表达。
+            ForEach(Self.modeOrder, id: \.self) { mode in
+                let rules = vm.filters.filter { $0.mode == mode }
+                if !rules.isEmpty {
+                    Section(Self.modeTitle(mode)) {
+                        ForEach(rules, id: \.id) { filter in
+                            FilterRow(filter: filter) { isOn in
+                                vm.setEnabled(filter, isOn)
+                            }
+                        }
+                        .onDelete { offsets in
+                            vm.delete(rules: rules, at: offsets)
                         }
                     }
-                    .onDelete { indexSet in
-                        vm.deleteDisabled(at: indexSet)
-                    }
+                }
+            }
+
+            if vm.filters.isEmpty {
+                Section {
+                    Text("还没有任何规则。右上角加一条，或者在画廊详情页长按标签选「屏蔽这个标签」。")
+                        .font(EhFont.caption)
+                        .foregroundStyle(EhColor.secondaryLabel)
                 }
             }
         }
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif
-        .navigationTitle("标签过滤")
+        .navigationTitle("过滤器")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showAddSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                }
+                Button { showAddSheet = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("新增规则")
             }
         }
         .sheet(isPresented: $showAddSheet) {
             AddFilterSheet(vm: vm)
         }
-        .task {
-            vm.loadFilters()
+        .task { vm.loadFilters() }
+    }
+
+    private static let modeOrder = [2, 3, 0, 1, 4, 5]
+
+    static func modeTitle(_ mode: Int) -> String {
+        switch mode {
+        case 0: return "标题包含"
+        case 1: return "上传者"
+        case 2: return "标签"
+        case 3: return "标签命名空间"
+        case 4: return "上传者标签"
+        case 5: return "语言"
+        default: return "其它"
         }
     }
 }
@@ -102,47 +113,22 @@ struct FilterView: View {
 
 struct FilterRow: View {
     let filter: FilterRecord
-    let onToggle: () -> Void
+    /// 开关真正生效的回调。
+    ///
+    /// 此前这里是 `Toggle("", isOn: .constant(filter.enable))` 配
+    /// `.onChange(of: filter.enable)`：常量绑定不会变，onChange 观察的又是
+    /// 模型值——点开关什么都不会发生。整个控件是死的。
+    let onToggle: (Bool) -> Void
 
     var body: some View {
-        HStack(spacing: EhSpacing.row) {
-            VStack(alignment: .leading, spacing: 4) {
-                // 规则用等宽字体：过滤规则常含通配符与冒号，
-                // 比例字体下 `l` `1` `I` 这类字符难以核对
-                Text(filter.text ?? "")
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundStyle(filter.enable ? EhColor.label : EhColor.tertiaryLabel)
-
-                Text(filterModeText)
-                    .font(EhFont.footnote)
-                    .foregroundStyle(EhColor.secondaryLabel)
-            }
-
-            Spacer(minLength: 8)
-
-            Toggle("", isOn: .constant(filter.enable))
-                .labelsHidden()
-                .tint(EhColor.accentFill)
-                .onChange(of: filter.enable) { _, _ in
-                    onToggle()
-                }
+        Toggle(isOn: Binding(get: { filter.enable }, set: { onToggle($0) })) {
+            // 规则用等宽字体：过滤规则常含通配符与冒号，
+            // 比例字体下 `l` `1` `I` 这类字符难以核对
+            Text(filter.text ?? "")
+                .font(.system(size: 14, design: .monospaced))
+                .foregroundStyle(filter.enable ? EhColor.label : EhColor.tertiaryLabel)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onToggle()
-        }
-    }
-
-    private var filterModeText: String {
-        switch filter.mode {
-        case 0: return "标题过滤"
-        case 1: return "上传者过滤"
-        case 2: return "标签过滤"
-        case 3: return "标签命名空间过滤"
-        case 4: return "上传者标签过滤"
-        case 5: return "语言过滤"
-        default: return "未知类型"
-        }
+        .tint(EhColor.accentFill)
     }
 }
 
@@ -240,9 +226,17 @@ class FilterViewModel {
         filters.contains { $0.mode == 2 && $0.text == tag && $0.enable }
     }
 
-    func quickBlock(tag: String) {
-        guard !isTagBlocked(tag) else { return }
-        addFilter(text: tag, mode: 2)
+    /// 常用屏蔽是个开关，不是单向按钮：点第二下要能取消。
+    /// 此前只有「屏蔽」按钮，屏蔽完变成一个对勾，想撤销得去下面的列表里找。
+    func toggleQuickBlock(tag: String) {
+        if let existing = filters.first(where: { $0.mode == 2 && $0.text == tag }) {
+            if let id = existing.id { try? EhDatabase.shared.deleteFilter(id: id) }
+            loadFilters()
+            notifyChanged()
+            EhToast.info("已取消屏蔽「\(tag)」")
+        } else {
+            addFilter(text: tag, mode: 2)
+        }
     }
 
     func loadFilters() {
@@ -258,51 +252,43 @@ class FilterViewModel {
         do {
             try EhDatabase.shared.insertFilter(record)
             loadFilters()
+            notifyChanged()
+            EhToast.success("已添加规则")
         } catch {
+            EhToast.failure("添加规则失败")
             debugLog("Failed to add filter: \(error)")
         }
     }
 
-    func toggleFilter(_ filter: FilterRecord) {
-        guard let id = filter.id else { return }
+    /// 原地改启用状态。此前是「删掉再插入」，id 会变、列表顺序会跳。
+    func setEnabled(_ filter: FilterRecord, _ enabled: Bool) {
+        var updated = filter
+        updated.enable = enabled
         do {
-            // 简单地删除并重新插入以切换状态
-            try EhDatabase.shared.deleteFilter(id: id)
-            var newFilter = filter
-            newFilter.enable.toggle()
-            newFilter.id = nil
-            try EhDatabase.shared.insertFilter(newFilter)
+            try EhDatabase.shared.updateFilter(updated)
             loadFilters()
+            notifyChanged()
         } catch {
+            EhToast.failure("改不动这条规则")
             debugLog("Failed to toggle filter: \(error)")
         }
     }
 
-    func deleteEnabled(at offsets: IndexSet) {
-        let enabledFilters = filters.filter { $0.enable }
+    func delete(rules: [FilterRecord], at offsets: IndexSet) {
         for index in offsets {
-            guard let id = enabledFilters[index].id else { continue }
-            do {
-                try EhDatabase.shared.deleteFilter(id: id)
-            } catch {
-                debugLog("Failed to delete filter: \(error)")
-            }
+            guard let id = rules[index].id else { continue }
+            try? EhDatabase.shared.deleteFilter(id: id)
         }
         loadFilters()
+        notifyChanged()
     }
 
-    func deleteDisabled(at offsets: IndexSet) {
-        let disabledFilters = filters.filter { !$0.enable }
-        for index in offsets {
-            guard let id = disabledFilters[index].id else { continue }
-            do {
-                try EhDatabase.shared.deleteFilter(id: id)
-            } catch {
-                debugLog("Failed to delete filter: \(error)")
-            }
-        }
-        loadFilters()
+    /// 让过滤引擎重新加载 —— 不发这个通知，改完规则要重启 App 才生效
+    private func notifyChanged() {
+        NotificationCenter.default.post(name: .galleryFiltersChanged, object: nil)
     }
+
+
 }
 
 #Preview {

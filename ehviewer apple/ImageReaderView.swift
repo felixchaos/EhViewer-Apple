@@ -503,8 +503,14 @@ struct ImageReaderView: View {
         // 用户可能从不同缩略图进入同一画廊 → initialPage 必须被尊重
         if let initial = initialPage, initial >= 0, initial < vm.totalPages {
             vm.currentPage = initial
-        } else if needsLoad && initialPage == nil {
-            // 仅首次加载时恢复保存的阅读进度 (缓存命中时保持当前页)
+        } else if initialPage == nil {
+            // 没指定页就恢复上次读到的位置。
+            //
+            // 这里原本还要求 needsLoad——也就是「只在首次加载时恢复」。
+            // 但 needsLoad 为 false 表示这个 ViewModel 已经载着同一本书了，
+            // 此时两个分支都不成立，currentPage 保持默认的 0：
+            // 明明有进度，却从第一页开始。恢复只该看「调用方有没有指定页」，
+            // 与要不要重新加载数据无关。
             let key = "reading_progress_\(gid)"
             if let saved = UserDefaults.standard.object(forKey: key) as? Int, vm.totalPages > 0 {
                 vm.currentPage = min(saved, max(0, vm.totalPages - 1))

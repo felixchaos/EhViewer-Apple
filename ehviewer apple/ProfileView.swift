@@ -12,6 +12,7 @@
 import SwiftUI
 import EhModels
 import EhAPI
+import EhCookie
 import EhSettings
 
 struct ProfileView: View {
@@ -45,12 +46,26 @@ struct ProfileView: View {
 
     // MARK: - 账号
 
+    /// 账号名。取不到昵称时按真实登录状态给话，不要说成未登录。
+    private var displayNameText: String {
+        if let name = profile?.displayName ?? AppSettings.shared.displayName, !name.isEmpty {
+            return name
+        }
+        return EhCookieManager.shared.isSignedIn ? "已登录" : "未登录"
+    }
+
     private var accountSection: some View {
         Section {
             HStack(spacing: 14) {
                 avatar
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(profile?.displayName ?? AppSettings.shared.displayName ?? "未登录")
+                    // 拿不到昵称不等于没登录。
+                    //
+                    // 昵称只能从 forums.e-hentai.org 取，而论坛在 Cloudflare 的
+                    // JS 挑战后面，纯 URLSession 过不去（实测 403 "Just a moment..."）。
+                    // 这里原本一律回落到「未登录」——用户明明登录着，却被告知
+                    // 没登录，然后去反复排查登录问题。
+                    Text(displayNameText)
                         .font(.headline)
                     if let uid = AppSettings.shared.userId, !uid.isEmpty {
                         Text("UID \(uid)")
@@ -148,8 +163,23 @@ struct ProfileView: View {
                     ProgressView().controlSize(.small)
                     Text("读取配额…").foregroundStyle(.secondary)
                 }
+            } else if quota != nil {
+                // 请求成功但没有数字额度：这个账号用的是基于 IP 的限制，
+                // E-Hentai 本来就不给「已用 X / 上限 Y」，只有买了 Bronze Star
+                // 或 More Pages 的账号才有。
+                //
+                // 这里原本一律显示「读不到配额信息，可能未登录」——把一个
+                // 完全正常的状态说成登录出了问题，白白让人去排查登录。
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("当前无配额限制", systemImage: "checkmark.circle")
+                        .foregroundStyle(EhColor.success)
+                    Text("你的账号使用基于 IP 的限制，E-Hentai 不提供具体数值。"
+                         + "购买 Bronze Star 或 More Pages 后配额会与账号绑定，这里才会显示用量。")
+                        .font(EhFont.caption)
+                        .foregroundStyle(EhColor.secondaryLabel)
+                }
             } else {
-                Text("读不到配额信息，可能未登录。")
+                Text("读不到配额信息，检查网络后重试。")
                     .foregroundStyle(.secondary)
             }
         } header: {

@@ -34,7 +34,6 @@ struct EhViewerApp: App {
         // 只要它们跑在恢复之前，看到的就是「未登录」。
         // 放在 App.init 的最前面，才能保证所有这些读取都在它之后。
         EhCookieManager.shared.ensureCredentialsRestored()
-
         // 配置全局 URLCache (对标 Android Conaco 320MB 磁盘缓存)
         // AsyncImage 和所有使用 URLSession.shared 的代码都会受益
         URLCache.shared = URLCache(
