@@ -487,6 +487,17 @@ class ReaderViewModel {
     /// 从 NSCache 恢复当前页附近的图片到 Observable 层
     /// 切换阅读模式 (水平 ↔ 垂直) 时调用，避免已下载的图片因 eviction 被移出
     /// cachedImages 后需要重新网络下载
+    /// 同步取图：Observable 层没有就直接问 NSCache。
+    ///
+    /// 视图此前只读 cachedImages，而 evictDistantPages 会把远处的图从
+    /// 那一层移走（NSCache 里其实还在）。于是快速翻回去时，明明内存里有图，
+    /// 界面却落回「正在下载」那个转圈——而且它连进度都没有，因为根本没有
+    /// 下载在跑。NSCache 查一次是常数时间，直接在 body 里问它就行。
+    func image(at index: Int) -> PlatformImage? {
+        if let img = cachedImages[index] { return img }
+        return Self.imageCache.object(forKey: cacheKey(for: index))
+    }
+
     func restoreCachedImages(around page: Int) {
         let radius = retentionRadius
         let lo = max(0, page - radius)
@@ -744,6 +755,32 @@ class ReaderViewModel {
         }
 
         guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
+
+        // 已下载的画廊读的是 file:// —— 直接读盘解码就行。
+        //
+        // 此前本地文件也被塞进下面那整套网络流程：进度追踪、4 次重试、
+        // 换 H@H 节点……对一个本地文件这些全无意义，却实实在在拖慢了显示，
+        // 表现就是「明明已经下载了，翻页还在转圈」。
+        if initialURL.isFileURL {
+            if let data = try? Data(contentsOf: initialURL),
+               let img = await Task.detached(priority: .userInitiated, operation: {
+                   Self.downsampledImage(data: data)
+               }).value {
+                Self.imageCache.setObject(img, forKey: key, cost: Self.decodedCost(of: img))
+                await MainActor.run {
+                    self.cachedImages[index] = img
+                    self.downloadProgress.removeValue(forKey: index)
+                    self.errorPages.remove(index)
+                }
+            } else {
+                await MainActor.run {
+                    self.errorPages.insert(index)
+                    self.errorMessages[index] = "本地文件读取失败"
+                }
+            }
+            return
+        }
+
         guard !downloadingImages.contains(index) else { return }
         // 可变: 换 H@H 节点后 URL 会变 (对齐 Android SpiderQueen 的 nl= 重试)
         var url = initialURL
@@ -1114,7 +1151,10 @@ class ReaderViewModel {
     /// 需要常驻 Observable 层的页数 —— 必须 ≥ 预加载窗口，
     /// 否则刚预加载好的页会被 evictDistantPages 立刻扔掉，来回空转
     var retentionRadius: Int {
-        max(5, effectivePreloadCount + 2)
+        // 比预加载窗口宽出一截。窗口贴太紧时，快速翻页会把刚划过的几页
+        // 立刻淘汰，回头一看又是转圈。图片本体仍在 NSCache 里，
+        // 这里放宽的只是 Observable 层的常驻量。
+        max(12, effectivePreloadCount * 2 + 4)
     }
 
     /// 这一页卡死了吗 —— 没图、没报错、也没有任何人在为它干活。

@@ -533,6 +533,16 @@ struct ImageReaderView: View {
         }
     }
 
+    /// 往后翻就收起工具条，进入全屏。
+    ///
+    /// 只在「前进」时收，不在回退时展开：读者往下读是连续动作，工具条留在
+    /// 那里一直挡着；而往回翻常常是为了找刚才那一页，这时候突然弹出工具条
+    /// 反而更碍事。要用工具条点一下屏幕中间就行。
+    private func enterFullscreenOnAdvance(from old: Int?, to new: Int?) {
+        guard let new, let old, new > old, showOverlay else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { showOverlay = false }
+    }
+
     // MARK: - Progress Persistence
 
     private func saveReadingProgress() {
@@ -655,7 +665,8 @@ struct ImageReaderView: View {
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
-                .onChange(of: vm.currentSpreadIndex) { _, newIdx in
+                .onChange(of: vm.currentSpreadIndex) { oldIdx, newIdx in
+                    enterFullscreenOnAdvance(from: oldIdx, to: newIdx)
                     guard let idx = newIdx else { return }
                     let page = vm.pageForSpread(idx)
                     if vm.currentPage != page {
@@ -689,7 +700,8 @@ struct ImageReaderView: View {
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
-                .onChange(of: vm.lazyCurrentPage) { _, newPage in
+                .onChange(of: vm.lazyCurrentPage) { oldPage, newPage in
+                    enterFullscreenOnAdvance(from: oldPage, to: newPage)
                     if let page = newPage, page != vm.currentPage {
                         vm.currentPage = page
                     }
@@ -879,7 +891,8 @@ struct ImageReaderView: View {
                     }
                 }
             }
-            .onChange(of: vm.verticalScrollPage) { _, newPage in
+            .onChange(of: vm.verticalScrollPage) { oldPage, newPage in
+                enterFullscreenOnAdvance(from: oldPage, to: newPage)
                 // 滚动引起的页码变化 → 同步 currentPage
                 guard let page = newPage, page != vm.currentPage else { return }
                 isUpdatingFromScroll = true
@@ -933,7 +946,7 @@ struct ImageReaderView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: estimatedHeight)
-        } else if let cachedImage = vm.cachedImages[index] {
+        } else if let cachedImage = vm.image(at: index) {
             // Perf: 垂直滚动模式使用轻量渲染 — 不加载 SwiftUIZoomableImage 的
             // GeometryReader + PreferenceKey + 3 套手势识别器，大幅减少 LazyVStack 滑动开销
             let imgSize = cachedImage.size
@@ -1077,7 +1090,7 @@ struct ImageReaderView: View {
                     .tint(.white.opacity(0.9))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let cachedImage = vm.cachedImages[index] {
+            } else if let cachedImage = vm.image(at: index) {
                 #if os(iOS)
                 SwiftUIZoomableImage(
                     image: cachedImage,

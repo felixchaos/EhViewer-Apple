@@ -87,6 +87,9 @@ struct GalleryListView: View {
     private var browseSource: Binding<BrowseSource>?
     /// 排行榜的时间范围（toplist.php 的 tl 参数）。非排行榜模式为 nil。
     private var toplistPeriod: Binding<Int>?
+    /// 提交搜索时交给父容器处理（切到独立的搜索页），而不是就地把
+    /// 当前数据源变成搜索结果。只有浏览容器会传它。
+    private var onSearchSubmit: ((String) -> Void)?
 
     static let toplistPeriods: [(tl: Int, title: String)] = [
         (15, "全部时间"), (13, "过去一年"), (12, "过去一月"), (11, "昨天"),
@@ -112,8 +115,10 @@ struct GalleryListView: View {
     }
 
     /// 浏览容器的根列表 — 在搜索栏下方带出顶部切页条
-    init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil) {
+    init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil,
+         onSearchSubmit: ((String) -> Void)? = nil) {
         self.toplistPeriod = toplistPeriod
+        self.onSearchSubmit = onSearchSubmit
         self.mode = mode
         self.externalSelection = nil
         self.browseSource = browseSource
@@ -166,6 +171,10 @@ struct GalleryListView: View {
                 // 收藏夹下搜索保持在收藏夹模式，搜索关键词通过 searchText 传递给 API
                 return mode
             }
+            // 浏览容器里由父视图把搜索切成独立的一页（见 onSearchSubmit），
+            // 这里不能再就地把「订阅」「热门」「排行」偷偷变成搜索结果 ——
+            // 那正是「顶部还高亮着订阅、内容却是全站搜索」的来源。
+            if onSearchSubmit != nil { return mode }
             return .search(keyword: viewModel.searchText)
         }
         return mode
@@ -229,6 +238,12 @@ struct GalleryListView: View {
             if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
             }
+            // 搜索页刚建好时，把查询摆回输入框——否则搜索页的输入框是空的，
+            // 用户看不到自己搜的是什么，也没法在此基础上增删条件
+            if case .search(let keyword) = mode, searchTokens.isEmpty, !keyword.isEmpty {
+                syncField(from: keyword)
+            }
+
             // 安全兜底: 确保数据加载在任何分支下都能触发
             if viewModel.galleries.isEmpty && !viewModel.isLoading {
                 // effectiveMode：上面几行刚把 favSearchKeyword 写进 searchText，
@@ -387,7 +402,7 @@ struct GalleryListView: View {
             }
             .onChange(of: selectedQuickSearch) { _, newValue in
                 if let search = newValue {
-                    viewModel.applyQuickSearch(search)
+                    applyQuickSearch(search)
                     selectedQuickSearch = nil
                 }
             }
@@ -461,7 +476,7 @@ struct GalleryListView: View {
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
-                viewModel.applyQuickSearch(search)
+                applyQuickSearch(search)
                 selectedQuickSearch = nil
             }
         }
@@ -710,7 +725,7 @@ struct GalleryListView: View {
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
-                viewModel.applyQuickSearch(search)
+                applyQuickSearch(search)
                 selectedQuickSearch = nil
             }
         }
@@ -866,12 +881,28 @@ struct GalleryListView: View {
 
     /// 点列表行里的标签 chip：把它收成一枚 token 并立刻搜。
     /// 标签在列表里一直只是装饰，看到感兴趣的还得自己回搜索框打一遍。
+    /// 快速搜索。在浏览容器里同样要切到搜索页，
+    /// 而不是把当前这一页原地变成搜索结果。
+    private func applyQuickSearch(_ search: QuickSearchRecord) {
+        if let onSearchSubmit, let keyword = search.keyword, !keyword.isEmpty {
+            onSearchSubmit(keyword)
+        } else {
+            viewModel.applyQuickSearch(search)
+        }
+    }
+
     private func searchTag(_ tag: String) {
         let quoted = Self.exactTagQuery(for: tag)
         searchTokens = [quoted]
         searchFieldText = ""
         isSearchFocused = false
-        viewModel.performSearch(query: quoted, advanced: advancedSearch)
+        // 和手动提交走同一条路：在浏览容器里要切到搜索页，
+        // 否则点个标签就把「热门」变成了搜索结果
+        if let onSearchSubmit {
+            onSearchSubmit(quoted)
+        } else {
+            viewModel.performSearch(query: quoted, advanced: advancedSearch)
+        }
     }
 
     /// 把一个标签变成精确匹配的搜索式。
@@ -919,7 +950,12 @@ struct GalleryListView: View {
         searchFieldText = ""
 
         let query = searchTokens.joined(separator: " ")
-        viewModel.performSearch(query: query, advanced: advancedSearch)
+        if let onSearchSubmit {
+            // 交给浏览容器切到搜索页；这一份列表随之被重建
+            onSearchSubmit(query)
+        } else {
+            viewModel.performSearch(query: query, advanced: advancedSearch)
+        }
     }
 
     // MARK: - 统一工具栏 (对齐 Android FAB secondaryButtons)

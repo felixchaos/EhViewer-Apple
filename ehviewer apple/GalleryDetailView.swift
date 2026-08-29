@@ -420,11 +420,9 @@ struct GalleryDetailView: View {
     // MARK: - Action Bar
 
     private var readButtonTitle: String {
-        guard vm.hasReadingProgress else { return "阅读" }
-        // 与列表行读同一个键：存的是 0-based 页索引，展示时 +1
-        let index = UserDefaults.standard.integer(forKey: "reading_progress_\(gallery.gid)")
-        guard index > 0 else { return "继续阅读" }
-        return "继续读 · \(index + 1) 页"
+        // 有进度就是「继续阅读」，不必把页码也塞进按钮——
+        // 页码在列表行的「读至 N」上已经有了，按钮上再写一遍只是把文案变长。
+        vm.hasReadingProgress ? "继续阅读" : "阅读"
     }
 
     private var hasAnyResource: Bool {
