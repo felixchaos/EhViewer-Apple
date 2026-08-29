@@ -625,19 +625,17 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "built_ex_hosts") }
     }
 
-    /// 媒体扫描 (对齐 Android Settings.KEY_MEDIA_SCAN)
-    @ObservationIgnored
-    public var mediaScan: Bool {
-        get { _defaults.bool(forKey: "media_scan") }
-        set { _defaults.set(newValue, forKey: "media_scan") }
-    }
-
-    /// 导航栏主题色 (对齐 Android Settings.KEY_APPLY_NAV_BAR_THEME_COLOR)
-    @ObservationIgnored
-    public var applyNavBarThemeColor: Bool {
-        get { _defaults.bool(forKey: "apply_nav_bar_theme_color") }
-        set { _defaults.set(newValue, forKey: "apply_nav_bar_theme_color") }
-    }
+    // media_scan 与 apply_nav_bar_theme_color 两项已移除：
+    //
+    //   media_scan  控制是否往下载目录放 .nomedia，用来决定系统相册扫不扫描
+    //               下载的图。iOS 没有 MediaScanner，也没有 .nomedia 这个约定，
+    //               下载在 App 容器里本来就不会被相册扫到。
+    //   apply_nav_bar_theme_color  给 Android 的系统导航栏（屏幕底部那条
+    //               返回/主页栏）染主题色。iOS 没有这条栏，Home Indicator
+    //               也不可染色。
+    //
+    // 两者都只是从 Android 抄过来的键，声明之后从没有任何代码读过。
+    // 留着只会让人以为「这个功能有，只是还没接上」。
 
     private init() {
         // 注册默认值

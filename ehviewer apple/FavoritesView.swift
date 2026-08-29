@@ -14,7 +14,18 @@ import EhAPI
 
 struct FavoritesView: View {
     /// selectedSlot: -2 = 本地收藏, -1 = 全部, 0-9 = 云收藏夹
-    @State private var selectedSlot = -1
+    /// 当前收藏夹。-2 本地 / -1 全部 / 0–9 云端收藏夹。
+    ///
+    /// 初值取上次看的那个（对齐 Android FavoritesScene.onInit 里的
+    /// `mUrlBuilder.setFavCat(Settings.getRecentFavCat())`）。
+    /// recentFavCat 此前只写不读——收藏页每次打开都回到「全部」。
+    @State private var selectedSlot = FavoritesView.restoredSlot()
+
+    /// 上次看的收藏夹，限制在合法范围内
+    private static func restoredSlot() -> Int {
+        let saved = AppSettings.shared.recentFavCat
+        return (saved >= -2 && saved <= 9) ? saved : -1
+    }
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var localFavorites: [LocalFavoriteRecord] = []
@@ -117,6 +128,13 @@ struct FavoritesView: View {
                 // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
                 .onChange(of: searchText) { _, _ in
                     if selectedSlot == -2 || selectedSlot == -1 { loadLocalFavorites() }
+                }
+                .onChange(of: selectedSlot) { _, newValue in
+                    // 记住这次看的是哪个收藏夹，下次进来直接到这里
+                    AppSettings.shared.recentFavCat = newValue
+                    // 换收藏夹时退出多选，否则选中项会跨收藏夹残留
+                    isCloudSelecting = false
+                    cloudSelection.removeAll()
                 }
                 // 动作已并入页头，不再用系统工具栏
             }

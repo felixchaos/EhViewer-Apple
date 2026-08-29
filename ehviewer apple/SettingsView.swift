@@ -2048,7 +2048,7 @@ class SettingsViewModel {
             "reading_fullscreen", "gallery_show_clock", "gallery_show_progress", "gallery_show_battery",
             "show_page_interval", "volume_page", "reverse_volume_page", "screen_rotation",
             "auto_page_interval", "color_filter", "default_favorite_2", "thumb_size",
-            "detail_size", "thumb_resolution", "fix_thumb_url", "media_scan",
+            "detail_size", "thumb_resolution", "fix_thumb_url",
             "enable_secure", "security_delay", "save_parse_error_body", "history_info_size",
             "theme", "launch_page", "show_gallery_pages", "cellular_network_warning",
             "custom_screen_lightness", "screen_lightness",
