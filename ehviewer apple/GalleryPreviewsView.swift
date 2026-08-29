@@ -19,6 +19,10 @@ struct GalleryPreviewsView: View {
     
     @State private var vm = GalleryPreviewsViewModel()
     @State private var readerTarget: ReaderTarget? = nil
+    /// 跳到指定预览页（对齐 Android scene_gallery_previews.xml 的 action_go_to）。
+    /// 几百页的本子靠滚是找不到某一页的。
+    @State private var showJumpSheet = false
+    @State private var jumpText = ""
     
     // 预览图尺寸 (对齐 Android gallery_grid_column_width_middle = 120dp)
     private let previewWidth: CGFloat = 120
@@ -33,6 +37,7 @@ struct GalleryPreviewsView: View {
     }
     
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: previewWidth, maximum: previewWidth + 20), spacing: 8)], spacing: 16) {
                 ForEach(vm.allPreviews, id: \.position) { preview in
@@ -66,6 +71,39 @@ struct GalleryPreviewsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    jumpText = ""
+                    showJumpSheet = true
+                } label: {
+                    Image(systemName: "arrow.right.to.line")
+                }
+                .accessibilityLabel("跳转到页码")
+            }
+        }
+        .alert("跳转到第几张", isPresented: $showJumpSheet) {
+            TextField("1 - \(galleryPages)", text: $jumpText)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+            Button("跳转") {
+                guard let page = Int(jumpText), page >= 1, page <= galleryPages else { return }
+                // 预览是分页拉的，目标还没加载出来就先把它那一页取回来
+                Task {
+                    await vm.loadUpTo(position: page - 1, gid: gid, token: token,
+                                      totalPages: totalPages)
+                    // 让出一帧再滚。
+                    //
+                    // 刚 append 进 allPreviews 的条目，SwiftUI 还没把它们排进
+                    // LazyVGrid 的布局里；这时候 scrollTo 找不到那个 id，
+                    // 是一次静默的空操作——加载明明成功了，界面却纹丝不动。
+                    try? await Task.sleep(for: .milliseconds(80))
+                    withAnimation { proxy.scrollTo(page - 1, anchor: .top) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        }
         .onAppear {
             if vm.allPreviews.isEmpty {
                 vm.initialize(initialPreviewSet: initialPreviewSet)
@@ -75,6 +113,7 @@ struct GalleryPreviewsView: View {
             if vm.isInitialLoading {
                 ProgressView("加载中...")
             }
+        }
         }
         #if os(iOS)
         .fullScreenCover(item: $readerTarget) { target in
@@ -232,6 +271,22 @@ class GalleryPreviewsViewModel {
         }
     }
     
+    /// 一直往后拉，直到目标位置已经在列表里（或者拉不动了）。
+    ///
+    /// 预览是按页拉的，跳到第 300 张时那一页多半还没请求过；不先拉回来，
+    /// scrollTo 会因为找不到那个 id 而什么都不做。
+    func loadUpTo(position: Int, gid: Int64, token: String, totalPages: Int) async {
+        var guardCount = 0
+        while !allPreviews.contains(where: { $0.position >= position }) {
+            let before = allPreviews.count
+            await loadNextPageIfNeeded(gid: gid, token: token, totalPages: totalPages)
+            // 没有新内容进来就说明拉到头了，别空转
+            guard allPreviews.count > before else { return }
+            guardCount += 1
+            if guardCount > totalPages { return }
+        }
+    }
+
     private func appendPreviews(from previewSet: PreviewSet) {
         switch previewSet {
         case .large(let items):
