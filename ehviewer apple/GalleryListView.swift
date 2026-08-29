@@ -207,8 +207,9 @@ struct GalleryListView: View {
             }
             // 安全兜底: 确保数据加载在任何分支下都能触发
             if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                print("[EhView] body .task → loadGalleries")
-                viewModel.loadGalleries(mode: mode)
+                // effectiveMode：上面几行刚把 favSearchKeyword 写进 searchText，
+                // 用 mode 会忽略它，首次进入收藏搜索页会加载成整个收藏夹
+                viewModel.loadGalleries(mode: effectiveMode)
             }
         }
         .onChange(of: showAdvancedSearch) { _, isShowing in
@@ -230,7 +231,8 @@ struct GalleryListView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
             // 站点切换后清除缓存并重新加载 (对齐 Android: 切换站点 → 刷新列表)
-            viewModel.refresh(mode: mode)
+            // 同样用 effectiveMode，否则切站点会把用户正在看的搜索结果换成首页
+            viewModel.refresh(mode: effectiveMode)
         }
     }
 
@@ -428,7 +430,7 @@ struct GalleryListView: View {
         }
         .task {
             if viewModel.galleries.isEmpty {
-                viewModel.loadGalleries(mode: mode)
+                viewModel.loadGalleries(mode: effectiveMode)
             }
         }
         .sheet(isPresented: $viewModel.showJumpDialog) {
@@ -555,7 +557,7 @@ struct GalleryListView: View {
             .navigationTitle(navigationTitle)
             .task {
                 if viewModel.galleries.isEmpty {
-                    viewModel.loadGalleries(mode: mode)
+                    viewModel.loadGalleries(mode: effectiveMode)
                 }
             }
     }
@@ -741,11 +743,28 @@ struct GalleryListView: View {
     /// 点列表行里的标签 chip：把它收成一枚 token 并立刻搜。
     /// 标签在列表里一直只是装饰，看到感兴趣的还得自己回搜索框打一遍。
     private func searchTag(_ tag: String) {
-        let quoted = tag.contains(":") ? tag : "\"\(tag)$\""
+        let quoted = Self.exactTagQuery(for: tag)
         searchTokens = [quoted]
         searchFieldText = ""
         isSearchFocused = false
         viewModel.performSearch(query: quoted, advanced: advancedSearch)
+    }
+
+    /// 把一个标签变成精确匹配的搜索式。
+    ///
+    /// 值那一半必须带引号，命名空间不能进引号里：
+    ///   `big ass`         → `"big ass$"`
+    ///   `female:big ass`  → `female:"big ass$"`
+    ///
+    /// 此前带命名空间的标签是原样透传的，于是 `female:big ass` 里的空格
+    /// 把它拆成了 `female:big` 和 `ass` 两个词——点这类标签永远搜不到东西，
+    /// 而不含空格的标签（`parody:haikyuu!!`）恰好又是好的，所以很容易漏掉。
+    static func exactTagQuery(for tag: String) -> String {
+        guard let colon = tag.firstIndex(of: ":") else { return "\"\(tag)$\"" }
+        let namespace = String(tag[tag.startIndex..<colon])
+        let value = String(tag[tag.index(after: colon)...])
+        guard !namespace.isEmpty, !value.isEmpty else { return "\"\(tag)$\"" }
+        return "\(namespace):\"\(value)$\""
     }
 
     /// 下载。建过下载标签且没设默认时先问放哪个标签——
@@ -1123,7 +1142,10 @@ struct GalleryListView: View {
                     title: "这里暂时没有内容",
                     message: "下拉可以重新加载"
                 ),
-                primaryAction: ("重新加载", { viewModel.refresh(mode: mode) })
+                // effectiveMode 而不是 mode：有搜索词时用 mode 会悄悄把搜索丢掉，
+                // 按钮写着「重新加载」，实际做的是「退回首页列表」。
+                // 隔壁 errorView 的「重试」一直是对的，这里漏了。
+                primaryAction: ("重新加载", { viewModel.refresh(mode: effectiveMode) })
             )
         }
     }

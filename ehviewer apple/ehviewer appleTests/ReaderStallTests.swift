@@ -69,3 +69,32 @@ struct ReaderStallTests {
         #expect(vm.isStalled(5))
     }
 }
+
+// MARK: - 标签精确搜索式
+
+/// 点列表行里的标签 chip 要能真的搜到东西。
+///
+/// 带命名空间的标签此前是原样透传的：`female:big ass` 里的空格把它拆成
+/// `female:big` 和 `ass` 两个词，搜不到任何结果。而不含空格的标签
+/// （`parody:haikyuu!!`）恰好是好的，所以这个 bug 只在一部分标签上出现。
+@MainActor
+struct TagQueryTests {
+
+    @Test func namespacedTagWithSpaceIsQuoted() {
+        #expect(GalleryListView.exactTagQuery(for: "female:big ass") == "female:\"big ass$\"")
+    }
+
+    @Test func bareTagIsQuoted() {
+        #expect(GalleryListView.exactTagQuery(for: "big ass") == "\"big ass$\"")
+    }
+
+    @Test func namespacedTagWithoutSpaceStillQuoted() {
+        #expect(GalleryListView.exactTagQuery(for: "parody:haikyuu!!") == "parody:\"haikyuu!!$\"")
+    }
+
+    /// 冒号在开头或结尾时不拆，整体当成裸标签处理，别拼出 `:"..."` 这种废式子
+    @Test func degenerateColonsFallBackToBareForm() {
+        #expect(GalleryListView.exactTagQuery(for: ":x") == "\":x$\"")
+        #expect(GalleryListView.exactTagQuery(for: "x:") == "\"x:$\"")
+    }
+}
