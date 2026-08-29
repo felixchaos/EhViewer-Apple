@@ -24,6 +24,9 @@ struct GalleryListView: View {
         /// 订阅标签列表 (/watched) —— 对齐 Android SubscriptionsScene
         case subscription
         case popular
+        /// 排行榜。period 就是 toplist.php 的 tl 参数：
+        /// 15 全部时间 / 13 过去一年 / 12 过去一个月 / 11 昨天
+        case toplist(period: Int)
         case search(keyword: String)
         case tag(keyword: String)
         case favorites(slot: Int)
@@ -82,6 +85,12 @@ struct GalleryListView: View {
     /// 顶部横向切页的选中项。非 nil 时在搜索栏下方渲染「首页/订阅/热门/排行」切页条。
     /// 只有作为浏览容器的根列表才传入；标签列表、搜索结果等推入的列表不显示切页条。
     private var browseSource: Binding<BrowseSource>?
+    /// 排行榜的时间范围（toplist.php 的 tl 参数）。非排行榜模式为 nil。
+    private var toplistPeriod: Binding<Int>?
+
+    static let toplistPeriods: [(tl: Int, title: String)] = [
+        (15, "全部时间"), (13, "过去一年"), (12, "过去一月"), (11, "昨天"),
+    ]
 
     private var selectionBinding: Binding<GalleryInfo?> {
         externalSelection ?? $selectedGallery
@@ -103,7 +112,8 @@ struct GalleryListView: View {
     }
 
     /// 浏览容器的根列表 — 在搜索栏下方带出顶部切页条
-    init(mode: ListMode, browseSource: Binding<BrowseSource>) {
+    init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil) {
+        self.toplistPeriod = toplistPeriod
         self.mode = mode
         self.externalSelection = nil
         self.browseSource = browseSource
@@ -275,6 +285,16 @@ struct GalleryListView: View {
                             items: BrowseSource.allCases.map { ($0, $0.title) },
                             selection: browseSource
                         )
+                    }
+
+                    // 排行榜的时间范围。挂在切页条下面而不是另起一屏，
+                    // 是因为它和「首页/订阅/热门」是同一层级的数据源筛选。
+                    if let toplistPeriod {
+                        EhFilterPills(
+                            items: Self.toplistPeriods.map { ($0.tl, $0.title) },
+                            selection: toplistPeriod
+                        )
+                        .padding(.bottom, 6)
                     }
 
                     Group {
@@ -476,6 +496,7 @@ struct GalleryListView: View {
         case .home: return AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
         case .subscription: return "订阅"
         case .popular: return "热门"
+        case .toplist: return "排行"
         case .search(let kw): return "搜索: \(kw)"
         case .tag: return "标签搜索"  // 对齐 Android: 标签关键字显示在搜索框而非标题
         case .favorites: return "收藏"
@@ -1962,6 +1983,11 @@ class GalleryListViewModel {
                 }
             case .popular:
                 baseUrl = EhURL.popularUrl(for: site)
+            case .toplist(let period):
+                // toplist.php 返回的就是标准的紧凑画廊列表表格 (itg gltc)，
+                // 通用解析器能直接吃（TopListParsingTests 用真实排版守着），
+                // 所以排行榜可以和其它列表走同一条路，卡片样式自然一致。
+                baseUrl = "\(EhURL.host(for: site))toplist.php?tl=\(period)"
             }
         }
 
@@ -2122,6 +2148,11 @@ class GalleryListViewModel {
                 urlString = builder.build(site: site)
             case .popular:
                 urlString = EhURL.popularUrl(for: site)
+            case .toplist(let period):
+                // 排行榜按 p= 分页，和普通列表一致
+                urlString = page > 0
+                    ? "\(host)toplist.php?tl=\(period)&p=\(page)"
+                    : "\(host)toplist.php?tl=\(period)"
             case .search(let keyword):
                 var builder = ListUrlBuilder()
                 builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
@@ -2230,6 +2261,7 @@ class GalleryListViewModel {
         case .home: return "home:\(filterSignature):\(page)"
         case .subscription: return "watched:\(filterSignature):\(page)"
         case .popular: return "popular:\(page)"
+        case .toplist(let period): return "toplist:\(period):\(page)"
         case .search(let kw): return "search:\(kw):\(filterSignature):\(page)"
         case .tag(let kw): return "tag:\(kw):\(page)"
         case .favorites(let slot): return "fav:\(slot):\(favSearchKeyword ?? ""):\(page)"

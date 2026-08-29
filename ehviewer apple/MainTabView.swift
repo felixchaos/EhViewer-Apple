@@ -82,15 +82,30 @@ struct MainTabView: View {
         }
 
         /// 启动页面设置映射
+        /// 启动页面设置 → 底部标签。
+        ///
+        /// ⚠️ 返回值必须落在 `bottomTabs` 里。
+        ///
+        /// 这里原本给「热门」「排行」返回 .popular / .toplist，但那两者早就不是
+        /// 独立标签页了，已经并进首页顶部的切页（见 initialBrowseSource，它才是
+        /// 处理这两项的地方）。而底部内容是
+        /// `ForEach(bottomTabs) { .opacity(selectedTab == tab ? 1 : 0) }`——
+        /// selectedTab 落在 bottomTabs 之外时没有任何图层匹配，
+        /// 全部 opacity 0：整屏黑，只剩浮起导航条。
+        /// 把「启动页面」设成热门或排行的用户，每次冷启动都是这个画面。
         static func fromLaunchPage(_ page: Int) -> Tab {
+            let tab: Tab
             switch page {
-            case 1: return .popular
-            case 2: return .toplist
-            case 3: return .favorites
-            case 4: return .downloads
-            case 5: return .history
-            default: return .home
+            // 热门 / 排行 → 首页，具体切页由 initialBrowseSource 决定
+            case 1, 2: tab = .home
+            case 3: tab = .favorites
+            case 4: tab = .downloads
+            case 5: tab = .history
+            default: tab = .home
             }
+            // 兜底：万一以后又有人往这里加一个不在底部栏的标签，
+            // 也只是回到首页，而不是黑屏
+            return bottomTabs.contains(tab) ? tab : .home
         }
     }
 
@@ -253,7 +268,7 @@ struct MainTabView: View {
         case .popular:
             GalleryListView(mode: .popular, selection: $selectedGallery)
         case .toplist:
-            TopListView()
+            GalleryListView(mode: .toplist(period: 15), selection: $selectedGallery)
         case .favorites:
             FavoritesView(selection: $selectedGallery)
         case .downloads:
@@ -308,7 +323,7 @@ struct MainTabView: View {
         case .popular:
             GalleryListView(mode: .popular)
         case .toplist:
-            TopListView()
+            GalleryListView(mode: .toplist(period: 15))
         case .favorites:
             FavoritesView()
         case .downloads:

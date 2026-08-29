@@ -27,44 +27,40 @@ enum BrowseSource: String, CaseIterable, Hashable {
         }
     }
 
-    /// 对应的列表模式。排行榜有自己的视图（周期分段 + 排名列），不走 GalleryListView。
-    var listMode: GalleryListView.ListMode? {
+    /// 对应的列表模式。
+    ///
+    /// 排行榜此前不走 GalleryListView（另有一套「名次 + 一行文字」的视图），
+    /// 结果那一页和 App 里其它画廊列表完全不是一个东西。
+    /// toplist.php 返回的本来就是标准画廊列表表格，所以现在统一走这里。
+    func listMode(toplistPeriod: Int) -> GalleryListView.ListMode {
         switch self {
         case .home:         return .home
         case .subscription: return .subscription
         case .popular:      return .popular
-        case .toplist:      return nil
+        case .toplist:      return .toplist(period: toplistPeriod)
         }
     }
 }
 
 struct BrowseHomeView: View {
     @State private var source: BrowseSource
+    /// 排行榜的时间范围（toplist.php 的 tl）。默认全部时间。
+    @State private var toplistPeriod = 15
 
     init(initial: BrowseSource = .home) {
         _source = State(initialValue: initial)
     }
 
     var body: some View {
-        Group {
-            if let mode = source.listMode {
-                // 切页条由 GalleryListView 渲染在自己的搜索栏下方，
-                // 这样「搜索 → 切页 → 列表」的纵向顺序与设计稿一致。
-                GalleryListView(mode: mode, browseSource: $source)
-                    // 数据源变了就重建：每个源有各自的分页游标与筛选条件，
-                    // 复用同一个 ViewModel 会把上一个源的游标带到下一个源。
-                    .id(source)
-            } else {
-                // 排行榜没有搜索框，切页条直接置顶
-                VStack(spacing: 0) {
-                    EhTopTabs(
-                        items: BrowseSource.allCases.map { ($0, $0.title) },
-                        selection: $source
-                    )
-                    .padding(.top, 4)
-                    TopListView()
-                }
-            }
-        }
+        // 切页条由 GalleryListView 渲染在自己的搜索栏下方，
+        // 这样「搜索 → 切页 → 列表」的纵向顺序与设计稿一致。
+        GalleryListView(
+            mode: source.listMode(toplistPeriod: toplistPeriod),
+            browseSource: $source,
+            toplistPeriod: source == .toplist ? $toplistPeriod : nil
+        )
+        // 数据源或时间范围变了就重建：每个源有各自的分页游标与筛选条件，
+        // 复用同一个 ViewModel 会把上一个源的游标带到下一个源。
+        .id("\(source.rawValue)-\(source == .toplist ? toplistPeriod : 0)")
     }
 }

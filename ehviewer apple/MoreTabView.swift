@@ -49,7 +49,7 @@ struct MoreTabView: View {
         case .popular:
             GalleryListView(mode: .popular, isPushed: true)
         case .toplist:
-            TopListView(isPushed: true)
+            GalleryListView(mode: .toplist(period: 15), isPushed: true)
         case .history:
             HistoryView(isPushed: true)
         case .settings:
