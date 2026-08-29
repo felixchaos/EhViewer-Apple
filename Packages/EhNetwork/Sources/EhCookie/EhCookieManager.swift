@@ -193,6 +193,54 @@ public final class EhCookieManager: @unchecked Sendable {
 
         // nw=1 跳过内容警告页面 (Android 硬编码注入)
         injectNWCookie()
+
+        // 账号密码登录走的是 URLSession，而它的 httpCookieStorage 就是
+        // HTTPCookieStorage.shared：服务端返回的 Set-Cookie 带着真实过期时间，
+        // 在任何 App 代码跑起来之前就已经被当成持久 Cookie 写进容器了。
+        // 这里把它收编：存进钥匙串，再把落盘的那份换成会话 Cookie。
+        secureAuthCookies()
+    }
+
+    /// 把当前罐子里的认证 Cookie 收编成「钥匙串持久 + 会话副本」。
+    ///
+    /// 任何不经 setCookie 而让认证 Cookie 进到罐子里的路径（URLSession 自动
+    /// 存储、WebView 同步）登录之后都必须调它，否则 pass hash 会以明文
+    /// 留在容器的 Cookies.binarycookies 里 —— 那正是改钥匙串要消除的东西。
+    @discardableResult
+    public func secureAuthCookies() -> Bool {
+        let creds = EhCredentials(memberId: memberId, passHash: passHash, igneous: igneous)
+        guard !creds.isEmpty else { return false }
+
+        // 钥匙串用不上时保持持久 Cookie（否则重启即登出），不要改写
+        guard EhCredentialStore.isAvailable else { return false }
+
+        // 存不进去就绝对不能把 Cookie 换成会话副本——那样重启即登出，
+        // 而且用户完全不知道发生了什么。
+        guard EhCredentialStore.save(creds) else {
+            EhCookieManager.credentialPersistenceFailed = true
+            return false
+        }
+
+        // 先把已经落盘的那份删掉，再以会话 Cookie 重写。
+        // 只靠同名覆盖不够保险：不同 domain/path 组合会留下多条记录。
+        removePersistedAuthCookies()
+        rewriteAuthCookiesAsSession(creds)
+        return true
+    }
+
+    /// 钥匙串明明可用却写失败过。登录流程读它，好让用户知道
+    /// 「这次登录可能撑不过重启」，而不是下次打开 App 莫名其妙变成未登录。
+    public nonisolated(unsafe) static var credentialPersistenceFailed = false
+
+    /// 删掉罐子里所有认证 Cookie（三个域名）
+    private func removePersistedAuthCookies() {
+        for domain in [Self.domainEhentai, Self.domainExhentai, Self.domainForums] {
+            let host = domain.trimmingCharacters(in: .init(charactersIn: "."))
+            guard let url = URL(string: "https://\(host)") else { continue }
+            let doomed = (storage.cookies(for: url) ?? [])
+                .filter { Self.authCookieNames.contains($0.name) }
+            for cookie in doomed { storage.deleteCookie(cookie) }
+        }
     }
 
     /// 注入 nw=1 Cookie (对应 Android EhCookieStore 中的硬编码 nw=1)

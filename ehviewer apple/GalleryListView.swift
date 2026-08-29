@@ -498,7 +498,7 @@ struct GalleryListView: View {
                     GalleryRow(
                         gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                         onRequestDownload: requestDownload,
-                        onRequestFavorite: requestFavorite,
+                        onRequestFavorite: toggleFavorite,
                         onTagTap: searchTag
                     )
                 }
@@ -512,13 +512,14 @@ struct GalleryListView: View {
                     }
                     .tint(.blue)
 
-                    // 收藏 (对齐 Android onItemLongClick: Add to Favorites)
+                    // 收藏 / 取消收藏 (对齐 Android onItemLongClick)
                     Button {
-                        requestFavorite(gallery)
+                        toggleFavorite(gallery)
                     } label: {
-                        Label(gallery.favoriteSlot >= 0 ? "取消收藏" : "收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.slash" : "heart")
+                        Label(isFavorited(gallery) ? "取消收藏" : "收藏",
+                              systemImage: isFavorited(gallery) ? "heart.slash" : "heart")
                     }
-                    .tint(gallery.favoriteSlot >= 0 ? .gray : .red)
+                    .tint(isFavorited(gallery) ? .gray : .red)
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
@@ -590,7 +591,7 @@ struct GalleryListView: View {
                             GalleryRow(
                         gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
                         onRequestDownload: requestDownload,
-                        onRequestFavorite: requestFavorite,
+                        onRequestFavorite: toggleFavorite,
                         onTagTap: searchTag
                     )
                                 .tag(gallery)
@@ -702,6 +703,27 @@ struct GalleryListView: View {
         .onChange(of: searchTokens) { _, _ in
             // token 变了就重搜：删掉一个标签本身就是一次条件变更
             submitSearch()
+        }
+    }
+
+    /// 这一本收藏过没有。云端收藏夹或本地收藏都算。
+    private func isFavorited(_ gallery: GalleryInfo) -> Bool {
+        GalleryStatusCache.shared.isFavorited(gallery)
+    }
+
+    /// 收藏 / 取消收藏。
+    ///
+    /// 此前无论已收藏与否都只调 quickFavorite（只会「加」）：侧滑出来的按钮
+    /// 明明写着「取消收藏」，按下去却是再收藏一次。云端收藏夹里想删掉一本，
+    /// 只能进详情页——列表页那个按钮是个谎。
+    private func toggleFavorite(_ gallery: GalleryInfo) {
+        if isFavorited(gallery) {
+            Task {
+                try? await GalleryActionService.shared.removeFavorite(
+                    gid: gallery.gid, token: gallery.token)
+            }
+        } else {
+            requestFavorite(gallery)
         }
     }
 
@@ -1228,11 +1250,13 @@ struct GalleryRow: View {
                 Label("下载", systemImage: "arrow.down.circle")
             }
 
-            // 收藏
+            // 收藏 / 取消收藏
             Button {
                 onRequestFavorite(gallery)
             } label: {
-                Label("收藏", systemImage: gallery.favoriteSlot >= 0 ? "heart.fill" : "heart")
+                let favorited = GalleryStatusCache.shared.isFavorited(gallery)
+                Label(favorited ? "取消收藏" : "收藏",
+                      systemImage: favorited ? "heart.slash" : "heart")
             }
 
             Divider()

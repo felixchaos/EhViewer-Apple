@@ -60,6 +60,9 @@ struct GalleryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 headerSection
+                    // iPhone 上返回按钮是浮在内容之上的 overlay（导航栏被隐藏了），
+                    // 不让开就正好压在封面左上角：按钮本身 33pt 高，加上 4pt 顶距。
+                    .padding(.top, backButtonClearance)
                 Divider()
                 actionBar
                     .padding(.vertical, 10)
@@ -265,6 +268,16 @@ struct GalleryDetailView: View {
     }
 
     /// 详情页封面尺寸 (对齐 Android Settings.KEY_DETAIL_SIZE)
+    /// 浮起返回按钮占掉的高度。iPhone 才有（iPad/Mac 用系统导航栏）。
+    private var backButtonClearance: CGFloat {
+        #if os(iOS)
+        // 17pt 图标 + 上下各 8pt 内边距 = 33pt，再加 overlay 自己的 4pt 顶距
+        horizontalSizeClass == .compact ? 41 : 0
+        #else
+        0
+        #endif
+    }
+
     private var coverSize: CGSize {
         AppSettings.shared.detailSize == 1
             ? CGSize(width: 160, height: 224)
@@ -574,6 +587,7 @@ struct GalleryDetailView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(fullTag, forType: .string)
                 #endif
+                EhToast.success("已复制标签")
             } label: {
                 Label("复制标签", systemImage: "doc.on.doc")
             }
@@ -591,10 +605,11 @@ struct GalleryDetailView: View {
             _ = try await EhAPI.shared.addTag(
                 url: EhURL.myTagsUrl(for: AppSettings.shared.gallerySite), tag: tag
             )
-            Haptics.success()
+            EhToast.success("已订阅「\(name)」")
         } catch {
-            Haptics.error()
-            print("[GalleryDetail] 订阅标签失败: \(error)")
+            // 只发触感 + print 等于没反馈：离线时用户完全不知道订阅没成
+            EhToast.failure("订阅标签失败")
+            debugLog("[GalleryDetail] 订阅标签失败: \(error)")
         }
     }
 
@@ -606,20 +621,26 @@ struct GalleryDetailView: View {
             try EhDatabase.shared.insertFilter(
                 FilterRecord(mode: 2, text: name, enable: true)
             )
-            Haptics.impact()
+            EhToast.success("已屏蔽「\(name)」")
         } catch {
-            Haptics.error()
-            print("[GalleryDetail] 屏蔽标签失败: \(error)")
+            EhToast.failure("屏蔽标签失败")
+            debugLog("[GalleryDetail] 屏蔽标签失败: \(error)")
         }
     }
 
+    /// 标签 chip。形状与配色跟列表行里的 EhGalleryRow.tagChip 保持一致：
+    /// 同一个东西（标签）此前在详情页是胶囊 + tertiarySystemFill、
+    /// 在列表行是 4pt 圆角 + EhColor.fill，看着像两种控件。
     private func tagLabel(_ text: String) -> some View {
         Text(text)
-            .font(.caption)
+            .font(EhFont.caption)
+            .foregroundStyle(EhColor.label)
             .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Color(.tertiarySystemFill))
-            .clipShape(Capsule())
+            .padding(.vertical, 4)
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(EhColor.fill)
+            }
     }
 
     // MARK: - Previews (对齐 Android: 使用网格布局显示预览)
@@ -807,18 +828,15 @@ struct GalleryDetailView: View {
 
     // MARK: - Error
 
+    /// 失败态与所有列表页共用 EhStateView。此前详情页是自己画的一套
+    /// （largeTitle 图标 + .bordered 按钮），和列表页的失败界面长得不一样。
     private func errorSection(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text(message)
-                .foregroundStyle(.secondary)
-            Button("重试") {
+        EhStateView(
+            kind: .error(title: "加载失败", message: message),
+            primaryAction: ("重试", {
                 Task { await vm.loadDetail(gid: gallery.gid, token: gallery.token) }
-            }
-            .buttonStyle(.bordered)
-        }
+            })
+        )
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
     }
@@ -1144,7 +1162,10 @@ class GalleryDetailViewModel {
             )
             // 如果返回有效评分则使用，否则使用用户选择的评分
             self.displayRating = result.rating > 0 ? Float(result.rating) : rating
+            EhToast.success("已评分")
         } catch {
+            // 此前只 debugLog：打完分请求失败，界面纹丝不动，用户以为打上了
+            EhToast.failure("评分失败")
             debugLog("Rate gallery failed: \(error)")
         }
     }

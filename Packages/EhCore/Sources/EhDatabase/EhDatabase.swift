@@ -10,15 +10,41 @@ public final class EhDatabase: Sendable {
         do {
             return try EhDatabase()
         } catch {
-            // 数据库初始化失败时备份旧数据库后重建
-            print("[EhDatabase] 初始化失败: \(error)，尝试备份并重建...")
+            print("[EhDatabase] 初始化失败: \(error)")
             let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
             let dbPath = docsDir.appendingPathComponent("eh.sqlite").path
+
+            // 只有真的是文件损坏才允许重建。
+            //
+            // 这个 catch 会接住 init 里的任何 throw，其中包括
+            // migrator.migrate()。也就是说：将来某次迁移写错一行 SQL，
+            // 这里会把它当成「数据库坏了」，删掉用户全部的下载、历史、
+            // 收藏、过滤器记录重建一个空库——一个能靠改代码修好的
+            // bug，代价变成了不可逆的数据丢失。
+            guard EhDatabase.isCorruptionError(error) else {
+                print("[EhDatabase] ⚠️ 不是文件损坏（很可能是迁移或代码问题），"
+                      + "不动用户数据，本次运行降级为内存数据库")
+                if let memory = try? EhDatabase(inMemory: true) { return memory }
+                fatalError("[EhDatabase] 内存数据库初始化失败，这是代码 bug: \(error)")
+            }
 
             // 备份损坏的数据库（保留最近一次，用户可自行恢复）
             let backupPath = docsDir.appendingPathComponent("eh.sqlite.corrupted_backup").path
             try? FileManager.default.removeItem(atPath: backupPath) // 清理旧备份
-            try? FileManager.default.copyItem(atPath: dbPath, toPath: backupPath)
+            let backedUp: Bool
+            do {
+                try FileManager.default.copyItem(atPath: dbPath, toPath: backupPath)
+                backedUp = true
+            } catch {
+                // 备份失败（磁盘满、权限）此前是 try? 吞掉的，然后照删不误。
+                // 备份没成就不能删——留着损坏的文件至少还有抢救的余地。
+                print("[EhDatabase] ⚠️ 备份失败: \(error)，不删除原库，降级为内存数据库")
+                backedUp = false
+            }
+            guard backedUp else {
+                if let memory = try? EhDatabase(inMemory: true) { return memory }
+                fatalError("[EhDatabase] 内存数据库初始化失败，这是代码 bug: \(error)")
+            }
             // 同时备份 WAL 和 SHM 文件
             try? FileManager.default.copyItem(atPath: dbPath + "-wal", toPath: backupPath + "-wal")
             try? FileManager.default.copyItem(atPath: dbPath + "-shm", toPath: backupPath + "-shm")
@@ -43,6 +69,20 @@ public final class EhDatabase: Sendable {
             }
         }
     }()
+
+    /// 这个错误是不是「文件真的坏了」。
+    ///
+    /// 只认 SQLite 明确表示文件不可读的那几个码。迁移写错、约束冲突、
+    /// 磁盘满都不算——那些不该以删库收场。
+    private static func isCorruptionError(_ error: Error) -> Bool {
+        guard let dbError = error as? DatabaseError else { return false }
+        switch dbError.resultCode.primaryResultCode {
+        case .SQLITE_CORRUPT, .SQLITE_NOTADB:
+            return true
+        default:
+            return false
+        }
+    }
 
     /// 标记是否处于降级模式（内存数据库，重启后数据丢失）
     public let isDegraded: Bool

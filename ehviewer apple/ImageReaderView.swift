@@ -786,14 +786,14 @@ struct ImageReaderView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .task {
-                // 同时加载两页
+            // 两页都交给看护。此前这里是一次性的 TaskGroup，和单页/垂直模式
+            // 修掉的是同一个毛病：预加载正在下其中一页时被翻页取消，
+            // 这个 .task 早就跑完了不会重来，合成图缺一页就永远出不来。
+            .task(id: spread.pages.map { "\(vm.imageURLs[$0] ?? "")_\(vm.retryGeneration[$0, default: 0])" }
+                            .joined(separator: "|")) {
                 await withTaskGroup(of: Void.self) { group in
                     for p in spread.pages {
-                        group.addTask {
-                            await vm.loadPageWithRetry(p)
-                            await vm.downloadImageData(p)
-                        }
+                        group.addTask { await vm.superviseLoading(of: p) }
                     }
                 }
             }

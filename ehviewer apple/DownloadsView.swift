@@ -990,6 +990,9 @@ struct DownloadTaskRow: View {
             gallery: task.gallery,
             // 下载状态排在页数、评分这些通用信息前面
             extraMeta: statusMeta,
+            // 下载中那条 meta 已经是「12/50」，再补一个「50P」就是同一个
+            // 数字在同一行出现两遍
+            hidesPageCount: isActive,
             progress: isActive ? downloadProgress : nil,
             progressLabel: isActive ? "\(Int(downloadProgress * 100))%" : nil,
             // 暂停/继续是这一行最常按的东西，此前只能长按出上下文菜单
@@ -1094,6 +1097,8 @@ struct DownloadTaskRow: View {
             items.append(.init(DownloadsView.formatFileSize(size), color: EhColor.tertiaryLabel))
         }
         if isActive {
+            // 下载中显示「已完成/总页数」。这条已经含总页数了，
+            // 组件那边的「N 页」会重复，所以下面用 hidesPageCount 关掉它。
             items.append(.init("\(task.downloadedPages)/\(task.gallery.pages)",
                                color: EhColor.tertiaryLabel))
             if task.speed > 0 {

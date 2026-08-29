@@ -264,18 +264,20 @@ struct FavoritesView: View {
             // 本地收藏区块 (折叠式, 对齐 Android: 全部分类下显示所有来源)
             if !localFavorites.isEmpty {
                 VStack(spacing: 0) {
-                    HStack {
+                    // 分组头用统一的 ehSectionHeader，跟历史页、我的页一致。
+                    // 此前这里是手写的 .pink + secondarySystemBackground，
+                    // 同一类东西（区块标题）在不同页面长得不一样。
+                    HStack(spacing: 6) {
                         Image(systemName: "heart.fill")
-                            .font(.caption)
-                            .foregroundStyle(.pink)
+                            .font(.system(size: 10))
+                            .foregroundStyle(EhColor.danger)
                         Text("本地收藏 (\(localFavorites.count))")
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.secondary)
+                            .ehSectionHeader()
                         Spacer()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground))
+                    .padding(.horizontal, EhSpacing.page)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
 
                     ForEach(localFavorites.prefix(5), id: \.gid) { record in
                         NavigationLink {

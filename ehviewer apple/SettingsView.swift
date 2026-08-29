@@ -11,6 +11,7 @@ import EhDownload
 import EhDatabase
 import EhSpider
 import EhAPI
+import EhCookie
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
@@ -1647,13 +1648,13 @@ class SettingsViewModel {
     }
 
     func logout() {
-        // 清除所有 EH 相关 Cookie
-        let storage = HTTPCookieStorage.shared
-        for domain in ["e-hentai.org", "exhentai.org", ".e-hentai.org", ".exhentai.org"] {
-            if let cookies = storage.cookies(for: URL(string: "https://\(domain)")!) {
-                for cookie in cookies { storage.deleteCookie(cookie) }
-            }
-        }
+        // 走 EhCookieManager.signOut，而不是自己再抄一遍清 Cookie 的逻辑。
+        //
+        // 这里原来是手写的：只删 HTTPCookieStorage 里的 Cookie，不碰钥匙串。
+        // 认证凭据改存钥匙串之后，这等于「注销只在本次运行有效」——
+        // 重启 App，EhCookieManager.init 从钥匙串把凭据恢复回来，用户又登录了。
+        // 借出去的设备上这是实打实的隐私泄漏。
+        EhCookieManager.shared.signOut()
         isLoggedIn = false
         hasExAccess = false
         displayName = nil

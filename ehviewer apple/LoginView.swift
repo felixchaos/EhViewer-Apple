@@ -47,6 +47,19 @@ private enum LoginMethod: String, Identifiable, CaseIterable {
     }
 }
 
+
+/// 凭据没能写进钥匙串时提醒用户。
+///
+/// 认证 Cookie 是会话 Cookie，钥匙串写失败 = 这次登录撑不过重启。
+/// 不说的话，用户下次打开 App 只会看到自己莫名其妙退登了。
+/// 三个登录入口（账号密码 / WebView / 手填 Cookie）共用。
+@MainActor
+private func warnIfCredentialsNotPersisted() {
+    guard EhCookieManager.credentialPersistenceFailed else { return }
+    EhCookieManager.credentialPersistenceFailed = false
+    EhToast.failure("凭据未能保存，重启后可能需要重新登录")
+}
+
 struct LoginView: View {
     @Environment(AppState.self) private var appState
 
@@ -356,7 +369,9 @@ struct PasswordLoginView: View {
             // 使用 EhAPI 统一的 signIn 方法 (内部使用 EhRequestBuilder + SignInParser)
             let displayName = try await EhAPI.shared.signIn(username: username, password: password)
 
-            // 登录成功 — 同步 Cookie 到 ExHentai
+            // 登录成功 — 同步 Cookie 到 ExHentai。
+            // syncLoginCookies 里会顺带把 URLSession 自动落盘的那份认证 Cookie
+            // 收编进钥匙串并换成会话 Cookie（见 secureAuthCookies）。
             EhCookieManager.shared.syncLoginCookies()
             EhCookieManager.shared.injectNWCookie()
 
@@ -371,6 +386,7 @@ struct PasswordLoginView: View {
 
             // 异步获取完整用户资料 (avatar 等) — RootView 统一处理
 
+            warnIfCredentialsNotPersisted()
             appState.isSignedIn = true
         } catch let error as EhParseError {
             switch error {
@@ -564,7 +580,7 @@ struct WebViewLogin: UIViewRepresentable {
                 }
 
                 if memberId != nil && passHash != nil {
-                    EhCookieManager.shared.persistCredentials()
+                    EhCookieManager.shared.secureAuthCookies()
                     self.hasDetected = true
                     // 尝试从页面提取用户名
                     DispatchQueue.main.async {
@@ -668,7 +684,7 @@ struct WebViewLogin: NSViewRepresentable {
                 }
 
                 if memberId != nil && passHash != nil {
-                    EhCookieManager.shared.persistCredentials()
+                    EhCookieManager.shared.secureAuthCookies()
                     self.hasDetected = true
                     DispatchQueue.main.async {
                         webView.evaluateJavaScript(
@@ -936,6 +952,7 @@ struct CookieLoginView: View {
         // 落到钥匙串。setCookie 写的是会话 Cookie，不持久化，
         // 不存钥匙串的话下次启动就登出了。
         cookieManager.persistCredentials()
+        warnIfCredentialsNotPersisted()
 
         AppSettings.shared.isLogin = true
         appState.isSignedIn = true

@@ -14,6 +14,7 @@
 import Testing
 import Foundation
 import EhCookie
+@testable import ehviewer_apple
 
 /// `.serialized`：这几条都在读写钥匙串里同一个 service/account，
 /// 默认的并行执行会互相踩——一条刚 clear 完，另一条的 save 就跑了。
@@ -106,6 +107,87 @@ struct CredentialStorageTests {
         #expect(manager.passHash == "hash-under-test")
 
         manager.signOut()
+    }
+
+
+    // MARK: - 注销 / 收编
+
+    /// 注销必须连钥匙串一起清 —— 测的是**界面上那个注销按钮实际走的代码**。
+    ///
+    /// 直接测 EhCookieManager.signOut() 是没用的：它一直都清钥匙串。
+    /// 真正的 bug 在 SettingsViewModel.logout()，它自己手写了一遍清 Cookie
+    /// 的逻辑、绕开了 signOut，于是凭据留在钥匙串里，重启后
+    /// EhCookieManager.init 又把用户恢复成登录状态。所以这里必须调 logout()。
+    @Test(.enabled(if: EhCredentialStore.isAvailable))
+    @MainActor
+    func logoutClearsKeychain() async throws {
+        let manager = EhCookieManager.shared
+        manager.setCookie(name: EhCookieManager.keyIPBMemberId, value: "42",
+                          domain: EhCookieManager.domainEhentai)
+        manager.setCookie(name: EhCookieManager.keyIPBPassHash, value: "hash",
+                          domain: EhCookieManager.domainEhentai)
+        try await settle()
+        #expect(manager.persistCredentials())
+        #expect(EhCredentialStore.load() != nil)
+
+        SettingsViewModel().logout()
+        try await settle()
+
+        #expect(EhCredentialStore.load() == nil,
+                "注销后钥匙串里还留着凭据，下次启动会被静默恢复成已登录")
+    }
+
+    /// URLSession 自动落盘的持久认证 Cookie 必须被收编成会话 Cookie。
+    ///
+    /// 账号密码登录走 URLSession，它的 httpCookieStorage 就是 shared，
+    /// 服务端的 Set-Cookie 带真实过期时间，在任何 App 代码跑起来之前就
+    /// 已经以持久 Cookie 落盘了。secureAuthCookies 负责把它收回来。
+    @Test(.enabled(if: EhCredentialStore.isAvailable))
+    func secureAuthCookiesConvertsPersistedCookies() async throws {
+        let manager = EhCookieManager.shared
+        manager.signOut()
+        try await settle()
+
+        // 模拟 URLSession 的行为：直接塞一条带过期时间的持久 Cookie
+        let persistent = HTTPCookie(properties: [
+            .name: EhCookieManager.keyIPBPassHash,
+            .value: "persisted-hash",
+            .domain: EhCookieManager.domainEhentai,
+            .path: "/",
+            .secure: "TRUE",
+            .expires: Date().addingTimeInterval(86_400),
+        ])!
+        HTTPCookieStorage.shared.setCookie(persistent)
+        let memberId = HTTPCookie(properties: [
+            .name: EhCookieManager.keyIPBMemberId,
+            .value: "42",
+            .domain: EhCookieManager.domainEhentai,
+            .path: "/",
+            .secure: "TRUE",
+            .expires: Date().addingTimeInterval(86_400),
+        ])!
+        HTTPCookieStorage.shared.setCookie(memberId)
+
+        let url = URL(string: "https://e-hentai.org")!
+        #expect(HTTPCookieStorage.shared.cookies(for: url)?
+            .first { $0.name == EhCookieManager.keyIPBPassHash }?.isSessionOnly == false,
+            "前置条件：这条应该先是持久 Cookie")
+
+        #expect(manager.secureAuthCookies())
+        try await settle()
+
+        let after = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        let hash = after.first { $0.name == EhCookieManager.keyIPBPassHash }
+        #expect(hash?.isSessionOnly == true, "pass hash 仍以持久 Cookie 落在容器里")
+        #expect(hash?.value == "persisted-hash", "收编过程不能把值弄丢")
+        #expect(EhCredentialStore.load()?.passHash == "persisted-hash")
+
+        manager.signOut()
+    }
+
+    /// 等异步写队列落地
+    private func settle() async throws {
+        try await Task.sleep(for: .milliseconds(250))
     }
 
     /// 等 setCookie 的异步写队列落地

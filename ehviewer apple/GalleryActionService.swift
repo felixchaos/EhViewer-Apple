@@ -99,8 +99,16 @@ final class GalleryActionService {
 
     /// 取消收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
     func removeFavorite(gid: Int64, token: String) async throws {
-        try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
+        do {
+            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
+        } catch {
+            // addFavorite 有成功/失败提示，这里一条都没有：
+            // 取消收藏看起来永远像是「点了没反应」
+            EhToast.failure("取消收藏失败")
+            throw error
+        }
         try? EhDatabase.shared.deleteLocalFavorite(gid: gid)
+        EhToast.success("已取消收藏")
         NotificationCenter.default.post(name: .galleryFavoriteChanged,
                                         object: nil,
                                         userInfo: ["gid": gid, "favorited": false])
@@ -157,6 +165,7 @@ final class GalleryActionService {
         #else
         UIPasteboard.general.string = url
         #endif
+        EhToast.success("已复制链接")
     }
 
     // MARK: - 站点工具

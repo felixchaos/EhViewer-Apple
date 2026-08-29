@@ -58,9 +58,23 @@ public enum EhCredentialStore {
         SecItemDelete(probeQuery as CFDictionary)
         let status = SecItemAdd(probeQuery as CFDictionary, nil)
         let ok = (status == errSecSuccess || status == errSecDuplicateItem)
-        if ok { SecItemDelete(probeQuery as CFDictionary) } else { lastError = status }
-        availabilityCache = ok
-        return ok
+        if ok {
+            SecItemDelete(probeQuery as CFDictionary)
+            availabilityCache = true
+            return true
+        }
+
+        lastError = status
+        // 「这次不行」和「这台机器永远不行」要分开。
+        //
+        // errSecMissingEntitlement 是构建方式决定的，整个进程都不会变，缓存住。
+        // 而设备重启后首次解锁之前访问 AfterFirstUnlock 的数据会拿到
+        // errSecInteractionNotAllowed —— 那只是「现在不行」。把它缓存成 false，
+        // 用户解锁之后这一整轮进程都会退回持久 Cookie，pass hash 又落盘了。
+        if status == errSecMissingEntitlement {
+            availabilityCache = false
+        }
+        return false
     }
 
     private nonisolated(unsafe) static var availabilityCache: Bool?

@@ -255,6 +255,8 @@ extension EhGalleryRow {
         gallery: GalleryInfo,
         subtitleOverride: String? = nil,
         extraMeta: [MetaItem] = [],
+        /// 调用方自己的 meta 里已经含总页数时置 true（下载中的「12/50」）
+        hidesPageCount: Bool = false,
         progress: Double? = nil,
         progressLabel: String? = nil,
         accessory: AnyView? = nil,
@@ -262,7 +264,7 @@ extension EhGalleryRow {
     ) {
         let settings = AppSettings.shared
         var meta = extraMeta
-        if settings.showGalleryPages, gallery.pages > 0 {
+        if settings.showGalleryPages, gallery.pages > 0, !hidesPageCount {
             meta.append(.init("\(gallery.pages)P"))
         }
         if settings.showReadProgress, gallery.pages > 0 {
