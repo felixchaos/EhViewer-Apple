@@ -48,8 +48,6 @@ struct ImageReaderView: View {
     @State private var showTutorial = false
 
     // 跳页输入
-    @State private var showJumpPageAlert = false
-    @State private var jumpPageText = ""
     /// 进度条拖动中的本地值 —— 松手才提交给 ViewModel
     @State private var isSeeking = false
     @State private var seekValue: Double = 0
@@ -147,9 +145,6 @@ struct ImageReaderView: View {
                     hudOverlay(geometry: geometry)
                 }
 
-                // 浮动导航按钮 (工具栏隐藏时显示，提供翻页+工具栏切换)
-                floatingNavigationOverlay(geometry: geometry)
-
                 // 新手教程
                 if showTutorial {
                     readerTutorialOverlay(geometry: geometry)
@@ -204,21 +199,8 @@ struct ImageReaderView: View {
                 Task { await vm.onPageChange(target) }
             }
         }
-        // 跳页输入弹窗
-        .alert("跳转到页码", isPresented: $showJumpPageAlert) {
-            TextField("页码 (1-\(vm.totalPages))", text: $jumpPageText)
-                #if os(iOS)
-                .keyboardType(.numberPad)
-                #endif
-            Button("跳转") {
-                if let page = Int(jumpPageText), page >= 1, page <= vm.totalPages {
-                    goToPage(page - 1) // 0-based
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("输入 1 ~ \(vm.totalPages) 之间的页码")
-        }
+        // 跳页弹窗已随浮动导航一起删除：跳页现在走顶栏的目录网格
+        // （ReaderPageGrid）和底栏的滑杆，不再需要手输页码
         // 切换阅读模式时从 NSCache 恢复已加载图片，避免重新下载
         .onChange(of: readingDirection) { _, _ in
             vm.restoreCachedImages(around: vm.currentPage)
@@ -243,9 +225,6 @@ struct ImageReaderView: View {
         .focused($isReaderFocused)
         .onAppear { isReaderFocused = true }
         .onChange(of: showSettings) { _, isShowing in
-            if !isShowing { isReaderFocused = true }
-        }
-        .onChange(of: showJumpPageAlert) { _, isShowing in
             if !isShowing { isReaderFocused = true }
         }
         // ⚠️ 方向键的含义要和点击区域一致: 左键 = 左侧点击区
@@ -1529,93 +1508,44 @@ struct ImageReaderView: View {
 
     // MARK: - HUD Overlay
 
+    /// 底部信息条：时钟 · 页码 · 电量，同一行。
+    ///
+    /// 此前时钟和电量各自贴在屏幕最底边，而页码在另一个浮层里居中——三者
+    /// 压在同一条边上互相挤，还盖住 Home Indicator。位置算的是
+    /// `geometry.safeAreaInsets.bottom`，但阅读器整屏 ignoresSafeArea，
+    /// 那个值是 0，所以怎么加都贴边。
+    ///
+    /// 翻页/跳页按钮已经删掉：它悬在画面正中偏下，遮挡太重，而翻页本来就能
+    /// 点两侧或滑动，跳页在工具栏的滑杆和目录网格里都有。这里只留页码。
     private func hudOverlay(geometry: GeometryProxy) -> some View {
         VStack {
             Spacer()
-            HStack {
+            HStack(spacing: EhSpacing.row) {
                 if AppSettings.shared.showClock {
                     Text(currentTime, style: .time)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.7))
+                        .font(EhFont.mono(11))
+                        .foregroundStyle(.white.opacity(0.55))
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
 
-                // 页码已移至 floatingNavigationOverlay，不再重复显示
+                if vm.totalPages > 0 {
+                    Text("\(displayedPage + 1) / \(vm.totalPages)")
+                        .font(EhFont.mono(12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.35), in: Capsule())
+                }
+
+                Spacer(minLength: 8)
 
                 if AppSettings.shared.showBattery {
                     batteryView
                 }
             }
-            .padding(.horizontal, max(20, geometry.safeAreaInsets.leading + 12))
-            .padding(.bottom, max(12, geometry.safeAreaInsets.bottom + 4))
-        }
-    }
-
-    // MARK: - Floating Navigation Overlay (浮动导航)
-
-    /// 浮动导航栏 — 工具栏隐藏时始终可见，提供翻页和工具栏切换
-    /// 修复: 上下滚动模式无法翻页 + 没有上/下一页按钮
-    @ViewBuilder
-    private func floatingNavigationOverlay(geometry: GeometryProxy) -> some View {
-        if !showOverlay && vm.totalPages > 0 {
-            let isRTL = readingDirection == .rightToLeft
-            let isVertical = readingDirection == .topToBottom
-            let isFirstPage = vm.currentPage <= 0
-            let isLastPage = vm.currentPage >= vm.totalPages - 1
-
-            VStack {
-                Spacer()
-
-                HStack(spacing: 0) {
-                    // 左侧 / 上一页按钮
-                    Button {
-                        if isRTL { goToNextPage() } else { goToPreviousPage() }
-                    } label: {
-                        Image(systemName: isVertical ? "chevron.up" : "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 52, height: 40)
-                    }
-                    .disabled(isRTL ? isLastPage : isFirstPage)
-                    .opacity((isRTL ? isLastPage : isFirstPage) ? 0.25 : 0.8)
-
-                    // 自定义分割线 (替代 Divider 避免超出 Capsule)
-                    Rectangle()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(width: 1, height: 20)
-
-                    // 中央: 页码 + 点击跳页
-                    Button {
-                        jumpPageText = "\(vm.currentPage + 1)"
-                        showJumpPageAlert = true
-                    } label: {
-                        Text("\(displayedPage + 1) / \(vm.totalPages)")
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.7))
-                            .frame(minWidth: 64, maxHeight: 40)
-                    }
-
-                    // 自定义分割线
-                    Rectangle()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(width: 1, height: 20)
-
-                    // 右侧 / 下一页按钮
-                    Button {
-                        if isRTL { goToPreviousPage() } else { goToNextPage() }
-                    } label: {
-                        Image(systemName: isVertical ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 52, height: 40)
-                    }
-                    .disabled(isRTL ? isFirstPage : isLastPage)
-                    .opacity((isRTL ? isFirstPage : isLastPage) ? 0.25 : 0.8)
-                }
-                .background(.black.opacity(0.35), in: Capsule())
-                .padding(.bottom, max(16, geometry.safeAreaInsets.bottom + 4))
-            }
+            .padding(.horizontal, EhSpacing.page)
+            .padding(.bottom, max(10, safeAreaBottomInset))
         }
     }
 

@@ -69,6 +69,53 @@ public actor SpiderDen {
         _readCacheLock.unlock()
     }
 
+    // MARK: - 阅读缓存的公开读写
+    //
+    // 阅读器自己下图（它要进度、要 H@H 换节点重试），但此前下完只放进内存
+    // NSCache，退出阅读器就没了——同一本看第二遍要把所有图重新下一次。
+    // 而「阅读时同步下载」开着的时候，图又被写进 Documents/download，
+    // 那是永久下载区、不受任何容量上限约束，也会出现在下载列表里。
+    //
+    // 两件事都不是「缓存」。这里给阅读器一个真正的缓存出口：写进 Caches/
+    // 下这块受 readCacheSize（设置里可调，40–640MB）约束的空间，
+    // 超了自动淘汰，系统也能在空间紧张时整体回收。
+    //
+    // key 与 SpiderDen 内部一致，因此和已下载画廊的缓存、
+    // clearCache(forGid:pages:) 都能对上。
+
+    /// 读一页的缓存数据。命中就不必再走网络。
+    public static func cachedImageData(gid: Int64, page: Int) -> Data? {
+        readCache?.getData(forKey: "image_\(gid)_\(page)")
+    }
+
+    /// 把一页写进阅读缓存。超出上限时由 SimpleDiskCache 自行淘汰。
+    @discardableResult
+    public static func cacheImageData(_ data: Data, gid: Int64, page: Int) -> Bool {
+        guard !data.isEmpty, let cache = readCache else { return false }
+        return cache.set(data, forKey: "image_\(gid)_\(page)")
+    }
+
+    /// 阅读缓存当前占用的字节数
+    public static func readCacheUsage() -> Int64 {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("spider_image")
+        guard let e = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in e {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
+    /// 清空整个阅读缓存
+    public static func clearReadCache() {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("spider_image")
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
     /// 清除指定画廊的所有缓存图片 (删除画廊时调用, 避免缓存泄漏)
     public static func clearCache(forGid gid: Int64, pages: Int) {
         guard let cache = readCache else { return }

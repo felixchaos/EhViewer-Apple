@@ -154,6 +154,8 @@ class ReaderViewModel {
     @ObservationIgnored private var usedSkipHathKeys: [Int: Set<String>] = [:]
     @ObservationIgnored private var loadingPages: Set<Int> = []
     @ObservationIgnored private var downloadingImages: Set<Int> = []
+    /// 正在进行的单页下载。由 ViewModel 持有，不随视图或预加载任务被取消。
+    @ObservationIgnored private var downloadTasks: [Int: Task<Void, Never>] = [:]
     /// 后台预加载任务 —— 翻页时取消上一轮，避免快速翻页堆积并发请求
     @ObservationIgnored private var preloadTask: Task<Void, Never>?
     /// 上一次预加载的锚点页 —— 用来推断翻页方向
@@ -463,6 +465,23 @@ class ReaderViewModel {
         for p in doomed {
             cachedImages.removeValue(forKey: p)
         }
+
+        // 真正离得远的页，把还在跑的下载停掉。
+        //
+        // 下载任务已经不随视图/预加载被取消了（见 downloadImageData），
+        // 所以「不再需要的页别再占带宽」这件事得在这里显式做一次。
+        // 用比保留半径更宽的窗口：刚滑过去一两页就掐掉，用户一回头
+        // 又得从头下，那正是要避免的浪费。
+        let cancelLo = max(0, page - radius * 2)
+        let cancelHi = min(max(0, totalPages - 1), page + radius * 2)
+        for p in activeDownloadPages() where p < cancelLo || p > cancelHi {
+            cancelDownload(p)
+        }
+    }
+
+    /// 当前有下载在跑的页
+    private func activeDownloadPages() -> [Int] {
+        Array(downloadTasks.keys)
     }
 
     /// 从 NSCache 恢复当前页附近的图片到 Observable 层
@@ -663,7 +682,42 @@ class ReaderViewModel {
     }
 
     /// 下载图片数据到 NSCache，带进度追踪
+    /// 下载某一页。**同一页同时只会有一个真正的下载在跑**，重复调用是等它。
+    ///
+    /// 下载任务由 ViewModel 持有，不挂在调用方的 Task 上。这一点很重要：
+    /// 之前它是被视图的 `.task` 和预加载任务共同持有的，于是
+    ///
+    ///   - 用户滑过某一页 → 视图消失 → `.task` 取消 → 下到 99% 的字节全扔掉
+    ///   - 滑回来 → 占位符重建 → 从头再下一遍
+    ///   - 翻页触发 `preloadTask?.cancel()` → 同样把进行中的下载腰斩
+    ///
+    /// 表现就是「明明加载到 100% 了又重新开始」，流量翻倍。图片下到一半的
+    /// 字节没有任何复用价值，取消它省不下什么，重下却要付全额。
     func downloadImageData(_ index: Int) async {
+        if let inFlight = downloadTasks[index] {
+            // 已经有人在下这一页，等它就行，不要再发一个请求
+            await inFlight.value
+            return
+        }
+        // Task {} 不继承调用方的取消状态：视图消失、预加载被取消，
+        // 都不会再打断已经开始的下载。要停只能显式调 cancelDownload。
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performImageDownload(index)
+        }
+        downloadTasks[index] = task
+        await task.value
+        downloadTasks[index] = nil
+    }
+
+    /// 显式取消某一页的下载。只在这一页确实不再需要时调
+    /// （evictDistantPages 判定它已经离得太远）。
+    func cancelDownload(_ index: Int) {
+        downloadTasks[index]?.cancel()
+        downloadTasks[index] = nil
+    }
+
+    private func performImageDownload(_ index: Int) async {
         // 已缓存 → 直接提升到 Observable 层 (使用 gid:page 复合 key)
         let key = cacheKey(for: index)
         if let cached = Self.imageCache.object(forKey: key) {
@@ -674,6 +728,21 @@ class ReaderViewModel {
             }
             return
         }
+        // 内存里没有 → 先看磁盘缓存。
+        //
+        // 此前只有内存 NSCache：退出阅读器、或者图被内存压力挤掉之后，
+        // 同一页要重新从网络下一遍。这是「同一本看两遍付两份流量」的来源，
+        // 也是设置里那个「阅读缓存大小」一直没有真正生效的原因——
+        // 阅读器根本没往那块缓存里写过东西。
+        if let cached = SpiderDen.cachedImageData(gid: gid, page: index),
+           let img = await Task.detached(priority: .userInitiated, operation: {
+               Self.downsampledImage(data: cached)
+           }).value {
+            Self.imageCache.setObject(img, forKey: key, cost: Self.decodedCost(of: img))
+            await MainActor.run { self.cachedImages[index] = img }
+            return
+        }
+
         guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
         guard !downloadingImages.contains(index) else { return }
         // 可变: 换 H@H 节点后 URL 会变 (对齐 Android SpiderQueen 的 nl= 重试)
@@ -745,7 +814,12 @@ class ReaderViewModel {
                 }.value
 
                 if let img = img {
-                    // 阅读时同步下载 (对齐 Android 上游 sync_download_while_reading)
+                    // 先落缓存：这一页以后再看就不用再下了。
+                    // 写的是 Caches/ 下受 readCacheSize 约束的那块，超了自动淘汰。
+                    SpiderDen.cacheImageData(data, gid: gid, page: index)
+
+                    // 阅读时同步下载 —— 这是「下载」不是「缓存」：
+                    // 它把图写进 Documents/download 并登记下载任务，默认关闭。
                     await syncDownloadIfEnabled(index: index, data: data, url: url)
 
                     let cost = Self.decodedCost(of: img)

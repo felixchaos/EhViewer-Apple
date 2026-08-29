@@ -800,11 +800,16 @@ struct SettingsView: View {
             ))
 
             // 阅读时同步下载 (对齐 Android 上游 2026-06-16 sync_download_while_reading)
-            Toggle("阅读时同步下载", isOn: Binding(
+            Toggle("阅读时自动下载", isOn: Binding(
                 get: { AppSettings.shared.syncDownloadWhileReading },
                 set: { AppSettings.shared.syncDownloadWhileReading = $0 }
             ))
-            Text("浏览未下载的画廊时，把看过的图片顺手存进下载目录")
+            // 这行字此前写的是「顺手存进下载目录」，读起来像一种缓存优化，
+            // 但它的实际后果是每翻一本都进下载列表、占用永久空间、不受缓存
+            // 上限约束。开关的名字和说明都要把这件事讲清楚。
+            Text("每看过一页就存进下载目录，画廊会出现在下载列表里，"
+                 + "占用的是永久空间，不受下面的阅读缓存上限约束。"
+                 + "只想省流量的话不需要开——阅读缓存已经会自动复用看过的图。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -890,6 +895,24 @@ struct SettingsView: View {
                 Text("320 MB").tag(320)
                 Text("480 MB").tag(480)
                 Text("640 MB").tag(640)
+            }
+
+            Text("看过的图片会存进阅读缓存，同一本再看不必重新下载。"
+                 + "超出上限时自动淘汰最旧的，系统空间紧张时也会整体回收。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text("阅读缓存已用")
+                Spacer()
+                Text(vm.readCacheUsage)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("清空阅读缓存") {
+                SpiderDen.clearReadCache()
+                vm.refreshCacheSizes()
+                EhToast.success("已清空阅读缓存")
             }
 
             HStack {
@@ -1526,14 +1549,20 @@ class SettingsViewModel {
     var diagnosisSuccess = false
 
     var diskCacheSize: String = "计算中..."
+    /// 阅读缓存（Caches/spider_image）已用空间。
+    /// 此前设置里只显示 URLCache 的占用，而阅读器的图根本不在那儿，
+    /// 所以「缓存大小」这一项和用户实际感受到的占用对不上。
+    var readCacheUsage: String = "计算中..."
 
     func calculateCacheSize() {
-        let urlCacheSize = URLCache.shared.currentDiskUsage
         let byteFormatter = ByteCountFormatter()
         byteFormatter.allowedUnits = [.useMB, .useGB]
         byteFormatter.countStyle = .file
-        diskCacheSize = byteFormatter.string(fromByteCount: Int64(urlCacheSize))
+        diskCacheSize = byteFormatter.string(fromByteCount: Int64(URLCache.shared.currentDiskUsage))
+        readCacheUsage = byteFormatter.string(fromByteCount: SpiderDen.readCacheUsage())
     }
+
+    func refreshCacheSizes() { calculateCacheSize() }
 
     func clearCache() {
         // 清除内存缓存
