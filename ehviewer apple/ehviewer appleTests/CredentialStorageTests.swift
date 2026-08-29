@@ -15,6 +15,9 @@ import Testing
 import Foundation
 import EhCookie
 
+/// `.serialized`：这几条都在读写钥匙串里同一个 service/account，
+/// 默认的并行执行会互相踩——一条刚 clear 完，另一条的 save 就跑了。
+@Suite(.serialized)
 struct CredentialStorageTests {
 
     // MARK: - 钥匙串往返

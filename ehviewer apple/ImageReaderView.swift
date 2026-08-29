@@ -921,19 +921,26 @@ struct ImageReaderView: View {
             let imgSize = cachedImage.size
             let ratio = imgSize.width > 0 ? imgSize.height / imgSize.width : 1.4
 
-            if cachedImage.isAnimated {
-                #if os(macOS)
-                AnimatedImageView(image: cachedImage, contentMode: .scaleProportionallyUpOrDown)
-                    .frame(width: containerWidth, height: containerWidth * ratio)
-                #else
-                AnimatedImageView(image: cachedImage, contentMode: .scaleAspectFit)
-                    .frame(width: containerWidth, height: containerWidth * ratio)
-                #endif
-            } else {
-                nativeImage(cachedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: containerWidth)
+            // 单页菜单在横竖两种模式下都要有。垂直模式走的是这条独立的
+            // 轻量渲染路径，只在 pageImage 上挂菜单的话，上下滚动模式里长按没反应。
+            Group {
+                if cachedImage.isAnimated {
+                    #if os(macOS)
+                    AnimatedImageView(image: cachedImage, contentMode: .scaleProportionallyUpOrDown)
+                        .frame(width: containerWidth, height: containerWidth * ratio)
+                    #else
+                    AnimatedImageView(image: cachedImage, contentMode: .scaleAspectFit)
+                        .frame(width: containerWidth, height: containerWidth * ratio)
+                    #endif
+                } else {
+                    nativeImage(cachedImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: containerWidth)
+                }
+            }
+            .contextMenu {
+                pageMenu(index: index, image: cachedImage)
             }
         } else if vm.imageURLs[index] != nil {
             VStack(spacing: 8) {
