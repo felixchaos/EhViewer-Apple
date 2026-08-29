@@ -457,6 +457,22 @@ public final class EhDatabase: Sendable {
         }
     }
 
+    /// 按给定顺序重排下载标签。
+    ///
+    /// 表里没有 position 列，getAllDownloadLabels 是按 date 升序取的，
+    /// 所以这里把 date 依次改写成递增的时间戳来表达顺序——比加一列再迁移
+    /// 一次数据库便宜，排序语义也不变。
+    public func reorderDownloadLabels(_ records: [DownloadLabelRecord]) throws {
+        try dbQueue.write { db in
+            let base = Date(timeIntervalSince1970: 0)
+            for (index, record) in records.enumerated() {
+                var updated = record
+                updated.date = base.addingTimeInterval(TimeInterval(index))
+                try updated.update(db)
+            }
+        }
+    }
+
     public func deleteDownloadLabel(id: Int64) throws {
         try dbQueue.write { db in
             _ = try DownloadLabelRecord.deleteOne(db, key: id)

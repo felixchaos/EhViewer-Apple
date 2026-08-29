@@ -46,6 +46,10 @@ struct DownloadsView: View {
     @State private var selectedGids: Set<Int64> = []
     @State private var showBatchDeleteConfirm = false
     @State private var showResetProgressConfirm = false
+    /// 标签管理页。重命名和删除的代码一直都在，但从来没有入口——
+    /// showRenameLabelAlert / showDeleteLabelConfirm 在此之前没有任何地方
+    /// 把它们置为 true，标签建出来就只能一直留着。
+    @State private var showLabelManager = false
     @State private var showMoveLabelSheet = false
 
     // MARK: - 单项删除确认 (Fix: 从 Row 移至父视图，避免 Timer 刷新销毁 @State)
@@ -118,6 +122,9 @@ struct DownloadsView: View {
                 batchMoveLabelSheet
             }
             // 批量删除确认
+            .sheet(isPresented: $showLabelManager) {
+                labelManagerSheet
+            }
             .confirmationDialog(
                 "重置全部阅读进度？所有下载的画廊都会回到第 1 页，已下载的文件不受影响。",
                 isPresented: $showResetProgressConfirm, titleVisibility: .visible
@@ -709,6 +716,12 @@ struct DownloadsView: View {
                     Label("默认下载标签：\(name)", systemImage: "tag")
                 }
 
+                Button {
+                    showLabelManager = true
+                } label: {
+                    Label("管理下载标签", systemImage: "tag")
+                }
+
                 // 批量重置阅读进度 (对齐 Android action_reset_reading_progress)
                 Button {
                     showResetProgressConfirm = true
@@ -897,6 +910,67 @@ struct DownloadsView: View {
     }
 
     // MARK: - 标签管理
+
+    /// 标签管理（对齐 Android DownloadLabelsScene：重命名 / 删除 / 拖动排序）
+    private var labelManagerSheet: some View {
+        NavigationStack {
+            List {
+                if labels.isEmpty {
+                    Text("还没有标签。在菜单里新建一个，下载时就能分组了。")
+                        .font(EhFont.caption)
+                        .foregroundStyle(EhColor.secondaryLabel)
+                } else {
+                    ForEach(labels, id: \.id) { record in
+                        Button {
+                            renamingLabel = record
+                            renameText = record.label
+                            showRenameLabelAlert = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "tag")
+                                    .foregroundStyle(EhColor.accent)
+                                Text(record.label).foregroundStyle(EhColor.label)
+                                Spacer()
+                                Text("\(taskCount(for: record.label))")
+                                    .font(EhFont.mono(12))
+                                    .foregroundStyle(EhColor.tertiaryLabel)
+                            }
+                        }
+                    }
+                    .onMove { source, destination in
+                        var reordered = labels
+                        reordered.move(fromOffsets: source, toOffset: destination)
+                        try? EhDatabase.shared.reorderDownloadLabels(reordered)
+                        loadLabels()
+                    }
+                    .onDelete { offsets in
+                        for index in offsets {
+                            if let id = labels[index].id {
+                                try? EhDatabase.shared.deleteDownloadLabel(id: id)
+                            }
+                        }
+                        loadLabels()
+                    }
+                }
+            }
+            .navigationTitle("下载标签")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .navigationBarLeading) { EditButton() }
+                #endif
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showLabelManager = false }
+                }
+            }
+        }
+    }
+
+    private func taskCount(for label: String) -> Int {
+        vm.tasks.filter { $0.label == label }.count
+    }
 
     /// 重置所有下载画廊的阅读进度 (对齐 Android DownloadManager.resetAllReadingProgress)
     ///

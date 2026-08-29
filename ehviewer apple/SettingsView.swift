@@ -1055,6 +1055,15 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section("关于") {
+            // 免责声明（对齐 Android about_settings.xml 的 declaration）。
+            // 这条是法律意义上的声明，不是装饰：这个 App 不是 E-Hentai 官方的，
+            // 用户该知道自己在用谁做的东西。
+            Text("本应用与 E-Hentai.org 无任何隶属或合作关系，"
+                 + "是基于公开网页接口的第三方客户端。内容全部来自 E-Hentai，"
+                 + "本应用不托管、不生产任何内容。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             HStack {
                 Text("版本")
                 Spacer()

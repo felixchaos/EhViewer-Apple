@@ -632,10 +632,17 @@ public final class AppSettings: @unchecked Sendable {
     /// 那张快照——系统在 App 失活的瞬间截图，只要那一刻界面被盖住，
     /// 切换器里就是遮罩而不是正在看的内容。对这个 App 来说，
     /// 切换器缩略图恰恰是最容易被旁人瞥见的地方，应用锁挡不住它。
+    ///
+    /// ⚠️ 键名是 `secure_screen` 而不是 Android 那边的 `enable_secure`：
+    /// 本项目里 `enable_secure` 早就被应用锁（enableSecurity）占用了——
+    /// 那其实是 Android 的 pattern_protection，键名当初抄错了位置。
+    /// 沿用 Android 的键名会和应用锁串在一起（开隐私遮罩会顺带打开应用锁），
+    /// 而改动 enableSecurity 的键又会把现有用户的应用锁设置清掉。
+    /// 所以新设置换个键，旧的不动。
     @ObservationIgnored
     public var enableSecureScreen: Bool {
-        get { _defaults.bool(forKey: "enable_secure") }
-        set { _defaults.set(newValue, forKey: "enable_secure") }
+        get { _defaults.bool(forKey: "secure_screen") }
+        set { _defaults.set(newValue, forKey: "secure_screen") }
     }
 
     // MARK: - 代理 (对齐 Android Settings.getProxyType/Ip/Port)
