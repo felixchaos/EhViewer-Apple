@@ -11,6 +11,7 @@ import EhDownload
 import EhSpider
 import EhSettings
 import EhDatabase
+import EhCookie
 #if os(iOS)
 import UIKit
 #endif
@@ -25,6 +26,15 @@ struct EhViewerApp: App {
     #endif
 
     init() {
+        // ⚠️ 必须是启动时的第一件事：把钥匙串里的登录凭据同步放回 Cookie 罐。
+        //
+        // 认证 Cookie 现在是会话 Cookie（不落盘），进程重启后罐子里是空的，
+        // 全靠这一步补回来。而项目里有好几处（RootView.init 判断登录态、
+        // GalleryActionService.siteBaseURL 选站点）是直接读 HTTPCookieStorage 的，
+        // 只要它们跑在恢复之前，看到的就是「未登录」。
+        // 放在 App.init 的最前面，才能保证所有这些读取都在它之后。
+        EhCookieManager.shared.ensureCredentialsRestored()
+
         // 配置全局 URLCache (对标 Android Conaco 320MB 磁盘缓存)
         // AsyncImage 和所有使用 URLSession.shared 的代码都会受益
         URLCache.shared = URLCache(

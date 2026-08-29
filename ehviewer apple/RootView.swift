@@ -65,6 +65,14 @@ struct RootView: View {
         } else if settings.skipSignIn {
             step = .main
         } else {
+            // 先把钥匙串里的凭据同步放回 Cookie 罐再判断。
+            //
+            // 认证 Cookie 改成会话 Cookie 之后，进程重启时罐子里本来就是空的，
+            // 全靠 EhCookieManager.init 从钥匙串补回来。不主动碰一下这个单例，
+            // 它根本不会被创建 —— 下面这段就会读到空罐子，于是明明登录着，
+            // App 却停在登录页、配额也读不出来。
+            EhCookieManager.shared.ensureCredentialsRestored()
+
             // 直接检查 Cookie 判断登录状态 (无需 @MainActor)
             let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
             let hasAuth = cookies.contains { $0.name == "ipb_member_id" } &&

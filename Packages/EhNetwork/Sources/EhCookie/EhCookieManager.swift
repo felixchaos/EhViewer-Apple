@@ -83,20 +83,57 @@ public final class EhCookieManager: @unchecked Sendable {
         rewriteAuthCookiesAsSession(creds)
     }
 
+    /// 同步写入一个 Cookie。
+    ///
+    /// setCookie 走的是异步写队列（避免与 HTTPCookieStorage 背后的 XPC 守护
+    /// 进程发生优先级反转）。但启动时恢复凭据这条路径上不能异步：
+    /// RootView 在 init 里同步读 Cookie 罐来判断登录态，写入还排在队列里
+    /// 的话，它看到的就是一个空罐子 —— 明明登录着，App 却显示未登录。
+    private func setCookieSync(name: String, value: String, domain: String, path: String = "/") {
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .name: name, .value: value, .domain: domain, .path: path, .secure: "TRUE",
+        ]
+        if Self.authCookieNames.contains(name), EhCredentialStore.isAvailable {
+            properties[.discard] = "TRUE"
+        } else {
+            properties[.expires] = Date.distantFuture
+        }
+        if let cookie = HTTPCookie(properties: properties) {
+            storage.setCookie(cookie)
+        }
+    }
+
     /// 用会话 Cookie 的形式重新写入三个认证 Cookie。
     /// 会话 Cookie 不落盘，容器里的 Cookies.binarycookies 因此不再有 pass hash。
     private func rewriteAuthCookiesAsSession(_ creds: EhCredentials) {
         if let memberId = creds.memberId {
-            setCookie(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainEhentai)
-            setCookie(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainExhentai)
+            setCookieSync(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainEhentai)
+            setCookieSync(name: Self.keyIPBMemberId, value: memberId, domain: Self.domainExhentai)
         }
         if let passHash = creds.passHash {
-            setCookie(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainEhentai)
-            setCookie(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainExhentai)
+            setCookieSync(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainEhentai)
+            setCookieSync(name: Self.keyIPBPassHash, value: passHash, domain: Self.domainExhentai)
         }
         if let igneous = creds.igneous {
-            setCookie(name: Self.keyIgneous, value: igneous, domain: Self.domainExhentai)
+            setCookieSync(name: Self.keyIgneous, value: igneous, domain: Self.domainExhentai)
         }
+    }
+
+    /// 确保钥匙串里的凭据已经回到 Cookie 罐里。
+    ///
+    /// 必须在任何「读 Cookie 判断登录态」的代码之前调用。认证 Cookie 现在是
+    /// 会话 Cookie，进程重启后罐子里本来就是空的，全靠这一步补回来；
+    /// 而这一步是在 EhCookieManager 的 init 里做的，不主动碰一下这个单例，
+    /// 它根本不会被创建。
+    /// 供测试直接触发一次恢复（单例在测试进程里早就建好了，
+    /// 光碰 shared 不会再跑一次 init）
+    public func restoreCredentialsFromKeychainForTesting() {
+        restoreCredentialsFromKeychain()
+    }
+
+    public func ensureCredentialsRestored() {
+        // 访问 shared 即触发 init → restoreCredentialsFromKeychain（同步）
+        _ = Self.shared
     }
 
     // MARK: - 登录状态检查

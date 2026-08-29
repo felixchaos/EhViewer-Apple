@@ -185,6 +185,51 @@ struct CredentialStorageTests {
         manager.signOut()
     }
 
+
+    /// 「重启之后还得是登录状态」—— 这条是这次改动的命门。
+    ///
+    /// 认证 Cookie 改成会话 Cookie 之后，进程重启时罐子里是空的，全靠
+    /// EhCookieManager.init 从钥匙串同步补回来。补回来这件事有两个前提，
+    /// 缺一个用户就会看到「明明登录着却显示未登录、配额也读不到」：
+    ///   1. 写入必须是同步的（setCookie 走异步写队列，排在队列里不算数）
+    ///   2. 必须有人在读 Cookie 之前碰过 EhCookieManager（否则单例都没建）
+    /// 这里模拟第 2 步之后立刻同步读，等价于 App 启动时那条路径。
+    @Test(.enabled(if: EhCredentialStore.isAvailable))
+    func credentialsAreReadableSynchronouslyAfterRestore() async throws {
+        let manager = EhCookieManager.shared
+        manager.signOut()
+        try await settle()
+
+        // 先造出「上次运行留下的钥匙串凭据」
+        #expect(EhCredentialStore.save(EhCredentials(
+            memberId: "42", passHash: "restored-hash", igneous: nil)))
+
+        // 清掉罐子里的会话副本，模拟进程重启
+        let url = URL(string: "https://e-hentai.org")!
+        for cookie in HTTPCookieStorage.shared.cookies(for: url) ?? [] {
+            HTTPCookieStorage.shared.deleteCookie(cookie)
+        }
+        #expect(manager.passHash == nil, "前置条件：罐子应该是空的")
+
+        // 先把异步写队列灌满：如果恢复走的是那条队列，它就得排在这些后面，
+        // 下面的同步读必然读不到。同步写则直接落罐，不受影响。
+        // 不这样做的话，异步写往往在断言之前就跑完了，测试挡不住回归
+        // （试过：把同步写改回异步，测试照样通过）。
+        for i in 0..<200 {
+            manager.setCookie(name: "queue_filler_\(i)", value: "1", domain: "e-hentai.org")
+        }
+
+        // 启动路径做的事：碰一下单例，然后**立刻同步**读
+        manager.ensureCredentialsRestored()
+        manager.restoreCredentialsFromKeychainForTesting()
+
+        #expect(manager.passHash == "restored-hash",
+                "恢复不是同步的 —— 启动时读登录态会看到空罐子")
+        #expect(manager.isSignedIn, "重启后应当仍是登录状态")
+
+        manager.signOut()
+    }
+
     /// 等异步写队列落地
     private func settle() async throws {
         try await Task.sleep(for: .milliseconds(250))
