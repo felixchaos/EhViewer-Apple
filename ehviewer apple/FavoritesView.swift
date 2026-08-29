@@ -527,19 +527,9 @@ struct FavoritesView: View {
 
     private var slotPicker: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 同步状态：云收藏夹是网络数据，用户需要知道看到的是不是最新的
-            if selectedSlot >= 0 {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10))
-                    Text(syncStatusText)
-                        .font(EhFont.footnote)
-                }
-                .foregroundStyle(EhColor.tertiaryLabel)
-                .padding(.horizontal, EhSpacing.page)
-                .padding(.top, 4)
-            }
-
+            // 同步状态只在页头副标题里出现一次。
+            // 这里原本还有一行带同步图标的同名文字，是把状态挪进 EhPageHeader
+            // 时忘了删的旧实现——「云端收藏夹」在同一屏上下紧挨着显示两遍。
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     slotPill(slot: -1, title: "全部", symbol: nil, count: 0)
