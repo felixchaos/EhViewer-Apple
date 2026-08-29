@@ -40,6 +40,8 @@ struct RootView: View {
     @State private var showSadPandaAlert = false
     /// 磁盘空间不足警告
     @State private var showDiskFullAlert = false
+    /// 隐私遮罩：App 失活时盖住界面，让 App 切换器拍到的是遮罩而不是内容
+    @State private var isPrivacyCovered = false
     enum OnboardingStep {
         case checking      // 检查状态中
         case warning       // 18+ 警告
@@ -96,6 +98,32 @@ struct RootView: View {
                 onboardingOverlay
             }
         }
+        // 隐私遮罩必须在提示层之外、最上面一层：
+        // 系统在 App 失活的瞬间给界面拍快照，那张图会出现在 App 切换器里。
+        // 应用锁是「回来时要解锁」，挡不住这张已经拍好的缩略图。
+        .overlay {
+            if isPrivacyCovered {
+                ZStack {
+                    EhColor.background
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(EhColor.tertiaryLabel)
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
+        }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willResignActiveNotification)) { _ in
+            // 不要加动画：快照就在这一刻拍，淡入过程会被拍进去
+            if AppSettings.shared.enableSecureScreen { isPrivacyCovered = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didBecomeActiveNotification)) { _ in
+            isPrivacyCovered = false
+        }
+        #endif
         // 收藏/下载的轻提示层挂在根上，全 App 共用一个
         .ehToastHost()
         .withGlobalErrorBoundary()

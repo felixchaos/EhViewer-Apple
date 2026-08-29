@@ -625,6 +625,19 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "built_ex_hosts") }
     }
 
+    /// 隐私遮罩（对齐 Android privacy_settings.xml 的 enable_secure，默认关闭）。
+    ///
+    /// Android 那边是给窗口加 FLAG_SECURE：既禁截屏，也让最近任务里的预览图变空白。
+    /// iOS 拦不住截屏（系统不给 App 这个权限），但**能**挡住 App 切换器里的
+    /// 那张快照——系统在 App 失活的瞬间截图，只要那一刻界面被盖住，
+    /// 切换器里就是遮罩而不是正在看的内容。对这个 App 来说，
+    /// 切换器缩略图恰恰是最容易被旁人瞥见的地方，应用锁挡不住它。
+    @ObservationIgnored
+    public var enableSecureScreen: Bool {
+        get { _defaults.bool(forKey: "enable_secure") }
+        set { _defaults.set(newValue, forKey: "enable_secure") }
+    }
+
     // MARK: - 代理 (对齐 Android Settings.getProxyType/Ip/Port)
 
     /// 代理模式：0 = 跟随系统，1 = 手动 HTTP 代理。

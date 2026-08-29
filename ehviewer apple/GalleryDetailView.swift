@@ -103,6 +103,16 @@ struct GalleryDetailView: View {
                 .padding(.leading, 12)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            // 详情页此前没有任何菜单入口：导航栏在 iPhone 上是隐藏的，
+            // 只留了个返回按钮，于是 Android 菜单里的「刷新」和
+            // 「用其他应用打开」在这边一个都没有。
+            if horizontalSizeClass == .compact {
+                detailMenu
+                    .padding(.top, 4)
+                    .padding(.trailing, 12)
+            }
+        }
         .enableEdgeSwipeBack()
         #endif
         #if os(iOS)
@@ -196,6 +206,44 @@ struct GalleryDetailView: View {
             if let torrentUrl = vm.detail?.torrentUrl, !torrentUrl.isEmpty {
                 TorrentListView(gid: gallery.gid, token: gallery.token, torrentUrl: torrentUrl)
             }
+        }
+    }
+
+    /// 详情页菜单（对齐 Android scene_gallery_detail.xml）
+    private var detailMenu: some View {
+        Menu {
+            Button {
+                Task { await vm.loadDetail(gid: gallery.gid, token: gallery.token) }
+            } label: {
+                Label("刷新", systemImage: "arrow.clockwise")
+            }
+
+            Button {
+                GalleryActionService.shared.copyLink(gid: gallery.gid, token: gallery.token)
+            } label: {
+                Label("复制链接", systemImage: "doc.on.doc")
+            }
+
+            // 用浏览器打开：Cookie 失效、遇到验证码、或者想看网页版的
+            // 某些内容时，这是唯一的出路
+            Button {
+                let url = GalleryActionService.shared.galleryURL(
+                    gid: gallery.gid, token: gallery.token)
+                #if os(iOS)
+                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                #else
+                if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+                #endif
+            } label: {
+                Label("在浏览器中打开", systemImage: "safari")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(.black.opacity(0.5))
+                .clipShape(Circle())
         }
     }
 

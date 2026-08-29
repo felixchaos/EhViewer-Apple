@@ -9,6 +9,7 @@ import SwiftUI
 import EhModels
 import EhAPI
 import EhSettings
+import EhDatabase
 
 struct GalleryCommentsView: View {
     let gid: Int64
@@ -195,6 +196,58 @@ struct GalleryCommentsView: View {
             }
         }
         .padding()
+        // 长按菜单（对齐 Android GalleryCommentsScene 的 copy_comment_text /
+        // join_blacklist）。此前评论行只有投票和编辑按钮，想复制一段评论
+        // 或者屏蔽一个反复刷屏的人，都没有出口。
+        .contextMenu {
+            Button {
+                #if os(iOS)
+                UIPasteboard.general.string = Self.plainText(comment.comment)
+                #else
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.plainText(comment.comment), forType: .string)
+                #endif
+                EhToast.success("已复制评论")
+            } label: {
+                Label("复制评论内容", systemImage: "doc.on.doc")
+            }
+
+            if !comment.user.isEmpty {
+                Button(role: .destructive) {
+                    blockCommenter(comment.user)
+                } label: {
+                    Label("屏蔽「\(comment.user)」", systemImage: "person.slash")
+                }
+            }
+        }
+    }
+
+    /// 复制时给纯文本，不给 HTML —— 评论正文在模型里是带标签的原始 HTML，
+    /// 直接贴出去是一串 <br> 和 <a href>。
+    private static func plainText(_ html: String) -> String {
+        html.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#039;", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 把评论者加进过滤器。
+    /// mode 1 = 上传者过滤，与 FilterView 里那一类是同一套（评论者用的也是
+    /// E-Hentai 的用户名，和上传者同一个命名空间）。
+    private func blockCommenter(_ user: String) {
+        do {
+            try EhDatabase.shared.insertFilter(
+                FilterRecord(mode: 1, text: user, enable: true)
+            )
+            EhToast.success("已屏蔽「\(user)」")
+        } catch {
+            EhToast.failure("屏蔽失败")
+            debugLog("[Comments] 屏蔽评论者失败: \(error)")
+        }
     }
 }
 

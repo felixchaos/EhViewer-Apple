@@ -989,6 +989,16 @@ struct SettingsView: View {
 
     private var securitySection: some View {
         Section("隐私与安全") {
+            // 隐私遮罩（对齐 Android enable_secure）
+            Toggle("切到后台时隐藏内容", isOn: Binding(
+                get: { AppSettings.shared.enableSecureScreen },
+                set: { AppSettings.shared.enableSecureScreen = $0 }
+            ))
+            Text("离开 App 时立刻盖住界面，这样 App 切换器里的预览图不会露出正在看的内容。"
+                 + "iOS 不允许 App 禁止截屏，所以这一项挡不住主动截屏。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Toggle("启用应用锁", isOn: Binding(
                 get: { AppSettings.shared.enableSecurity },
                 set: { AppSettings.shared.enableSecurity = $0 }
