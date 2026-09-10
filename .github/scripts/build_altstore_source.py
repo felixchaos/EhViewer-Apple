@@ -12,10 +12,13 @@ AltStore 需要看到完整的 versions 数组才能判断「有没有比本机�
 只放最新一条会让降级和跳版判断失效。
 """
 
+import io
 import json
 import os
+import plistlib
 import sys
 import urllib.request
+import zipfile
 
 REPO = "felixchaos/EhViewer-Apple"
 BUNDLE_ID = "Stellatrix.ehviewer-apple"
@@ -31,6 +34,44 @@ def fetch_releases():
         req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
+
+
+# AltStore / SideStore 用 minOSVersion 判断能否装到当前设备，填错就装不上。
+# 这个值随版本变（1.3.2 起是 18.0，更早是 26.2），所以直接从 ipa 的 Info.plist
+# 里读，而不是写死一个常量——写死过一次，结果 1.3.2 对 iOS 18 用户不可见。
+FALLBACK_MIN_OS = "26.2"
+
+
+def min_os_version(ipa_url):
+    """从 ipa 内 Payload/*.app/Info.plist 读 MinimumOSVersion。"""
+    try:
+        req = urllib.request.Request(ipa_url)
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=120) as r:
+            blob = r.read()
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            name = next(
+                (
+                    n
+                    for n in z.namelist()
+                    if n.startswith("Payload/")
+                    and n.endswith(".app/Info.plist")
+                    and n.count("/") == 2
+                ),
+                None,
+            )
+            if not name:
+                raise LookupError("ipa 内找不到 Payload/*.app/Info.plist")
+            value = plistlib.loads(z.read(name)).get("MinimumOSVersion")
+            if not value:
+                raise LookupError("Info.plist 中没有 MinimumOSVersion")
+            return str(value)
+    except Exception as exc:  # noqa: BLE001 — 单个版本读失败不该让整个清单挂掉
+        # 退回到保守值：宁可少offer给一部分本可安装的设备，也不能 offer 给装不上的
+        print(f"⚠️  读取 {ipa_url} 的 MinimumOSVersion 失败({exc})，回退 {FALLBACK_MIN_OS}", file=sys.stderr)
+        return FALLBACK_MIN_OS
 
 
 def build_versions(releases):
@@ -52,7 +93,7 @@ def build_versions(releases):
                 "localizedDescription": (rel.get("body") or "").strip()[:2000],
                 "downloadURL": ipa["browser_download_url"],
                 "size": ipa["size"],
-                "minOSVersion": "26.2",
+                "minOSVersion": min_os_version(ipa["browser_download_url"]),
             }
         )
     return versions
