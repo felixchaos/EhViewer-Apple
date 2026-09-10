@@ -82,10 +82,19 @@ DMG 已用 Developer ID 签名并通过 Apple 公证，票据已植入，断网�
 |------|------|
 | Xcode | 26.0+ |
 | Swift | 6.0 |
-| iOS / iPadOS | 26.2+ |
+| iOS / iPadOS | 18.0+ |
 | macOS | 26.0+ |
 
-系统要求较高是因为代码大量使用了 Swift 6 严格并发与 iOS 26 的 SwiftUI API（`@Observable`、`scrollPosition`、`ContentUnavailableView` 等）。降低最低版本需要成规模的重写，目前没有计划。
+构建需要 Xcode 26 / Swift 6，但产物的最低运行版本是 iOS 18.0。代码里没有 iOS 26 独占 API，
+实际用到的最高版本 API 是 `onScrollGeometryChange`（iOS 18）；`@Observable`、`scrollPosition`、
+`ContentUnavailableView` 都是 iOS 17 起就有的。
+
+> **iOS 18 / 19 尚未经过真机或模拟器测试。** 已验证的只是「以 18.0 为最低版本全量编译通过，
+> 无可用性错误与警告」，SwiftUI 在旧系统上的实际布局与交互行为没有验证过。
+> 遇到问题请开 issue 并附上系统版本。
+
+iOS 17 及更早暂不支持：`@Observable` 需要 iOS 17，且降到 17 需要为浮动 TabBar 的滚动隐藏写降级路径。
+macOS 侧仍要求 26.0+，未随本次一起下调。
 
 ---
 

@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.3.2] - 2026-09-10
+
+### 📱 兼容性
+
+- **iOS / iPadOS 最低版本从 26.2 降到 18.0** — 26.2 是项目初始化时留下的设置，
+  并非代码的真实要求。核查确认代码中没有任何 iOS 26 独占 API（无 `@available(iOS 26)`、
+  无 `glassEffect` / `tabBarMinimizeBehavior` 一类 iOS 26 控件），用到的最高版本 API 是
+  `onScrollGeometryChange`（iOS 18）；`Packages/` 下各模块本就声明 `.iOS(.v17)`，
+  Widget 扩展本就是 18.0。以 18.0 为最低版本全量编译通过，无可用性错误与警告
+- 这意味着 iPhone XS / XR / SE2 等被 iOS 26 排除的机型重新进入支持范围
+
+> ⚠️ **iOS 18 / 19 未经测试。** 本次验证的是编译期 API 可用性，
+> 不包括 SwiftUI 在旧系统上的实际运行行为（布局、导航、手势等跨版本差异）。
+> 该版本属于「可能可用」，遇到问题请开 issue 并附系统版本。
+
+### 📄 文档
+
+- 修正 README 环境要求一节的错误说明：原文称 `@Observable`、`scrollPosition`、
+  `ContentUnavailableView` 是 iOS 26 API，这三个实际都是 iOS 17 起就有的
+
 ## [1.3.1] - 2026-08-28
 
 ### ⚡ 性能优化
