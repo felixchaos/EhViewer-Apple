@@ -67,6 +67,25 @@ public enum EhURL {
         "\(hostE)toplist.php"
     }
 
+    public static func topListUrl(period: Int, page: Int = 0) -> String {
+        let firstPage = "\(topListUrl())?tl=\(period)"
+        return page > 0 ? "\(firstPage)&p=\(page)" : firstPage
+    }
+
+    /// Accept relative pagination links and keep toplist navigation on the E endpoint.
+    public static func topListNavigationUrl(_ href: String) -> String? {
+        guard !href.isEmpty,
+              let base = URL(string: topListUrl()),
+              let url = URL(string: href, relativeTo: base)?.absoluteURL,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "https",
+              components.host == domainE || components.host == domainEX,
+              components.user == nil, components.password == nil, components.port == nil,
+              components.path == base.path,
+              let query = components.percentEncodedQuery, !query.isEmpty else { return nil }
+        return "\(topListUrl())?\(query)"
+    }
+
     public static func imageLookupUrl(for site: EhSite) -> String {
         site == .exHentai
             ? "https://upld.exhentai.org/upld/image_lookup.php"

@@ -366,7 +366,12 @@ public actor EhAPI {
             throw EhError.invalidUrl
         }
 
-        let site = AppSettings.shared.gallerySite
+        let site: EhSite
+        switch requestUrl.host?.lowercased() {
+        case EhURL.domainE: site = .eHentai
+        case EhURL.domainEX: site = .exHentai
+        default: site = AppSettings.shared.gallerySite
+        }
         // ★ 列表页永远取最新数据 (对齐 Android OkHttp: HTML 请求不走缓存)
         //   URLCache 对无缓存头的 HTML 会启用启发式过期, 下拉刷新/翻页可能拿到旧页面,
         //   表现为"列表不断重复同样的画廊" (issue #8 问题一)

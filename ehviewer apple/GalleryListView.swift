@@ -1892,7 +1892,13 @@ class GalleryListViewModel {
         // ★ 始终优先使用 nextHref 翻页
         // ptt 和 searchnav 模式都会提供完整 href (包含 next=TIMESTAMP 等跳页上下文)
         // 这确保日期跳转后能按日期顺序加载，不会因丢失上下文而循环
-        if let nextHref = nextHref {
+        let navigationHref: String?
+        if case .toplist = mode {
+            navigationHref = nextHref.flatMap(EhURL.topListNavigationUrl)
+        } else {
+            navigationHref = nextHref
+        }
+        if let nextHref = navigationHref {
             isLoading = true
             do {
                 let result = try await EhAPI.shared.getGalleryList(url: nextHref)
@@ -2063,7 +2069,9 @@ class GalleryListViewModel {
     private func buildJumpUrl(_ appendParam: String, mode: GalleryListView.ListMode) -> String {
         var baseUrl: String
 
-        if let href = nextHref, !href.isEmpty {
+        if case .toplist(let period) = mode {
+            baseUrl = nextHref.flatMap(EhURL.topListNavigationUrl) ?? EhURL.topListUrl(period: period)
+        } else if let href = nextHref, !href.isEmpty {
             baseUrl = href
         } else {
             let site = AppSettings.shared.gallerySite
@@ -2101,10 +2109,7 @@ class GalleryListViewModel {
             case .popular:
                 baseUrl = EhURL.popularUrl(for: site)
             case .toplist(let period):
-                // toplist.php 返回的就是标准的紧凑画廊列表表格 (itg gltc)，
-                // 通用解析器能直接吃（TopListParsingTests 用真实排版守着），
-                // 所以排行榜可以和其它列表走同一条路，卡片样式自然一致。
-                baseUrl = "\(EhURL.host(for: site))toplist.php?tl=\(period)"
+                baseUrl = EhURL.topListUrl(period: period)
             }
         }
 
@@ -2266,10 +2271,7 @@ class GalleryListViewModel {
             case .popular:
                 urlString = EhURL.popularUrl(for: site)
             case .toplist(let period):
-                // 排行榜按 p= 分页，和普通列表一致
-                urlString = page > 0
-                    ? "\(host)toplist.php?tl=\(period)&p=\(page)"
-                    : "\(host)toplist.php?tl=\(period)"
+                urlString = EhURL.topListUrl(period: period, page: page)
             case .search(let keyword):
                 var builder = ListUrlBuilder()
                 builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
