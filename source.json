@@ -15,6 +15,14 @@
       "category": "entertainment",
       "versions": [
         {
+          "version": "1.3.3",
+          "date": "2026-11-20T01:34:23Z",
+          "localizedDescription": "修复 EX 模式下「排行」请求发往错误站点导致的 HTTP 错误（#17）。排行首页、切换周期和翻页统一使用 E 站接口，其他标签页不变。最低支持 iOS / iPadOS 18.0。IPA 延续自签安装方式，请使用 AltStore / SideStore 等工具重签。排行专项模拟器测试已通过，未在报告者的 iPad 8 上复测。",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.3.3/EhViewer-1.3.3.ipa",
+          "size": 9146245,
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.3.2",
           "date": "2026-09-10T12:24:34Z",
           "localizedDescription": "## iOS / iPadOS 最低版本 26.2 → 18.0\n\n起因是 [#11](https://github.com/felixchaos/EhViewer-Apple/issues/11) 的提问：26.2 这个门槛是不是真的必要。核查后确认不是——那是项目初始化时留下的设置，代码本身没有任何 iOS 26 依赖。\n\n**核查结论**\n\n- 全部源码中没有 `@available(iOS 26)`，没有 `glassEffect`、`tabBarMinimizeBehavior` 等 iOS 26 控件\n- 用到的最高版本 API 只有 `EhFloatingTabBar.swift` 中的 `onScrollGeometryChange`（iOS 18）\n- `Packages/` 下各模块本就声明 `.iOS(.v17)`，Widget 扩展本就是 18.0，只有主 App target 卡在 26.2\n- 使用的 SF Symbol 全部为 iOS 16 之前引入，不存在旧系统渲染为空白的问题\n\n**已验证**\n\n| 检查项 | 结果 |\n|---|---|\n| 以 18.0 为最低版本全量编译 | 0 error，0 条可用性警告 |\n| 单元测试（46 项 / 11 套） | 全部通过 |\n| macOS Release 构建 | 通过 |\n| 产物 `MinimumOSVersion` | 18.0（主 App 与 Widget 扩展一致） |\n\n**受益机型**：iPhone XS / XR / SE2 等被 iOS 26 排除的设备重新进入支持范围。\n\n---\n\n> ### ⚠️ 本版本属于「可能可用」，未经 iOS 18 实机测试\n>\n> 上述验证覆盖的是**编译期的 API 可用性**，不包括 SwiftUI 在旧系统上的实际运行行为——\n> 布局、导航、手势这类跨大版本差异编译器检查不出来，而目前没有 iOS 18 的设备或模拟器 runtime 可供实测。\n>\n> 如遇问题请提交 issue，附上系统版本与机型。需要回退时下载 [v1.3.1](https://github.com/felixchaos/EhViewer-Apple/releases/tag/v1.3.1) 即可。\n\n**未降到 iOS 17**：17 与 18 支持的机型完全相同，覆盖面没有增量，却需要为浮动 TabBar 的滚动隐藏编写无法测试的降级路径。iOS 16 及更早则确实不可行，`@Observable` 需要 iOS 17。\n\n**macOS**：本次无 macOS 侧改动，`MACOSX_DEPLOYMENT_TARGET` 仍为 26.2，未随附 dmg，mac 用户使用 [v1.3.1](https://github.com/felixchaos/EhViewer-Apple/releases/tag/v1.3.1) 即可。\n\n**文档修正**：README 环境要求一节原称 `@Observable`、`scrollPosition`、`ContentUnavailableView` 是 iOS 26 API，实际这三个均为 iOS 17 起提供，已更正。",
