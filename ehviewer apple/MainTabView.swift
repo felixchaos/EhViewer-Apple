@@ -296,6 +296,7 @@ struct MainTabView: View {
             .opacity(selectedTab == tab ? 1 : 0)
             .allowsHitTesting(selectedTab == tab)
             .accessibilityHidden(selectedTab != tab)
+            .ehTabBarDriver(active: selectedTab == tab)
     }
 
     /// 启动页面设置指向「热门 / 排行」时，落到首页并选中对应的顶部切页。

@@ -12,10 +12,15 @@
 //  .popular / .toplist，把启动页面设成这两项的用户一直在看黑屏。
 //
 
+import Combine
 import CoreFoundation
 import CoreGraphics
+import Foundation
 import SwiftUI
 import Testing
+#if os(iOS)
+import UIKit
+#endif
 @testable import ehviewer_apple
 
 @MainActor
@@ -68,3 +73,79 @@ struct LaunchTabTests {
         #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 0) == 0)
     }
 }
+
+#if os(iOS)
+@MainActor
+private final class TabBarPreferenceProbe: ObservableObject {
+    @Published var homeIsActive = true
+    @Published var width: CGFloat = 800
+    var hidesTabBar = false
+    var homeAppearCount = 0
+}
+
+@MainActor
+private struct TabBarPreferenceFixture: View {
+    @ObservedObject var probe: TabBarPreferenceProbe
+
+    var body: some View {
+        GeometryReader { geometry in
+            HStack {
+                if ResponsiveLayout.usesTabSidebar(width: geometry.size.width) {
+                    Color.clear.frame(width: ResponsiveLayout.tabSidebarWidth)
+                }
+                ZStack {
+                    Color.blue
+                        .ehHidesTabBar()
+                        .onAppear { probe.homeAppearCount += 1 }
+                        .opacity(probe.homeIsActive ? 1 : 0)
+                        .ehTabBarDriver(active: probe.homeIsActive)
+                    Color.red
+                        .opacity(probe.homeIsActive ? 0 : 1)
+                        .ehTabBarDriver(active: !probe.homeIsActive)
+                }
+            }
+        }
+        .frame(width: probe.width, height: 240)
+        .onPreferenceChange(EhHidesTabBarKey.self) { probe.hidesTabBar = $0 }
+    }
+}
+
+@MainActor
+struct RetainedTabBarTests {
+    @Test func inactiveDetailCannotHideBottomNavigationAfterNarrowing() async throws {
+        let probe = TabBarPreferenceProbe()
+        let host = UIHostingController(rootView: TabBarPreferenceFixture(probe: probe))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+
+        func flushLayout() async throws {
+            for _ in 0..<8 {
+                host.view.setNeedsLayout()
+                host.view.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        try await flushLayout()
+        #expect(probe.hidesTabBar)
+        #expect(probe.homeAppearCount == 1)
+
+        // Wide sidebar selects Downloads, then the device folds with Home detail retained.
+        probe.homeIsActive = false
+        probe.width = 390
+        try await flushLayout()
+        #expect(!probe.hidesTabBar)
+        #expect(probe.homeAppearCount == 1)
+
+        // Returning Home restores the still-mounted detail and its own preference.
+        probe.width = 800
+        probe.homeIsActive = true
+        try await flushLayout()
+        #expect(probe.hidesTabBar)
+        #expect(probe.homeAppearCount == 1)
+    }
+}
+#endif

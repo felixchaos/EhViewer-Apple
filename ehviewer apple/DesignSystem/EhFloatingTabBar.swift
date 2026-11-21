@@ -34,7 +34,26 @@ struct EhHidesTabBarKey: PreferenceKey {
     }
 }
 
+private struct EhTabBarDriverActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+private extension EnvironmentValues {
+    var ehTabBarDriverActive: Bool {
+        get { self[EhTabBarDriverActiveKey.self] }
+        set { self[EhTabBarDriverActiveKey.self] = newValue }
+    }
+}
+
 extension View {
+    /// Retained background stacks keep their routes but cannot hide active navigation.
+    func ehTabBarDriver(active: Bool) -> some View {
+        environment(\.ehTabBarDriverActive, active)
+            .transformPreference(EhHidesTabBarKey.self) { hides in
+                if !active { hides = false }
+            }
+    }
+
     /// 在这一屏隐藏底部浮起导航条
     func ehHidesTabBar(_ hidden: Bool = true) -> some View {
         preference(key: EhHidesTabBarKey.self, value: hidden)
@@ -147,6 +166,7 @@ extension View {
 
 private struct EhTabBarAutoHideModifier: ViewModifier {
     private var visibility: EhTabBarVisibility { .shared }
+    @Environment(\.ehTabBarDriverActive) private var isActive
     @State private var lastOffset: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -157,6 +177,7 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
             guard abs(delta) > 12 else { return }
             lastOffset = offset
 
+            guard isActive else { return }
             if offset < 40 {
                 visibility.hiddenByScroll = false
             } else {
@@ -180,6 +201,10 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onPreferenceChange(EhHidesTabBarKey.self) { isHidden = $0 }
+            .onChange(of: selection) { _, _ in visibility.hiddenByScroll = false }
+            .onChange(of: isEnabled) { _, enabled in
+                if enabled { visibility.hiddenByScroll = false }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !shouldHide {
                     EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
