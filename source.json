@@ -15,6 +15,14 @@
       "category": "entertainment",
       "versions": [
         {
+          "version": "1.3.4",
+          "date": "2026-11-21T02:15:43Z",
+          "localizedDescription": "修正首页翻页和收藏状态更新时的列表写入（#15）。Release 模拟器回归测试已通过，LiveContainer 真机尚未复测。支持 iOS / iPadOS 18.0 及以上，IPA 仍需通过 AltStore 或 SideStore 等工具重签安装。",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.3.4/EhViewer-1.3.4.ipa",
+          "size": 9145787,
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.3.3",
           "date": "2026-11-20T01:34:23Z",
           "localizedDescription": "修复 EX 模式下「排行」请求发往错误站点导致的 HTTP 错误（#17）。排行首页、切换周期和翻页统一使用 E 站接口，其他标签页不变。最低支持 iOS / iPadOS 18.0。IPA 延续自签安装方式，请使用 AltStore / SideStore 等工具重签。排行专项模拟器测试已通过，未在报告者的 iPad 8 上复测。",
