@@ -16,6 +16,20 @@ import EhCookie
 import UIKit
 #endif
 
+/// An opt-in for simulator-hosted unit tests, not for UI tests or installed apps.
+enum EhUnitTestHost {
+    static let isOffline: Bool = {
+        #if targetEnvironment(simulator)
+        let environment = ProcessInfo.processInfo.environment
+        return environment["EH_OFFLINE_UNIT_TEST_HOST"] == "1" &&
+            (environment["XCTestConfigurationFilePath"] != nil ||
+             NSClassFromString("XCTestCase") != nil)
+        #else
+        return false
+        #endif
+    }()
+}
+
 @main
 struct EhViewerApp: App {
     // ⚠️ 不在 App 层创建 AppState — 由 RootView 独占管理
@@ -26,6 +40,8 @@ struct EhViewerApp: App {
     #endif
 
     init() {
+        guard !EhUnitTestHost.isOffline else { return }
+
         // ⚠️ 必须是启动时的第一件事：把钥匙串里的登录凭据同步放回 Cookie 罐。
         //
         // 认证 Cookie 现在是会话 Cookie（不落盘），进程重启后罐子里是空的，
@@ -92,7 +108,11 @@ struct EhViewerApp: App {
     var body: some Scene {
         let _ = NSLog("[RENDER] EhViewerApp body — 如果此行反复出现，说明 App 级重渲染")
         WindowGroup {
-            RootView()
+            if EhUnitTestHost.isOffline {
+                Color.clear
+            } else {
+                RootView()
+            }
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 750)

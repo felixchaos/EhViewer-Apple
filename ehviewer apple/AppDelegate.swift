@@ -25,12 +25,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        guard !EhUnitTestHost.isOffline else { return true }
         // 注册后台任务
         BackgroundDownloadManager.shared.registerBackgroundTasks()
         return true
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
+        guard !EhUnitTestHost.isOffline else { return }
         // 调度后台下载任务
         BackgroundDownloadManager.shared.scheduleBackgroundDownload()
     }
