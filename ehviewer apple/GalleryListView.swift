@@ -1468,25 +1468,27 @@ struct GalleryRow: View {
 @MainActor
 @Observable
 class GalleryListViewModel {
-    /// 列表内容。**写进来的东西会先过一遍过滤器。**
-    ///
-    /// 过滤在 didSet 里做，而不是在那 8 处赋值点上分别调一次：
-    /// 分散写就意味着以后新增一条取数路径必然会漏掉，而「漏掉」的表现
-    /// 是屏蔽悄悄失效——用户根本看不出来是哪一页没生效。
-    var galleries: [GalleryInfo] = [] {
-        didSet {
-            // 里面还会再写一次 galleries，靠这个标记挡住重入
-            guard !isApplyingFilters else { return }
-            isApplyingFilters = true
-            defer { isApplyingFilters = false }
-            let hidden = GalleryFilterEngine.shared.apply(to: &galleries)
+    /// Filter a local value before publishing it, never mutate observed storage in its own observer.
+    /// Array appends and favorite subscript updates write back through this setter.
+    var galleries: [GalleryInfo] {
+        get { visibleGalleries }
+        set {
+            var filtered = newValue
+            let hidden = filterGalleries(&filtered)
+            visibleGalleries = filtered
             filteredOutCount = hidden
         }
     }
 
-    @ObservationIgnored private var isApplyingFilters = false
+    private var visibleGalleries: [GalleryInfo] = []
+    @ObservationIgnored private let filterGalleries: @MainActor (inout [GalleryInfo]) -> Int
+
+    init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil) {
+        self.filterGalleries = filterGalleries ?? { GalleryFilterEngine.shared.apply(to: &$0) }
+    }
+
     /// 最近一次加载被过滤器挡掉的条数，用来在列表底部说明「少了几本」
-    var filteredOutCount = 0
+    private(set) var filteredOutCount = 0
     var isLoading = false
     var errorMessage: String?
     var searchText = ""

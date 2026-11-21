@@ -9,10 +9,40 @@
 //
 
 import Testing
+import EhModels
 @testable import ehviewer_apple
 
 @MainActor
 struct GalleryFilterTests {
+
+    @Test func listReplacementAndPaginationKeepFiltering() {
+        let model = makeListModel()
+        model.galleries = [GalleryInfo(gid: 1), GalleryInfo(gid: 2)]
+        #expect(model.galleries.map(\.gid) == [1])
+        #expect(model.filteredOutCount == 1)
+
+        model.galleries.append(contentsOf: [GalleryInfo(gid: 3), GalleryInfo(gid: 4)])
+        #expect(model.galleries.map(\.gid) == [1, 3])
+        #expect(model.filteredOutCount == 1)
+    }
+
+    @Test func favoriteSubscriptWriteKeepsExistingVisibleList() {
+        let model = makeListModel()
+        model.galleries = [GalleryInfo(gid: 1), GalleryInfo(gid: 2), GalleryInfo(gid: 3)]
+        model.galleries[0].favoriteSlot = 5
+        #expect(model.galleries.map(\.gid) == [1, 3])
+        #expect(model.galleries.map(\.favoriteSlot) == [5, -2])
+        model.galleries[0].favoriteSlot = -1
+        #expect(model.galleries.map(\.favoriteSlot) == [-1, -2])
+    }
+
+    private func makeListModel() -> GalleryListViewModel {
+        GalleryListViewModel(filterGalleries: { galleries in
+            let count = galleries.count
+            galleries.removeAll { $0.gid % 2 == 0 }
+            return count - galleries.count
+        })
+    }
 
     // MARK: - 标签匹配（对齐 Android EhFilter.matchTag）
 
