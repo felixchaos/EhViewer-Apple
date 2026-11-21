@@ -8,20 +8,21 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: xcode-27
     
     steps:
     - uses: actions/checkout@v4
 
-    # 项目最低要求 iOS 26 SDK，钉死旧 Xcode 会导致
-    # "iOS 18.0 is not installed"。这里选镜像上最新的一个。
-    - name: Select newest Xcode
+    # Keep the iOS check on a toolchain that supports the full iPhone Duo display.
+    - name: Verify iOS SDK
       run: |
-        LATEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
-        LATEST=${LATEST:-/Applications/Xcode.app}
-        sudo xcode-select -s "$LATEST"
         xcodebuild -version
-        echo "可用 SDK:"; xcodebuild -showsdks | grep -i ios || true
+        sdk=$(xcrun --sdk iphoneos --show-sdk-version)
+        echo "iOS SDK: $sdk"
+        if ! awk -F. '$1 > 27 || ($1 == 27 && $2 >= 1) { ok = 1 } END { exit !ok }' <<< "$sdk"; then
+          echo "::error::iOS SDK 27.1 or newer is required for full iPhone Duo display support."
+          exit 1
+        fi
 
     - name: Build for iOS
       run: |
