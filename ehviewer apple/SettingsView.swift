@@ -1112,13 +1112,13 @@ struct SettingsView: View {
         .alert("发现新版本", isPresented: Bindable(AppUpdateChecker.shared).showUpdateAlert) {
             if let info = AppUpdateChecker.shared.updateAvailable {
                 Button("前往下载") {
-                    openURL(info.downloadURL ?? info.releaseURL)
+                    openURL(info.downloadURL)
                 }
                 Button("取消", role: .cancel) {}
             }
         } message: {
             if let info = AppUpdateChecker.shared.updateAvailable {
-                Text("v\(info.version)\n\n\(info.releaseNotes)")
+                Text("v\(info.version)\n\n\(AppUpdatePlatform.current.installationHint)\n\n\(info.releaseNotes)")
             }
         }
         .alert("检查更新", isPresented: .init(
@@ -1135,7 +1135,7 @@ struct SettingsView: View {
             Button("确定", role: .cancel) {}
         } message: {
             if AppUpdateChecker.shared.checkError == "already_latest" {
-                Text("当前已是最新版本 v\(AppUpdateChecker.shared.currentVersion)")
+                Text("当前没有适用的新版（v\(AppUpdateChecker.shared.currentVersion)）")
             } else {
                 Text(AppUpdateChecker.shared.checkError ?? "")
             }

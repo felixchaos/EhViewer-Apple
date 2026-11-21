@@ -1,33 +1,18 @@
-//
-//  AppUpdateChecker.swift
-//  ehviewer apple
-//
-//  App 更新检查器 — 对齐 Android AppUpdater 逻辑
-//  使用 GitHub Releases API 检测新版本，提示用户更新
-//  参考: https://github.com/felixchaos/EhViewer-Apple/releases
-//
+import Foundation
+import Observation
 
-import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
-
-/// GitHub Release API 响应模型
 private struct GitHubRelease: Decodable {
     let tagName: String
-    let name: String?
     let body: String?
     let htmlUrl: String
+    let draft: Bool
     let prerelease: Bool
     let assets: [GitHubAsset]
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
-        case name
-        case body
+        case body, draft, prerelease, assets
         case htmlUrl = "html_url"
-        case prerelease
-        case assets
     }
 }
 
@@ -35,86 +20,174 @@ private struct GitHubAsset: Decodable {
     let name: String
     let browserDownloadUrl: String
     let size: Int
+    let state: String?
 
     enum CodingKeys: String, CodingKey {
-        case name
+        case name, size, state
         case browserDownloadUrl = "browser_download_url"
-        case size
     }
 }
 
-/// 更新检查结果
+private struct AltStoreSource: Decodable {
+    struct App: Decodable {
+        struct Version: Decodable {
+            let downloadURL: String
+            let minOSVersion: String?
+        }
+        let bundleIdentifier: String
+        let versions: [Version]
+    }
+    let apps: [App]
+}
+
 struct AppUpdateInfo: Sendable {
     let version: String
     let releaseNotes: String
     let releaseURL: URL
-    let downloadURL: URL?
-    let isPrerelease: Bool
+    let downloadURL: URL
 }
 
-/// App 更新检查器 (对齐 Android AppUpdater)
-///
-/// 功能:
-/// - 启动时自动检查 (24 小时间隔)
-/// - 设置中手动检查
-/// - 比较语义化版本号 (major.minor.patch)
-/// - 展示更新日志并引导用户下载
+enum AppUpdatePlatform {
+    case iOS, macOS
+
+    static var current: Self {
+        #if os(macOS)
+        .macOS
+        #else
+        .iOS
+        #endif
+    }
+
+    var installationHint: String {
+        switch self {
+        case .iOS: "可通过 AltStore / SideStore 更新，或下载 IPA 后自行重签安装。"
+        case .macOS: "可下载适用于 Mac 的安装包。"
+        }
+    }
+
+    fileprivate func priority(for name: String) -> Int? {
+        let name = name.lowercased()
+        switch self {
+        case .iOS:
+            return name.hasSuffix(".ipa") ? 0 : nil
+        case .macOS:
+            if name.hasSuffix(".dmg") { return 0 }
+            if name.hasSuffix(".zip") && (name.contains("macos") || name.contains("-mac.")) { return 1 }
+            return nil
+        }
+    }
+}
+
+/// Platform selection is independent of API order and accepts only the repository's uploaded assets.
+enum AppUpdateCatalog {
+    enum Result {
+        case update(AppUpdateInfo)
+        case alreadyLatest
+        case noCompatibleRelease
+    }
+
+    private static let repositoryPath = "/felixchaos/EhViewer-Apple/releases/"
+    static let feedURL = URL(string: "https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/source.json")!
+
+    static func select(
+        releasePages: [Data], feed: Data? = nil, platform: AppUpdatePlatform,
+        currentVersion: String, systemVersion: String
+    ) throws -> Result {
+        let decoder = JSONDecoder()
+        let releases = try releasePages.flatMap { try decoder.decode([GitHubRelease].self, from: $0) }
+        let minVersions = feed.flatMap { try? decoder.decode(AltStoreSource.self, from: $0) }?
+            .apps.first { $0.bundleIdentifier == "Stellatrix.ehviewer-apple" }?.versions ?? []
+        let osVersion = versionParts(systemVersion)
+        let installed = versionParts(currentVersion) ?? [1, 0, 0]
+        var best: (parts: [Int], info: AppUpdateInfo)?
+
+        for release in releases where !release.draft && !release.prerelease {
+            let version = release.tagName.hasPrefix("v") ? String(release.tagName.dropFirst()) : release.tagName
+            guard let parts = versionParts(version),
+                  let releaseURL = trustedURL(release.htmlUrl, pathPrefix: repositoryPath + "tag/"),
+                  let asset = release.assets.compactMap({ asset -> (priority: Int, url: URL)? in
+                      guard asset.state == nil || asset.state == "uploaded", asset.size > 0,
+                            let priority = platform.priority(for: asset.name),
+                            let url = trustedURL(asset.browserDownloadUrl, pathPrefix: repositoryPath + "download/"),
+                            url.lastPathComponent == asset.name else { return nil }
+                      if platform == .iOS,
+                         let minimum = minVersions.first(where: { $0.downloadURL == asset.browserDownloadUrl })?.minOSVersion,
+                         let required = versionParts(minimum), let osVersion, compare(osVersion, required) < 0 {
+                          return nil
+                      }
+                      return (priority, url)
+                  }).min(by: { a, b in
+                      a.priority == b.priority ? a.url.absoluteString < b.url.absoluteString : a.priority < b.priority
+                  }) else { continue }
+            if let best, compare(parts, best.parts) <= 0 { continue }
+            best = (parts, AppUpdateInfo(
+                version: version, releaseNotes: release.body ?? "暂无更新说明",
+                releaseURL: releaseURL, downloadURL: asset.url
+            ))
+        }
+        guard let best else { return .noCompatibleRelease }
+        return compare(best.parts, installed) > 0 ? .update(best.info) : .alreadyLatest
+    }
+
+    static func pageCount(_ data: Data) throws -> Int {
+        try JSONDecoder().decode([GitHubRelease].self, from: data).count
+    }
+
+    private static func trustedURL(_ raw: String, pathPrefix: String) -> URL? {
+        guard let url = URL(string: raw), url.scheme == "https", url.host == "github.com",
+              url.user == nil, url.password == nil, url.port == nil,
+              url.query == nil, url.fragment == nil, url.path.hasPrefix(pathPrefix) else { return nil }
+        return url
+    }
+
+    private static func versionParts(_ text: String) -> [Int]? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count) else { return nil }
+        return parts.reduce(into: [Int]?.some([])) { result, part in
+            guard !part.isEmpty, part.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let number = Int(part) else { result = nil; return }
+            result?.append(number)
+        }
+    }
+
+    private static func compare(_ lhs: [Int], _ rhs: [Int]) -> Int {
+        for index in 0..<max(lhs.count, rhs.count) {
+            let l = index < lhs.count ? lhs[index] : 0
+            let r = index < rhs.count ? rhs[index] : 0
+            if l != r { return l < r ? -1 : 1 }
+        }
+        return 0
+    }
+}
+
+/// GitHub Releases and platform-specific update guidance; no download or installation runs automatically.
+@MainActor
 @Observable
-final class AppUpdateChecker: @unchecked Sendable {
+final class AppUpdateChecker {
     static let shared = AppUpdateChecker()
-
-    /// GitHub 仓库 Releases API
-    private static let releasesURL = "https://api.github.com/repos/felixchaos/EhViewer-Apple/releases/latest"
-
-    /// 检查间隔: 24 小时
     private static let checkIntervalSeconds: TimeInterval = 24 * 60 * 60
-
-    // MARK: - Observable State
+    private static let releasesURL = "https://api.github.com/repos/felixchaos/EhViewer-Apple/releases"
 
     var isChecking = false
     var updateAvailable: AppUpdateInfo?
     var showUpdateAlert = false
     var checkError: String?
 
-    // MARK: - Private
-
     private init() {}
 
-    /// 当前 App 版本号 (从 Info.plist 读取)
-    var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-    }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0" }
+    var currentBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1" }
 
-    /// 当前 Build 号
-    var currentBuild: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-    }
-
-    // MARK: - 自动检查 (启动时)
-
-    /// 启动时自动检查 — 仅在距上次检查超过 24 小时时触发
-    func checkOnLaunchIfNeeded() {
+    func checkOnLaunchIfNeeded() async {
         let lastCheck = UserDefaults.standard.double(forKey: "last_update_check_time")
-        let now = Date().timeIntervalSince1970
-        guard now - lastCheck > Self.checkIntervalSeconds else { return }
-
-        Task {
-            await checkForUpdate(manual: false)
-        }
+        guard Date().timeIntervalSince1970 - lastCheck > Self.checkIntervalSeconds else { return }
+        await checkForUpdate(manual: false)
     }
 
-    // MARK: - 手动检查
-
-    /// 手动检查更新 (设置页触发，无论间隔都检查)
     func checkManually() {
-        Task {
-            await checkForUpdate(manual: true)
-        }
+        Task { await checkForUpdate(manual: true) }
     }
 
-    // MARK: - Core Logic
-
-    @MainActor
     func checkForUpdate(manual: Bool) async {
         guard !isChecking else { return }
         isChecking = true
@@ -122,97 +195,47 @@ final class AppUpdateChecker: @unchecked Sendable {
         defer { isChecking = false }
 
         do {
-            guard let url = URL(string: Self.releasesURL) else {
-                if manual { checkError = "无效的更新地址" }
-                return
+            var pages: [Data] = []
+            let platform = AppUpdatePlatform.current
+            for page in 1...10 {
+                let url = URL(string: "\(Self.releasesURL)?per_page=100&page=\(page)")!
+                let data = try await fetch(url, timeout: 15)
+                pages.append(data)
+                if try AppUpdateCatalog.pageCount(data) < 100 { break }
             }
-
-            var request = URLRequest(url: url)
-            request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-            request.setValue("EhViewer-Apple/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 15
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                if manual { checkError = "无效的服务器响应" }
-                return
+            // The feed can supply explicit iOS asset minimums. If unavailable, do not invent them.
+            let feed = platform == .iOS ? try? await fetch(AppUpdateCatalog.feedURL, timeout: 5) : nil
+            let os = ProcessInfo.processInfo.operatingSystemVersion
+            switch try AppUpdateCatalog.select(
+                releasePages: pages, feed: feed, platform: platform, currentVersion: currentVersion,
+                systemVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+            ) {
+            case .update(let info):
+                updateAvailable = info
+                showUpdateAlert = true
+            case .alreadyLatest:
+                updateAvailable = nil
+                showUpdateAlert = false
+                if manual { checkError = "already_latest" }
+            case .noCompatibleRelease:
+                updateAvailable = nil
+                showUpdateAlert = false
+                if manual { checkError = "暂无适用于此设备的安装包" }
             }
-
-            guard httpResponse.statusCode == 200 else {
-                if manual {
-                    if httpResponse.statusCode == 404 {
-                        checkError = "暂无发布版本"
-                    } else {
-                        checkError = "服务器错误 (\(httpResponse.statusCode))"
-                    }
-                }
-                return
-            }
-
-            let decoder = JSONDecoder()
-            let release = try decoder.decode(GitHubRelease.self, from: data)
-
-            // 解析版本号 (去除 "v" 前缀)
-            let remoteVersion = release.tagName.hasPrefix("v")
-                ? String(release.tagName.dropFirst())
-                : release.tagName
-
-            // 比较版本号 (对齐 Android AppHelper.compareVersion)
-            let comparison = Self.compareVersions(currentVersion, remoteVersion)
-
-            if comparison < 0 {
-                // 有新版本
-                let releaseURL = URL(string: release.htmlUrl) ?? URL(string: "https://github.com/felixchaos/EhViewer-Apple/releases")!
-
-                // 查找 IPA 或 ZIP 资产
-                let downloadAsset = release.assets.first { asset in
-                    let name = asset.name.lowercased()
-                    return name.hasSuffix(".ipa") || name.hasSuffix(".zip") || name.hasSuffix(".dmg")
-                }
-                let downloadURL = downloadAsset.flatMap { URL(string: $0.browserDownloadUrl) }
-
-                let info = AppUpdateInfo(
-                    version: remoteVersion,
-                    releaseNotes: release.body ?? "暂无更新说明",
-                    releaseURL: releaseURL,
-                    downloadURL: downloadURL,
-                    isPrerelease: release.prerelease
-                )
-
-                self.updateAvailable = info
-                self.showUpdateAlert = true
-            } else {
-                if manual {
-                    checkError = "already_latest" // 特殊标记: 已是最新版本
-                }
-            }
-
-            // 记录检查时间
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "last_update_check_time")
-
         } catch {
-            if manual {
-                checkError = "检查更新失败: \(error.localizedDescription)"
-            }
+            if manual { checkError = "检查更新失败: \(error.localizedDescription)" }
         }
     }
 
-    // MARK: - Version Comparison
-
-    /// 语义化版本比较 (对齐 Android AppHelper.compareVersion)
-    /// 返回: -1 (v1 < v2), 0 (v1 == v2), 1 (v1 > v2)
-    static func compareVersions(_ v1: String, _ v2: String) -> Int {
-        let parts1 = v1.split(separator: ".").compactMap { Int($0) }
-        let parts2 = v2.split(separator: ".").compactMap { Int($0) }
-        let maxLen = max(parts1.count, parts2.count)
-
-        for i in 0..<maxLen {
-            let p1 = i < parts1.count ? parts1[i] : 0
-            let p2 = i < parts2.count ? parts2[i] : 0
-            if p1 < p2 { return -1 }
-            if p1 > p2 { return 1 }
+    private func fetch(_ url: URL, timeout: TimeInterval) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("EhViewer-Apple/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
         }
-        return 0
+        return data
     }
 }

@@ -441,7 +441,7 @@ struct UpdateBanner: View {
                 Text("有新版本 \(info.version)")
                     .font(EhFont.body.weight(.semibold))
                     .foregroundStyle(EhColor.label)
-                Text("订阅了 AltStore / SideStore 源会自动更新，也可以手动下载")
+                Text(AppUpdatePlatform.current.installationHint)
                     .font(EhFont.footnote)
                     .foregroundStyle(EhColor.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)
