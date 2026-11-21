@@ -70,7 +70,7 @@ struct ProfileHomeView: View {
             }
             .task {
                 await loadSummary()
-                updateChecker.checkOnLaunchIfNeeded()
+                await updateChecker.checkOnLaunchIfNeeded()
             }
             .refreshable { await loadSummary() }
         }
