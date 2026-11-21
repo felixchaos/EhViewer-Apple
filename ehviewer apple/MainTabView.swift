@@ -15,7 +15,7 @@ struct MainTabView: View {
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var visitedExtraTabs: Set<Tab> = []
     #endif
     #if os(macOS)
     @State private var selectedGallery: GalleryInfo?
@@ -62,6 +62,14 @@ struct MainTabView: View {
         /// 而底部栏是肌肉记忆最强的控件，不该随设置变形。
         /// 启动页指向热门/排行时改为落到首页并选中对应切页，见 initialBrowseSource。
         static var bottomTabs: [Tab] { defaultBottomTabs }
+
+        /// Only mount the extra destinations after selection, avoiding eager requests
+        /// to every wide-only gallery. Keep them mounted when the window narrows.
+        static func adaptiveContentTabs(visitedExtras: Set<Tab>, selected: Tab) -> [Tab] {
+            bottomTabs + allCases.filter {
+                !bottomTabs.contains($0) && (visitedExtras.contains($0) || $0 == selected)
+            }
+        }
 
         /// "更多"菜单中的标签页 — 不在底部栏且非 .more 的标签
         static var moreTabs: [Tab] {
@@ -171,53 +179,27 @@ struct MainTabView: View {
             selectedGallery = gallery
         }
         #else
-        // iOS: iPad regular → 侧边栏 NavigationSplitView, iPhone → 底部 TabView
-        Group {
-            if horizontalSizeClass == .regular {
-                // iPad 横屏 / 外接键盘: 侧边栏导航
-                NavigationSplitView {
-                    List {
-                        ForEach(Tab.allCases.filter { $0 != .more }, id: \.self) { tab in
-                            Button {
-                                selectedTab = tab
-                            } label: {
-                                HStack {
-                                    Label(tab.rawValue, systemImage: tab.icon)
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.15) : nil)
-                        }
-                    }
-                    .listStyle(.sidebar)
-                    .navigationTitle("EhViewer")
-                } detail: {
-                    tabContent(selectedTab)
-                        .id(selectedTab)
+        GeometryReader { geometry in
+            let showsSidebar = ResponsiveLayout.usesTabSidebar(width: geometry.size.width)
+            HStack(spacing: 0) {
+                if showsSidebar {
+                    adaptiveSidebar
+                    Divider()
                 }
-            } else {
-                // iPhone / iPad 竖屏: 浮起玻璃导航条
-                //
-                // 不再用系统 TabView：设计需要一条离开屏幕边缘、带圆角与模糊的浮条，
-                // 而 TabBar 的外观定制到不了这个程度。代价是要自己补回系统行为，
-                // 见 EhFloatingTabBar 的说明（安全区避让、重复点击回顶、无障碍）。
+
+                // Keep the same stacks and their state when the navigation controls move.
                 ZStack {
-                    ForEach(Tab.bottomTabs, id: \.self) { tab in
-                        tabContent(tab)
-                            // 保留全部页面的视图状态：切走的页面只是隐藏，
-                            // 不销毁，回来时滚动位置与已加载数据都还在
-                            .opacity(selectedTab == tab ? 1 : 0)
-                            .allowsHitTesting(selectedTab == tab)
-                            .accessibilityHidden(selectedTab != tab)
+                    ForEach(Tab.adaptiveContentTabs(visitedExtras: visitedExtraTabs, selected: selectedTab), id: \.self) { tab in
+                        tabLayer(tab) { tabContent(tab) }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ehFloatingTabBar(
                     items: Tab.bottomTabs.map {
                         .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
                     },
                     selection: $selectedTab,
+                    isEnabled: !showsSidebar,
                     onReselect: { tab in
                         NotificationCenter.default.post(
                             name: .ehScrollToTop, object: nil, userInfo: ["tab": tab.rawValue]
@@ -225,6 +207,9 @@ struct MainTabView: View {
                     }
                 )
             }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if !Tab.bottomTabs.contains(tab) { visitedExtraTabs.insert(tab) }
         }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
@@ -244,14 +229,6 @@ struct MainTabView: View {
                             Button("关闭") { clipboardGallery = nil }
                         }
                     }
-            }
-        }
-        .onChange(of: horizontalSizeClass) { _, newSizeClass in
-            // iPad 旋转切换时确保选中标签有效
-            if newSizeClass == .compact {
-                if !Tab.bottomTabs.contains(selectedTab) {
-                    selectedTab = .more
-                }
             }
         }
         #endif
@@ -289,6 +266,26 @@ struct MainTabView: View {
     #endif
 
     #if os(iOS)
+    private var adaptiveSidebar: some View {
+        List {
+            ForEach(Tab.allCases.filter { $0 != .more }, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Label(tab.rawValue, systemImage: tab.icon)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.15) : nil)
+                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+            }
+        }
+        .listStyle(.sidebar)
+        .frame(width: ResponsiveLayout.tabSidebarWidth)
+        .accessibilityIdentifier("adaptive-tab-sidebar")
+    }
+
     /// 保留全部页面的视图状态：切走的页面只是隐藏而不销毁，
     /// 回来时滚动位置与已加载数据都还在。
     @ViewBuilder

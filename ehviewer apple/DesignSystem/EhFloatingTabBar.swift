@@ -105,9 +105,10 @@ extension View {
     func ehFloatingTabBar<Tab: Hashable>(
         items: [EhFloatingTabBar<Tab>.Item],
         selection: Binding<Tab>,
+        isEnabled: Bool = true,
         onReselect: ((Tab) -> Void)? = nil
     ) -> some View {
-        modifier(EhFloatingTabBarModifier(items: items, selection: selection, onReselect: onReselect))
+        modifier(EhFloatingTabBarModifier(items: items, selection: selection, isEnabled: isEnabled, onReselect: onReselect))
     }
 }
 
@@ -168,12 +169,13 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
 private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     let items: [EhFloatingTabBar<Tab>.Item]
     @Binding var selection: Tab
+    let isEnabled: Bool
     var onReselect: ((Tab) -> Void)?
 
     @State private var isHidden = false
     private var visibility: EhTabBarVisibility { .shared }
 
-    private var shouldHide: Bool { isHidden || visibility.hiddenByScroll }
+    private var shouldHide: Bool { !isEnabled || isHidden || visibility.hiddenByScroll }
 
     func body(content: Content) -> some View {
         content

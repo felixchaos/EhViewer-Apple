@@ -12,6 +12,9 @@
 //  .popular / .toplist，把启动页面设成这两项的用户一直在看黑屏。
 //
 
+import CoreFoundation
+import CoreGraphics
+import SwiftUI
 import Testing
 @testable import ehviewer_apple
 
@@ -39,5 +42,29 @@ struct LaunchTabTests {
         #expect(MainTabView.Tab.fromLaunchPage(3) == .favorites)
         #expect(MainTabView.Tab.fromLaunchPage(4) == .downloads)
         #expect(MainTabView.Tab.fromLaunchPage(5) == .history)
+    }
+
+    @Test func chromeRespondsToAvailableWidthWithoutDependingOnSizeClass() {
+        let narrow = ResponsiveLayout(size: .init(width: 610, height: 780), horizontalSizeClass: .regular)
+        let expanded = ResponsiveLayout(size: .init(width: 820, height: 780), horizontalSizeClass: .regular)
+        let sameWidthCompact = ResponsiveLayout(size: .init(width: 820, height: 780), horizontalSizeClass: .compact)
+        #expect(!ResponsiveLayout.usesTabSidebar(width: narrow.width))
+        #expect(ResponsiveLayout.usesTabSidebar(width: expanded.width))
+        #expect(ResponsiveLayout.usesTabSidebar(width: sameWidthCompact.width))
+    }
+
+    @Test func wideOnlyTabRemainsMountedWhenNarrowingAndAfterSelectingAnotherTab() {
+        typealias Tab = MainTabView.Tab
+        #expect(Tab.adaptiveContentTabs(visitedExtras: [], selected: .home) == Tab.bottomTabs)
+        let selected = Tab.adaptiveContentTabs(visitedExtras: [], selected: .subscription)
+        #expect(selected.contains(.subscription))
+        #expect(!selected.contains(.settings))
+        #expect(Tab.adaptiveContentTabs(visitedExtras: [.subscription], selected: .home) == selected)
+    }
+
+    @Test func quickSearchDrawerFitsNarrowWindows() {
+        #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 250) == 226)
+        #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 390) == 280)
+        #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 0) == 0)
     }
 }

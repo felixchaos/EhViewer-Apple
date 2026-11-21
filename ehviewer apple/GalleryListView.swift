@@ -2404,7 +2404,6 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
     @Binding var isOpen: Bool
     @ViewBuilder let drawerContent: () -> DrawerContent
 
-    private let drawerWidth: CGFloat = 280
     /// 实时拖拽偏移 (正值 = 向右拖, 负值 = 向左拖)
     @State private var dragOffset: CGFloat = 0
     /// 边缘拖拽进度 (0 = 关闭, 1 = 完全打开)
@@ -2412,7 +2411,7 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
     private let edgeSwipeWidth: CGFloat = 30
 
     /// 抽屉实际偏移量 (0 = 完全打开, drawerWidth = 完全关闭)
-    private var currentOffset: CGFloat {
+    private func currentOffset(drawerWidth: CGFloat) -> CGFloat {
         if isOpen {
             // 打开状态: 向右拖拽关闭
             return max(0, dragOffset)
@@ -2423,13 +2422,20 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
     }
 
     /// 遮罩透明度
-    private var overlayOpacity: Double {
-        let progress = 1 - (currentOffset / drawerWidth)
+    private func overlayOpacity(drawerWidth: CGFloat) -> Double {
+        let progress = 1 - (currentOffset(drawerWidth: drawerWidth) / max(1, drawerWidth))
         return Double(max(0, min(0.3, progress * 0.3)))
     }
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        GeometryReader { geometry in
+            drawer(width: ResponsiveLayout.quickSearchDrawerWidth(in: geometry.size.width))
+        }
+    }
+
+    private func drawer(width drawerWidth: CGFloat) -> some View {
+        let overlayOpacity = overlayOpacity(drawerWidth: drawerWidth)
+        return ZStack(alignment: .trailing) {
             // 半透明遮罩
             Color.black
                 .opacity(overlayOpacity)
@@ -2454,7 +2460,7 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
                 .background(.regularMaterial)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12))
                 .shadow(color: .black.opacity(overlayOpacity > 0.05 ? 0.15 : 0), radius: 8, x: -3)
-                .offset(x: currentOffset)
+                .offset(x: currentOffset(drawerWidth: drawerWidth))
                 .gesture(
                     // 打开状态: 向右拖拽关闭
                     isOpen ?
@@ -2486,14 +2492,14 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
                 HStack {
                     Spacer()
                     Color.clear
-                        .frame(width: edgeSwipeWidth)
+                        .frame(width: min(edgeSwipeWidth, drawerWidth))
                         .contentShape(Rectangle())
                         .gesture(
                             DragGesture(minimumDistance: 5, coordinateSpace: .global)
                                 .onChanged { value in
                                     let translation = -value.translation.width  // 向左为正
                                     if translation > 0 {
-                                        edgeDragProgress = min(1, translation / drawerWidth)
+                                        edgeDragProgress = min(1, translation / max(1, drawerWidth))
                                     }
                                 }
                                 .onEnded { value in

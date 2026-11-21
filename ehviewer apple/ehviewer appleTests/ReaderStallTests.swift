@@ -98,3 +98,43 @@ struct TagQueryTests {
         #expect(GalleryListView.exactTagQuery(for: "x:") == "\"x:$\"")
     }
 }
+
+@MainActor
+struct ReaderResizeTests {
+    @Test func unfoldingAndRefoldingPreserveTheSecondaryLogicalPage() {
+        let vm = ReaderViewModel()
+        vm.totalPages = 10
+        vm.currentPage = 4
+        vm.lazyCurrentPage = 4
+        vm.computeSpreads()
+
+        vm.updateLayout(screenWidth: 820, screenHeight: 650)
+        #expect(vm.isDoublePageEnabled)
+        #expect(vm.currentSpreadIndex == 2)
+        #expect(vm.pageTurnTarget(forSpreadID: 2) == nil)
+        #expect(vm.pageTurnTarget(forSpreadID: 3) == 5)
+        #expect(vm.pageTurnTarget(forSpreadID: nil) == nil)
+
+        vm.lazyCurrentPage = 1 // stale scroll anchor from the old single-page view
+        vm.updateLayout(screenWidth: 410, screenHeight: 800)
+        #expect(!vm.isDoublePageEnabled)
+        #expect(vm.currentPage == 4)
+        #expect(vm.lazyCurrentPage == 4)
+        #expect(vm.currentSpreadIndex == 4)
+    }
+
+    @Test func rotationKeepsCoverAndVerticalAnchorAndHonorsManualMode() {
+        let vm = ReaderViewModel()
+        vm.totalPages = 10
+        vm.currentPage = 0
+        vm.verticalScrollPage = 0
+        vm.updateLayout(screenWidth: 820, screenHeight: 650)
+        #expect(vm.spreads.first?.pages == [0])
+        #expect(vm.verticalScrollPage == 0)
+        #expect(vm.pageTurnTarget(forSpreadID: 0) == nil)
+        vm.toggleDoublePage()
+        vm.updateLayout(screenWidth: 1024, screenHeight: 680)
+        #expect(!vm.isDoublePageEnabled)
+        #expect(vm.currentPage == 0)
+    }
+}

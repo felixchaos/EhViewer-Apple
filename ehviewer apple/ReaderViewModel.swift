@@ -308,9 +308,7 @@ class ReaderViewModel {
     func toggleDoublePage() {
         let next = !isDoublePageEnabled
         userDoublePageOverride = next
-        isDoublePageEnabled = next
-        computeSpreads()
-        syncSpreadIndex()
+        applyDoublePageMode(next)
     }
 
     /// 根据屏幕尺寸更新双页模式 — 仅横屏 + 宽度 > 700pt 时启用
@@ -318,10 +316,24 @@ class ReaderViewModel {
     func updateLayout(screenWidth: CGFloat, screenHeight: CGFloat) {
         let shouldDouble = userDoublePageOverride
             ?? (screenWidth > screenHeight && screenWidth > 700)
-        guard shouldDouble != isDoublePageEnabled else { return }
-        isDoublePageEnabled = shouldDouble
+        applyDoublePageMode(shouldDouble)
+    }
+
+    private func applyDoublePageMode(_ enabled: Bool) {
+        guard enabled != isDoublePageEnabled else { return }
+        isDoublePageEnabled = enabled
         computeSpreads()
+        // Both scroll views can be rebuilt at a new size. Re-anchor them to the
+        // logical page (including the secondary page of a spread), not a stale ID.
+        lazyCurrentPage = currentPage
         syncSpreadIndex()
+    }
+
+    /// A programmatic re-anchor can change the visible spread ID without turning a page.
+    func pageTurnTarget(forSpreadID id: Int?) -> Int? {
+        guard let id, spreads.indices.contains(id) else { return nil }
+        let spread = spreads[id]
+        return spread.pages.contains(currentPage) ? nil : spread.primaryPage
     }
 
     /// 计算 spreads 数组 — 封面(page 0)单独显示，后续两两配对

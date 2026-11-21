@@ -19,6 +19,17 @@ struct ResponsiveLayout {
         self.horizontalSizeClass = horizontalSizeClass
     }
 
+    // Leave at least 520pt for the main navigation/content stack.
+    static let tabSidebarWidth: CGFloat = 176
+
+    static func usesTabSidebar(width: CGFloat) -> Bool {
+        width >= tabSidebarWidth + 520
+    }
+
+    static func quickSearchDrawerWidth(in availableWidth: CGFloat) -> CGFloat {
+        min(280, max(0, availableWidth - 24))
+    }
+
     // MARK: - 设备类型判断
 
     var isCompact: Bool {

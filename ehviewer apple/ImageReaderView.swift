@@ -123,26 +123,30 @@ struct ImageReaderView: View {
                 // 模糊氛围背景 (双页/宽屏模式下，画面未覆盖区域显示主色调渐变)
                 ambientBackground
 
-                // 主内容
-                if vm.totalPages == 0 {
-                    ProgressView()
-                        .tint(.white)
-                } else if readingDirection == .topToBottom {
-                    verticalScrollReader(geometry: geometry)
-                } else {
-                    #if os(macOS)
-                    macOSPageReader(geometry: geometry)
-                    #else
-                    horizontalPageReader(geometry: geometry)
-                    #endif
+                // Only the artwork extends beneath system insets. Controls and
+                // HUD use the active window's live, potentially asymmetric safe area.
+                GeometryReader { artworkGeometry in
+                    if vm.totalPages == 0 {
+                        ProgressView()
+                            .tint(.white)
+                    } else if readingDirection == .topToBottom {
+                        verticalScrollReader(geometry: artworkGeometry)
+                    } else {
+                        #if os(macOS)
+                        macOSPageReader(geometry: artworkGeometry)
+                        #else
+                        horizontalPageReader(geometry: artworkGeometry)
+                        #endif
+                    }
                 }
+                .ignoresSafeArea(.container)
 
                 // 沉浸式覆盖层 (顶部/底部滑入动画)
-                immersiveOverlay(geometry: geometry)
+                immersiveOverlay
 
                 // HUD 显示 (时钟/电量/进度)
                 if !showOverlay {
-                    hudOverlay(geometry: geometry)
+                    hudOverlay
                 }
 
                 // 新手教程
@@ -163,12 +167,19 @@ struct ImageReaderView: View {
         .statusBarHidden(AppSettings.shared.readingFullscreen)
         .persistentSystemOverlays(AppSettings.shared.readingFullscreen ? .hidden : .automatic)
         #endif
-        .ignoresSafeArea()
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #else
         .toolbar(.hidden)
         #endif
+        // Only logical page changes affect progress. A resize can remap both
+        // scroll anchors without being a page turn.
+        .onChange(of: vm.currentPage) { oldPage, newPage in
+            if readingDirection != .topToBottom {
+                enterFullscreenOnAdvance(from: oldPage, to: newPage)
+            }
+            saveReadingProgress()
+        }
         .onAppear(perform: setupReader)
         .onDisappear(perform: cleanupReader)
         .task {
@@ -665,14 +676,9 @@ struct ImageReaderView: View {
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
-                .onChange(of: vm.currentSpreadIndex) { oldIdx, newIdx in
-                    enterFullscreenOnAdvance(from: oldIdx, to: newIdx)
-                    guard let idx = newIdx else { return }
-                    let page = vm.pageForSpread(idx)
-                    if vm.currentPage != page {
-                        vm.currentPage = page
-                    }
-                    saveReadingProgress()
+                .onChange(of: vm.currentSpreadIndex) { _, newIdx in
+                    guard let page = vm.pageTurnTarget(forSpreadID: newIdx) else { return }
+                    vm.currentPage = page
                     // Perf: 去抖 — 快速翻页时只处理最终落地页
                     pageChangeTask?.cancel()
                     pageChangeTask = Task {
@@ -700,12 +706,9 @@ struct ImageReaderView: View {
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
                 #endif
-                .onChange(of: vm.lazyCurrentPage) { oldPage, newPage in
-                    enterFullscreenOnAdvance(from: oldPage, to: newPage)
-                    if let page = newPage, page != vm.currentPage {
-                        vm.currentPage = page
-                    }
-                    saveReadingProgress()
+                .onChange(of: vm.lazyCurrentPage) { _, newPage in
+                    guard let page = newPage, page != vm.currentPage else { return }
+                    vm.currentPage = page
                     // Perf: 去抖 — 快速滑动时取消上一次预加载，仅处理结束页
                     pageChangeTask?.cancel()
                     pageChangeTask = Task {
@@ -746,7 +749,6 @@ struct ImageReaderView: View {
             )
         }
         .onChange(of: vm.currentPage) { _, newPage in
-            saveReadingProgress()
             Task { await vm.onPageChange(newPage) }
         }
     }
@@ -860,10 +862,10 @@ struct ImageReaderView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
+                .scrollTargetLayout()
             }
             .clipped()
             // Perf: 垂直模式不再使用 SwiftUIZoomableImage，无需 scrollDisabled
-            .scrollTargetLayout()
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
             .contentShape(Rectangle())
@@ -898,7 +900,6 @@ struct ImageReaderView: View {
                 isUpdatingFromScroll = true
                 vm.currentPage = page
                 lastScrollChangeTime = Date()
-                saveReadingProgress()
                 // Perf: 去抖预加载 — 快速滚动时只处理最终落地页，避免大量并发预加载
                 pageChangeTask?.cancel()
                 pageChangeTask = Task {
@@ -917,7 +918,6 @@ struct ImageReaderView: View {
                         proxy.scrollTo(newPage, anchor: .top)
                     }
                     vm.verticalScrollPage = newPage
-                    saveReadingProgress()
                 }
             }
         }
@@ -1300,7 +1300,7 @@ struct ImageReaderView: View {
                         .background(.white.opacity(0.2), in: Capsule())
                         .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
                 }
-                .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
+                .padding(.bottom, 24)
             }
 
             // 区域分界线
@@ -1333,7 +1333,7 @@ struct ImageReaderView: View {
     // MARK: - Immersive Overlay (沉浸式工具栏)
 
     /// 顶部/底部工具栏以滑入动画出现，对齐 Apple HIG 沉浸式媒体体验
-    private func immersiveOverlay(geometry: GeometryProxy) -> some View {
+    private var immersiveOverlay: some View {
         VStack {
             // 顶部工具栏 — 从顶部滑入
             if showOverlay {
@@ -1399,7 +1399,7 @@ struct ImageReaderView: View {
             .ehReaderGlass(cornerRadius: 19)
         }
         .padding(.horizontal, EhSpacing.page)
-        .padding(.top, 50)
+        .padding(.top, 8)
     }
 
     /// 顶栏胶囊里的画廊标题。
@@ -1487,24 +1487,7 @@ struct ImageReaderView: View {
         .padding(EhSpacing.page)
         .ehReaderGlass(cornerRadius: EhRadius.card)
         .padding(.horizontal, EhSpacing.page)
-        // 阅读器整屏忽略安全区（图要铺满），底栏就得自己把 Home Indicator
-        // 的高度让出来，否则最后一排按钮被屏幕底边切掉——这条在带
-        // Home Indicator 的机器上是必然发生，不是偶发。
-        .padding(.bottom, max(8, safeAreaBottomInset))
-    }
-
-    /// 底部安全区高度。阅读器用了 ignoresSafeArea，GeometryProxy 报的是 0，
-    /// 只能问窗口要。
-    private var safeAreaBottomInset: CGFloat {
-        #if os(iOS)
-        let scenes = UIApplication.shared.connectedScenes
-        let window = scenes.compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }
-        return window?.safeAreaInsets.bottom ?? 0
-        #else
-        return 0
-        #endif
+        .padding(.bottom, 8)
     }
 
     private func modeBlock(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
@@ -1530,13 +1513,12 @@ struct ImageReaderView: View {
     /// 底部信息条：时钟 · 页码 · 电量，同一行。
     ///
     /// 此前时钟和电量各自贴在屏幕最底边，而页码在另一个浮层里居中——三者
-    /// 压在同一条边上互相挤，还盖住 Home Indicator。位置算的是
-    /// `geometry.safeAreaInsets.bottom`，但阅读器整屏 ignoresSafeArea，
-    /// 那个值是 0，所以怎么加都贴边。
+    /// 压在同一条边上互相挤，还盖住 Home Indicator。现在覆盖层
+    /// 跟随当前窗口安全区，比分别计算窗口边距稳妥。
     ///
     /// 翻页/跳页按钮已经删掉：它悬在画面正中偏下，遮挡太重，而翻页本来就能
     /// 点两侧或滑动，跳页在工具栏的滑杆和目录网格里都有。这里只留页码。
-    private func hudOverlay(geometry: GeometryProxy) -> some View {
+    private var hudOverlay: some View {
         VStack {
             Spacer()
             HStack(spacing: EhSpacing.row) {
@@ -1564,7 +1546,7 @@ struct ImageReaderView: View {
                 }
             }
             .padding(.horizontal, EhSpacing.page)
-            .padding(.bottom, max(10, safeAreaBottomInset))
+            .padding(.bottom, 10)
         }
     }
 
