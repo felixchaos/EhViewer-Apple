@@ -1023,3 +1023,57 @@ struct ReaderNavigationMaintenanceTests {
     }
 }
 #endif
+
+@MainActor
+struct ReaderSharedMemorySpreadTests {
+    private let first = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )!
+    private let second = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
+    )!
+
+    @Test func drawsWarmSharedPagesBeforeObservableRestoration() async throws {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001051
+        vm.spreads = [.init(id: 0, primaryPage: 0, secondaryPage: 1)]
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let firstURL = folder.appendingPathComponent("1.png")
+        let secondURL = folder.appendingPathComponent("2.png")
+        try first.write(to: firstURL)
+        try second.write(to: secondURL)
+        vm.imageURLs[0] = firstURL.absoluteString
+        vm.imageURLs[1] = secondURL.absoluteString
+        await vm.loadDownloadedPage(0, from: firstURL, source: firstURL.absoluteString)
+        let primary = try #require(vm.cachedImages[0])
+
+        // Shared-memory primary, genuinely missing secondary: show just the first page.
+        vm.cachedImages.removeAll()
+        #expect(vm.image(at: 0) === primary)
+        #expect(vm.image(at: 1) == nil)
+        let fallback = vm.spreadPresentation(at: 0, direction: .leftToRight)
+        #expect(fallback?.image === primary)
+        #expect(fallback?.logicalSize == nil)
+
+        await vm.loadDownloadedPage(1, from: secondURL, source: secondURL.absoluteString)
+        let secondary = try #require(vm.cachedImages[1])
+        vm.cachedImages.removeAll()
+        #expect(vm.image(at: 0) === primary)
+        #expect(vm.image(at: 1) === secondary)
+        let composed = try #require(vm.spreadPresentation(at: 0, direction: .leftToRight))
+        #expect(composed.image !== primary)
+        #expect(composed.image !== secondary)
+        #expect(vm.cachedImages.isEmpty)
+        #if os(iOS)
+        #expect(composed.logicalSize == CGSize(width: 2, height: 1))
+        #expect(vm.spreadPresentation(at: 0, direction: .leftToRight)?.image === composed.image)
+        #else
+        #expect(composed.logicalSize == nil)
+        #expect(composed.image.size == NSSize(width: 2, height: 1))
+        #endif
+    }
+
+}
