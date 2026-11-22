@@ -25,6 +25,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled { return true }
+        #endif
         guard !EhUnitTestHost.isOffline else { return true }
         // 注册后台任务
         BackgroundDownloadManager.shared.registerBackgroundTasks()
@@ -32,6 +35,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled { return }
+        #endif
         guard !EhUnitTestHost.isOffline else { return }
         // 调度后台下载任务
         BackgroundDownloadManager.shared.scheduleBackgroundDownload()

@@ -1488,7 +1488,8 @@ class GalleryListViewModel {
     var galleries: [GalleryInfo] {
         get { visibleGalleries }
         set {
-            var filtered = newValue
+            var seen = Set<Int64>()
+            var filtered = newValue.filter { seen.insert($0.gid).inserted }
             let hidden = filterGalleries(&filtered)
             visibleGalleries = filtered
             filteredOutCount = hidden
@@ -1506,9 +1507,21 @@ class GalleryListViewModel {
     }
 
     @ObservationIgnored private let filterGalleries: @MainActor (inout [GalleryInfo]) -> Int
+    @ObservationIgnored private var listEpoch: UInt64 = 0
+    @ObservationIgnored private let listRequest: ((String) async throws -> GalleryListResult)?
 
-    init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil) {
+    init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil,
+         listRequest: ((String) async throws -> GalleryListResult)? = nil) {
         self.filterGalleries = filterGalleries ?? { GalleryFilterEngine.shared.apply(to: &$0) }
+        self.listRequest = listRequest
+    }
+
+    private func requestGalleryList(_ url: String) async throws -> GalleryListResult {
+        if let listRequest { return try await listRequest(url) }
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled { return try EhOfflineUIFixture.listResponse(url) }
+        #endif
+        return try await EhAPI.shared.getGalleryList(url: url)
     }
 
     /// 最近一次加载被过滤器挡掉的条数，用来在列表底部说明「少了几本」
@@ -1643,6 +1656,8 @@ class GalleryListViewModel {
         }
         print("[EhVM] loadGalleries: START mode=\(mode)")
 
+        listEpoch &+= 1
+        let requestEpoch = listEpoch
         currentMode = mode
 
         // ★ 换模式/换筛选条件时必须丢弃上一次的分页游标，
@@ -1673,12 +1688,13 @@ class GalleryListViewModel {
         Task {
             // 超时保护: 如果网络请求超过 20 秒仍未完成，显示错误让用户可以重试
             let fetchTask = Task {
-                await fetchPage(mode: mode, page: 0)
+                await fetchPage(mode: mode, page: 0, replacementEpoch: requestEpoch)
             }
             let timeoutTask = Task {
-                try? await Task.sleep(for: .seconds(20))
+                do { try await Task.sleep(for: .seconds(20)) }
+                catch { return }
                 // 仅在仍处于加载状态且画廊为空时触发超时
-                if self.isLoading && self.galleries.isEmpty {
+                if requestEpoch == self.listEpoch && self.isLoading && self.galleries.isEmpty {
                     fetchTask.cancel()
                     self.isLoading = false
                     self.errorMessage = "网络请求超时，请检查网络连接或 VPN 设置后重试"
@@ -1706,9 +1722,8 @@ class GalleryListViewModel {
         if let key = currentCacheKey {
             GalleryCache.shared.removeListResult(forKey: key)
         }
-        // 不清除 galleries、不设置 isLoading = true
-        // — 保持旧数据可见，防止 SwiftUI 将 galleryList 替换为 ProgressView
-        //   从而取消 .refreshable 的结构化并发任务
+        // Retain visible rows during refresh, but do not start another page.
+        isLoading = true
         currentMode = mode
         errorMessage = nil
         currentPage = 0
@@ -1886,7 +1901,7 @@ class GalleryListViewModel {
 
             urlComponents.queryItems = queryItems.isEmpty ? nil : queryItems
 
-            let result = try await EhAPI.shared.getGalleryList(url: urlComponents.url!.absoluteString)
+            let result = try await requestGalleryList(urlComponents.url!.absoluteString)
 
             self.galleries = result.galleries
             // ★ 记录分页游标: 快速搜索的 URL 是这里现拼的，
@@ -1914,6 +1929,7 @@ class GalleryListViewModel {
 
     func loadMore(mode: GalleryListView.ListMode) async {
         guard !isLoading, hasMore else { return }
+        let requestEpoch = listEpoch
 
         // ★ 始终优先使用 nextHref 翻页
         // ptt 和 searchnav 模式都会提供完整 href (包含 next=TIMESTAMP 等跳页上下文)
@@ -1927,7 +1943,8 @@ class GalleryListViewModel {
         if let nextHref = navigationHref {
             isLoading = true
             do {
-                let result = try await EhAPI.shared.getGalleryList(url: nextHref)
+                let result = try await requestGalleryList(nextHref)
+                guard requestEpoch == listEpoch else { return }
 
                 // ★ 去重保护: 如果新加载的画廊全部已在列表中，说明分页回绕了
                 let existingGids = Set(self.galleries.map { $0.gid })
@@ -1953,6 +1970,7 @@ class GalleryListViewModel {
                 }
                 self.isLoading = false
             } catch {
+                guard requestEpoch == listEpoch else { return }
                 if error is CancellationError || (error as? URLError)?.code == .cancelled {
                     self.isLoading = false
                     return
@@ -2036,7 +2054,7 @@ class GalleryListViewModel {
         
         Task {
             do {
-                let result = try await EhAPI.shared.getGalleryList(url: href)
+                let result = try await requestGalleryList(href)
                 self.galleries = result.galleries
                 recordFavoriteSyncIfNeeded(mode: mode)
                 self.hasMore = result.nextHref != nil
@@ -2066,7 +2084,7 @@ class GalleryListViewModel {
         Task {
             let jumpUrl = buildJumpUrl(appendParam, mode: mode)
             do {
-                let result = try await EhAPI.shared.getGalleryList(url: jumpUrl)
+                let result = try await requestGalleryList(jumpUrl)
                 self.galleries = result.galleries
                 recordFavoriteSyncIfNeeded(mode: mode)
                 // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
@@ -2202,7 +2220,7 @@ class GalleryListViewModel {
         let seekUrl = "\(baseUrl)\(separator)next=\(timestamp)"
 
         do {
-            let result = try await EhAPI.shared.getGalleryList(url: seekUrl)
+            let result = try await requestGalleryList(seekUrl)
             self.galleries = result.galleries
             recordFavoriteSyncIfNeeded(mode: mode)
             // ★ 防止回绕: nextHref 优先, 否则 nextPage 须 > 0
@@ -2245,7 +2263,7 @@ class GalleryListViewModel {
         }
         
         do {
-            let result = try await EhAPI.shared.getGalleryList(url: favUrl)
+            let result = try await requestGalleryList(favUrl)
             self.galleries = result.galleries
             self.hasMore = result.nextHref != nil
             self.prevHref = result.prevHref
@@ -2262,7 +2280,13 @@ class GalleryListViewModel {
         }
     }
 
-    private func fetchPage(mode: GalleryListView.ListMode, page: Int) async {
+    private func fetchPage(mode: GalleryListView.ListMode, page: Int, replacementEpoch: UInt64? = nil) async {
+        if let replacementEpoch {
+            guard replacementEpoch == listEpoch else { return }
+        } else if page == 0 {
+            listEpoch &+= 1
+        }
+        let requestEpoch = listEpoch
         print("[EhVM] fetchPage: mode=\(mode) page=\(page)")
         do {
             let site = AppSettings.shared.gallerySite
@@ -2332,7 +2356,8 @@ class GalleryListViewModel {
                 urlString = favUrl
             }
 
-            let result = try await EhAPI.shared.getGalleryList(url: urlString)
+            let result = try await requestGalleryList(urlString)
+            guard requestEpoch == listEpoch else { return }
 
             if page == 0 {
                 self.galleries = result.galleries
@@ -2368,7 +2393,7 @@ class GalleryListViewModel {
             print("[EhVM] fetchPage: SUCCESS — \(self.galleries.count) galleries loaded")
 
             // 缓存第一页结果
-            if page == 0 {
+            if page == 0 && listRequest == nil {
                 let cacheKey = self.cacheKey(for: mode, page: 0)
                 GalleryCache.shared.putListResult(
                     CachedGalleryListResult(
@@ -2384,6 +2409,7 @@ class GalleryListViewModel {
             }
 
         } catch {
+            guard requestEpoch == listEpoch else { return }
             self.isLoading = false  // 始终重置，包括取消
             print("[EhVM] fetchPage: ERROR \(error)")
             if error is CancellationError || (error as? URLError)?.code == .cancelled {

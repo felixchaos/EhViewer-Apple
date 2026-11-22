@@ -36,6 +36,87 @@ struct GalleryFilterTests {
         #expect(model.galleries.map(\.favoriteSlot) == [-1, -2])
     }
 
+    @Test func repeatedEndTriggersDoNotIssueDuplicateRequestsOrAppendDuplicates() async {
+        var callCount = 0
+        let first = "https://example.invalid/?next=1"
+        let second = "https://example.invalid/?next=2"
+        let model = GalleryListViewModel(filterGalleries: { _ in 0 }, listRequest: { url in
+            callCount += 1
+            await Task.yield()
+            if url == first {
+                return GalleryListResult(galleries: [GalleryInfo(gid: 1), GalleryInfo(gid: 2), GalleryInfo(gid: 2)],
+                                         pages: -1, nextHref: second)
+            }
+            #expect(url == second)
+            return GalleryListResult(galleries: [GalleryInfo(gid: 2)], pages: -1, nextHref: first)
+        })
+        model.galleries = [GalleryInfo(gid: 1), GalleryInfo(gid: 1)]
+        #expect(model.galleries.map(\.gid) == [1])
+        model.hasMore = true
+        model.nextHref = first
+        for _ in 0..<2 {
+            async let a: Void = model.loadMore(mode: .home)
+            async let b: Void = model.loadMore(mode: .home)
+            _ = await (a, b)
+        }
+        await model.loadMore(mode: .home)
+        #expect(model.galleries.map(\.gid) == [1, 2])
+        #expect(callCount == 2)
+        #expect(!model.hasMore)
+    }
+
+    @Test func refreshingInvalidatesEarlierPaginationInEitherCompletionOrder() async throws {
+        for oldFinishesFirst in [true, false] {
+            typealias Continuation = CheckedContinuation<GalleryListResult, any Error>
+            let next = "https://example.invalid/?next=old"
+            var oldRequest: Continuation?
+            var refresh: Continuation?
+            let model = GalleryListViewModel(filterGalleries: { _ in 0 }, listRequest: { url in
+                try await withCheckedThrowingContinuation { continuation in
+                    if url == next { oldRequest = continuation }
+                    else { refresh = continuation }
+                }
+            })
+            defer {
+                oldRequest?.resume(throwing: CancellationError())
+                refresh?.resume(throwing: CancellationError())
+            }
+            model.galleries = [GalleryInfo(gid: 1)]
+            model.hasMore = true
+            model.nextHref = next
+            let loadMore = Task { await model.loadMore(mode: .home) }
+            for _ in 0..<100 where oldRequest == nil { try await Task.sleep(for: .milliseconds(1)) }
+            let old = try #require(oldRequest)
+            let replacement = Task { await model.refreshAsync(mode: .home) }
+            for _ in 0..<100 where refresh == nil { try await Task.sleep(for: .milliseconds(1)) }
+            let fresh = try #require(refresh)
+            let oldResult = GalleryListResult(galleries: [GalleryInfo(gid: 2)], pages: -1,
+                                              nextHref: "https://example.invalid/stale")
+            let newResult = GalleryListResult(galleries: [GalleryInfo(gid: 3), GalleryInfo(gid: 3)], pages: -1,
+                                              nextHref: "https://example.invalid/fresh")
+            if oldFinishesFirst {
+                oldRequest = nil
+                old.resume(returning: oldResult)
+                await loadMore.value
+                #expect(model.galleries.map(\.gid) == [1])
+                #expect(model.isLoading)
+                refresh = nil
+                fresh.resume(returning: newResult)
+                await replacement.value
+            } else {
+                refresh = nil
+                fresh.resume(returning: newResult)
+                await replacement.value
+                oldRequest = nil
+                old.resume(returning: oldResult)
+                await loadMore.value
+            }
+            #expect(model.galleries.map(\.gid) == [3])
+            #expect(model.nextHref == "https://example.invalid/fresh")
+            #expect(!model.isLoading)
+        }
+    }
+
     private func makeListModel() -> GalleryListViewModel {
         GalleryListViewModel(filterGalleries: { galleries in
             let count = galleries.count

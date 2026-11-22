@@ -482,6 +482,8 @@ struct GalleryDetailView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("gallery-detail-favorite")
+            .accessibilityAddTraits(vm.isFavorited ? .isSelected : [])
             // 对齐 Android: 长按收藏始终弹出收藏夹选择，即使已设默认
             .onLongPressGesture { showFavoritePicker = true }
 

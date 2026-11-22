@@ -102,6 +102,7 @@ struct FavoritesView: View {
                             cloudBatchToolbar
                         }
                     }
+                    .accessibilityIdentifier("favorites-page-header")
 
                     slotPicker
                     Divider()

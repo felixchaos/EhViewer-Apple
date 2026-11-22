@@ -40,6 +40,12 @@ struct EhViewerApp: App {
     #endif
 
     init() {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled {
+            EhOfflineUIFixture.seed()
+            return
+        }
+        #endif
         guard !EhUnitTestHost.isOffline else { return }
 
         // ⚠️ 必须是启动时的第一件事：把钥匙串里的登录凭据同步放回 Cookie 罐。
@@ -105,14 +111,23 @@ struct EhViewerApp: App {
         }
     }
 
+    @ViewBuilder private var defaultRoot: some View {
+        if EhUnitTestHost.isOffline { Color.clear }
+        else { RootView() }
+    }
+
     var body: some Scene {
         let _ = NSLog("[RENDER] EhViewerApp body — 如果此行反复出现，说明 App 级重渲染")
         WindowGroup {
-            if EhUnitTestHost.isOffline {
-                Color.clear
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            if EhOfflineUIFixture.enabled {
+                MainTabView().environment(AppState())
             } else {
-                RootView()
+                defaultRoot
             }
+            #else
+            defaultRoot
+            #endif
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 750)
