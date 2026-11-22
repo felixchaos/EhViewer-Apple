@@ -36,6 +36,8 @@ https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/source.json
 - **下载**：下载队列、暂停与续传、下载记录与分组。
 - **账号**：访客浏览、网页登录、Cookie 导入、本地及云端收藏。EX 和其他账号功能取决于站点实际权限。
 
+- **从安卓导入**：在「我的 → 收藏」选择 Android EhViewer 导出的 SQLite 备份，可预览并单向导入本地收藏和阅读历史，不覆盖已有记录。不导入书签、阅读页码、下载文件或账号资料。
+
 ## 从源码构建
 
 建议使用 Xcode 27.1 或更新版本。iPhone Duo 的完整屏幕支持需要用 iOS 27.1 或更新的 SDK 构建，不影响 iOS 18.0 的最低安装要求。本地包的 Swift tools version 为 6.0。

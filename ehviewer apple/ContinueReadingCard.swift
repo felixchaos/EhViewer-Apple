@@ -55,18 +55,9 @@ struct ContinueReadingCard: View {
 
         // 在后台线程执行数据库读取，避免 DatabaseQueue 串行锁阻塞主线程
         let result: (record: HistoryRecord?, progress: Int?) = await Task.detached {
-            var record: HistoryRecord?
-            do {
-                let allHistory = try EhDatabase.shared.getAllHistory(limit: 1)
-                if let first = allHistory.first, first.gid == gid {
-                    record = first
-                } else {
-                    let searched = try EhDatabase.shared.getAllHistory(limit: 50)
-                    record = searched.first(where: { $0.gid == gid })
-                }
-            } catch {
-                print("[ContinueReadingCard] Failed to load history: \(error)")
-            }
+            // Imports can add more than 50 newer history rows without changing
+            // the Apple resume target. Find that target by its identity.
+            let record = try? EhDatabase.shared.getHistory(gid: gid)
 
             let key = "reading_progress_\(gid)"
             let progress = UserDefaults.standard.object(forKey: key) as? Int

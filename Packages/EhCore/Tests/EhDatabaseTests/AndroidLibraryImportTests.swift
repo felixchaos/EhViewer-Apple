@@ -46,6 +46,28 @@ import Testing
         }
     }
 
+    @Test func bulkImportDoesNotHideTheExistingAppleResumeTarget() throws {
+        try withFiles { sourcePath, targetPath in
+            try makeSource(sourcePath, populate: false)
+            let sourceDB = try DatabaseQueue(path: sourcePath.path)
+            try sourceDB.write { db in
+                for index in 0..<55 {
+                    try db.execute(sql: """
+                      INSERT INTO HISTORY (GID,TOKEN,TITLE,CATEGORY,RATING,TIME,MODE)
+                      VALUES (?, 'neutral', 'Android history', 1, 0, ?, 0)
+                    """, arguments: [200 + index, millisecond + Int64(index)])
+                }
+            }
+            let target = try EhDatabase(storageURL: targetPath)
+            try target.insertHistory(HistoryRecord(gid: 1, token: "apple", title: "Apple resume target",
+                                                    pages: 20, date: Date(timeIntervalSince1970: 1)))
+            let source = try AndroidLibraryImport(exportAt: sourcePath)
+            _ = try target.importAndroidLibrary(source, historyLimit: 100)
+            #expect(try !target.getAllHistory(limit: 50).contains { $0.gid == 1 })
+            #expect(try target.getHistory(gid: 1)?.title == "Apple resume target")
+        }
+    }
+
     @Test func previewUsesExactSnapshotAndMergePreservesExistingRecords() throws {
         try withFiles { sourcePath, targetPath in
             try makeSource(sourcePath)
