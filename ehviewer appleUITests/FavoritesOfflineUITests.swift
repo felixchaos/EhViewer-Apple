@@ -1,12 +1,14 @@
 #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importing: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         app.launchEnvironment["EH_FIXTURE_CLOUD"] = cloud
+        if importing { app.launchEnvironment["EH_FIXTURE_IMPORT"] = "1" }
         app.launch()
         return app
     }
@@ -78,6 +80,45 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["下载"].firstMatch.waitForExistence(timeout: 6))
         tab("收藏", in: app)
         XCTAssertEqual(header.frame.minY, emptyY, accuracy: 2)
+    }
+
+    @MainActor func testRealFilesImportRefreshesMountedTabsAndKeepsHomeResume() {
+        let app = launch(cloud: "empty", importing: true)
+        XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
+        tab("收藏", in: app)
+        XCTAssertTrue(header(app).waitForExistence(timeout: 8))
+        tab("历史", in: app)
+        XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
+        tab("我的", in: app)
+
+        let entry = app.staticTexts["收藏"].firstMatch
+        for _ in 0..<3 where !entry.isHittable { app.swipeUp() }
+        XCTAssertTrue(entry.isHittable)
+        entry.tap()
+        let importButton = app.buttons.containing(.staticText, identifier: "从安卓导入收藏与历史").firstMatch
+        XCTAssertTrue(importButton.waitForExistence(timeout: 8))
+        importButton.tap()
+
+        let searchField = app.searchFields.firstMatch
+        XCTAssertTrue(searchField.waitForExistence(timeout: 6))
+        searchField.tap()
+        searchField.typeText("offline-regression-fixture")
+        let file = app.cells.matching(NSPredicate(format: "identifier CONTAINS %@ OR label CONTAINS %@",
+                                                 "offline-regression-fixture", "offline-regression-fixture")).firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 8))
+        file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+
+        XCTAssertTrue(app.staticTexts["导入预览"].waitForExistence(timeout: 8))
+        app.buttons["导入"].tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 8))
+        app.alerts.firstMatch.buttons["好"].tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        tab("收藏", in: app)
+        XCTAssertTrue(app.staticTexts["Imported favorite fixture"].firstMatch.waitForExistence(timeout: 8))
+        tab("历史", in: app)
+        XCTAssertTrue(app.staticTexts["Imported reading 54"].firstMatch.waitForExistence(timeout: 8))
+        tab("首页", in: app)
+        XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
     }
 
     @MainActor func testSuccessfulEmptyCloudAndLocalFavoriteReopen() { checkFlow(cloud: "empty") }
