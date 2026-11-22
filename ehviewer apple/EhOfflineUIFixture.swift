@@ -50,7 +50,7 @@ enum EhOfflineUIFixture {
                 ])
             }
             guard let bytes = image.pngData() else { return false }
-            await manager.saveWhileReading(gallery: synthetic, pageIndex: page, data: bytes, extension: "png")
+            await manager.saveWhileReading(gallery: synthetic, pageIndex: page, data: bytes, extension: ".png")
         }
         let saved = await manager.getDownloadedPageCount(gid: synthetic.gid)
         let directory = await manager.localGalleryDirectory(gid: synthetic.gid)

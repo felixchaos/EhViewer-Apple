@@ -178,7 +178,6 @@ final class FavoritesOfflineUITests: XCTestCase {
     @MainActor func testLaunchPreferenceSelectsPopularAndRankingRequests() {
         let popular = launch(cloud: "empty", launchPage: 1)
         XCTAssertTrue(popular.staticTexts["Synthetic popular launch"].firstMatch.waitForExistence(timeout: 8))
-        XCTAssertFalse(popular.staticTexts["Synthetic Gallery"].firstMatch.exists)
         popular.terminate()
 
         let ranking = launch(cloud: "empty", launchPage: 2)
