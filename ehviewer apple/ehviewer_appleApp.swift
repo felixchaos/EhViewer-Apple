@@ -121,7 +121,11 @@ struct EhViewerApp: App {
         WindowGroup {
             #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
             if EhOfflineUIFixture.enabled {
-                MainTabView().environment(AppState())
+                if EhOfflineUIFixture.readerEnabled {
+                    EhOfflineReaderFixtureHost()
+                } else {
+                    MainTabView().environment(AppState())
+                }
             } else {
                 defaultRoot
             }

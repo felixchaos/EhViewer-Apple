@@ -1297,6 +1297,8 @@ struct ImageReaderView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(EhReaderChrome.label)
                 }
+                .accessibilityLabel("返回详情")
+                .accessibilityIdentifier("reader-close")
 
                 if let title = readerTitle {
                     Text(title)
@@ -1320,6 +1322,8 @@ struct ImageReaderView: View {
                     Image(systemName: "square.grid.2x2")
                         .foregroundStyle(EhReaderChrome.label)
                 }
+                .accessibilityLabel("页面目录")
+                .accessibilityIdentifier("reader-pages")
 
                 // 齿轮。这里原来画的是 sun.max，点开却是整个阅读设置面板——
                 // 图标承诺的是亮度，打开的是设置。

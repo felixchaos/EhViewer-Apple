@@ -1,6 +1,9 @@
 // Never present in a normal build. An explicit simulator build is required.
 #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
 import Foundation
+import SwiftUI
+import UIKit
+import EhDownload
 import EhDatabase
 import EhModels
 import EhSettings
@@ -9,7 +12,10 @@ import SQLite3
 @MainActor
 enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
-    static let synthetic = GalleryInfo(gid: 900010000001, token: "fixture", title: "Synthetic Gallery")
+    static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
+    static let synthetic = GalleryInfo(
+        gid: 900010000001, token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
+    )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
     static func seed() {
@@ -25,6 +31,30 @@ enum EhOfflineUIFixture {
            UUID(uuidString: identifier) != nil {
             seedImportScenario(identifier: identifier)
         }
+    }
+
+    static func seedReaderFiles() async -> Bool {
+        UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
+        UserDefaults.standard.removeObject(forKey: "reading_progress_\(synthetic.gid)")
+        // A real download record and images enter through the usual persistence API.
+        // Open the fixture UI only once all pages are available, so it cannot fall back to the network.
+        let manager = DownloadManager.shared
+        for page in 0..<synthetic.pages {
+            let color: UIColor = [.systemRed, .systemBlue, .systemGreen][page]
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180))
+            let image = renderer.image { ctx in
+                color.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 120, height: 180))
+                String(page + 1).draw(at: CGPoint(x: 30, y: 50), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 48), .foregroundColor: UIColor.white
+                ])
+            }
+            guard let bytes = image.pngData() else { return false }
+            await manager.saveWhileReading(gallery: synthetic, pageIndex: page, data: bytes, extension: "png")
+        }
+        let saved = await manager.getDownloadedPageCount(gid: synthetic.gid)
+        let directory = await manager.localGalleryDirectory(gid: synthetic.gid)
+        return saved == synthetic.pages && directory != nil
     }
 
     static var injectedImportURL: URL? {
@@ -87,6 +117,21 @@ enum EhOfflineUIFixture {
         default:
             return GalleryListResult(galleries: [synthetic])
         }
+    }
+}
+
+/// Only the synthetic reader launch needs asynchronous local data setup.
+struct EhOfflineReaderFixtureHost: View {
+    @State private var ready: Bool?
+    var body: some View {
+        Group {
+            switch ready {
+            case .some(true): MainTabView().environment(AppState())
+            case .some(false): Text("Unable to seed offline reader fixture")
+            case nil: ProgressView()
+            }
+        }
+        .task { ready = await EhOfflineUIFixture.seedReaderFiles() }
     }
 }
 #endif

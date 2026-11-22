@@ -3,7 +3,7 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
@@ -11,6 +11,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         if let importID { app.launchEnvironment["EH_FIXTURE_IMPORT"] = importID }
         if nativePicker { app.launchEnvironment["EH_FIXTURE_NATIVE_FILE_PICKER"] = "1" }
         if let launchPage { app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = String(launchPage) }
+        if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
         app.launch()
         return app
     }
@@ -183,6 +184,39 @@ final class FavoritesOfflineUITests: XCTestCase {
         let ranking = launch(cloud: "empty", launchPage: 2)
         XCTAssertTrue(ranking.staticTexts["Synthetic ranking launch"].firstMatch.waitForExistence(timeout: 8))
         XCTAssertTrue(ranking.buttons["全部时间"].firstMatch.exists)
+    }
+
+    @MainActor func testDownloadedReaderPageJumpAndReopenRetainsProgress() {
+        let app = launch(cloud: "empty", localReader: true)
+        openSynthetic(app)
+        let read = app.buttons["阅读"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        read.tap()
+
+        let pages = app.buttons["reader-pages"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 8))
+        pages.tap()
+        XCTAssertTrue(app.navigationBars["跳转到第 1 页"].waitForExistence(timeout: 5))
+        app.buttons["2"].tap()
+
+        // Reopening the grid proves the logical reading position changed.
+        if !pages.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.tap()
+        XCTAssertTrue(app.navigationBars["跳转到第 2 页"].waitForExistence(timeout: 5))
+        app.buttons["完成"].tap()
+        app.buttons["reader-close"].tap()
+        back(app)
+        openSynthetic(app)
+
+        let resume = app.buttons["继续阅读"].firstMatch
+        XCTAssertTrue(resume.waitForExistence(timeout: 8))
+        resume.tap()
+        XCTAssertTrue(pages.waitForExistence(timeout: 8))
+        pages.tap()
+        XCTAssertTrue(app.navigationBars["跳转到第 2 页"].waitForExistence(timeout: 5))
     }
 
     @MainActor func testSuccessfulEmptyCloudAndLocalFavoriteReopen() { checkFlow(cloud: "empty") }
