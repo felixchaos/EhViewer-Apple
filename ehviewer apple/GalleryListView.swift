@@ -648,10 +648,6 @@ struct GalleryListView: View {
         }
         .listStyle(.plain)
         #if os(iOS)
-        // 向下滚收起底部导航条，向上滚放出来
-        .ehTabBarAutoHide()
-        #endif
-        #if os(iOS)
         .scrollDismissesKeyboard(.immediately)
         #endif
         .refreshable {

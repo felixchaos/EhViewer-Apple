@@ -156,7 +156,6 @@ struct HistoryView: View {
             )
         }
         #if os(iOS)
-        .ehTabBarAutoHide()
         .fullScreenCover(item: $resumeItem) { item in
             ImageReaderView(
                 gid: item.gid, token: item.token,

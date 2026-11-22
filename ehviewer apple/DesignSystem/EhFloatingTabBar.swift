@@ -141,61 +141,6 @@ extension View {
 }
 
 
-/// 浮起导航条的显隐状态。
-///
-/// 由滚动驱动（向下滚隐藏、向上滚显示），也可由 `ehHidesTabBar` 强制隐藏。
-/// 放在 environment 里而不是层层传 binding：驱动它的是各个列表，
-/// 消费它的是根部的 modifier，两者之间隔着好几层视图。
-@Observable
-@MainActor
-final class EhTabBarVisibility {
-    /// 全局唯一。
-    ///
-    /// 此前走 environment 注入，结果驱动方（列表的滚动修饰器）读到的是
-    /// EnvironmentKey 的 defaultValue，而消费方（浮条）用的是自己 @State 里的
-    /// 另一个实例——回调在跑、状态也在写，但写进了另一个对象，浮条自然不动。
-    /// 全 App 只有一条浮条，用单例最直接，也不会再有两份状态。
-    static let shared = EhTabBarVisibility()
-
-    /// 滚动导致的隐藏
-    var hiddenByScroll = false
-
-    private init() {}
-}
-
-extension View {
-    /// 挂在可滚动内容上：向下滚时收起底部导航条，向上滚时放出来。
-    ///
-    /// 阈值 12pt 是为了避免橡皮筋回弹和手指微抖造成的反复开合；
-    /// 接近顶部时无条件显示，否则用户滚回顶部会发现导航条不见了。
-    func ehTabBarAutoHide() -> some View {
-        modifier(EhTabBarAutoHideModifier())
-    }
-}
-
-private struct EhTabBarAutoHideModifier: ViewModifier {
-    private var visibility: EhTabBarVisibility { .shared }
-    @Environment(\.ehTabBarDriverActive) private var isActive
-    @State private var lastOffset: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self) { geo in
-            geo.contentOffset.y + geo.contentInsets.top
-        } action: { _, offset in
-            let delta = offset - lastOffset
-            guard abs(delta) > 12 else { return }
-            lastOffset = offset
-
-            guard isActive else { return }
-            if offset < 40 {
-                visibility.hiddenByScroll = false
-            } else {
-                visibility.hiddenByScroll = delta > 0
-            }
-        }
-    }
-}
-
 private struct EhHomeReselectKey: EnvironmentKey {
     static let defaultValue: UUID? = nil
 }
@@ -233,18 +178,14 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     let isEnabled: Bool
     var onReselect: ((Tab) -> Void)?
 
-    @State private var isHidden = false
-    private var visibility: EhTabBarVisibility { .shared }
+    @State private var isHiddenByDestination = false
 
-    private var shouldHide: Bool { !isEnabled || isHidden || visibility.hiddenByScroll }
+    // Ordinary list scrolling never removes access to other top-level destinations.
+    private var shouldHide: Bool { !isEnabled || isHiddenByDestination }
 
     func body(content: Content) -> some View {
         content
-            .onPreferenceChange(EhHidesTabBarKey.self) { isHidden = $0 }
-            .onChange(of: selection) { _, _ in visibility.hiddenByScroll = false }
-            .onChange(of: isEnabled) { _, enabled in
-                if enabled { visibility.hiddenByScroll = false }
-            }
+            .onPreferenceChange(EhHidesTabBarKey.self) { isHiddenByDestination = $0 }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !shouldHide {
                     EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)

@@ -23,14 +23,14 @@ final class CompactHomeReselectUITests: XCTestCase {
         app.swipeUp()
         app.swipeUp()
         waitUntil(first, isHittable: false)
-        // The floating bar hides scrolling down. Reveal it with a small reverse scroll
-        // while remaining below the first row.
+        // Even a small forward scroll away from the top must leave navigation available.
         let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.48))
         let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.56))
-        upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0)
+        lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0)
         waitUntil(first, isHittable: false)
 
-        // The Home container still owns the bottom tab while showing its search source.
+        // No reversing the scroll to reveal the bar. Browse still owns the selected Home tab.
+        waitUntil(app.buttons["收藏"].firstMatch, isHittable: true)
         let homeTab = app.buttons.matching(NSPredicate(format: "label == %@ AND selected == YES", "首页")).firstMatch
         waitUntil(homeTab, isHittable: true)
         homeTab.tap()
@@ -38,6 +38,49 @@ final class CompactHomeReselectUITests: XCTestCase {
         waitUntil(first, isHittable: true)
         XCTAssertEqual(first.label, startingTitle, "The search results should not be refetched.")
         XCTAssertEqual(search.value as? String, "offlineretap")
+    }
+
+    @MainActor func testDetailAndReaderStillKeepApplicationTabsOutOfTheWay() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
+        app.launch()
+        let gallery = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(gallery.waitForExistence(timeout: 8))
+        if app.descendants(matching: .any)["adaptive-tab-sidebar"].exists {
+            throw XCTSkip("This verifies the compact tab bar, not sidebar visibility.")
+        }
+
+        // Use a unique top-level button, not 下载/收藏 controls also found inside detail.
+        let profileTab = app.buttons["我的"].firstMatch
+        waitUntil(profileTab, isHittable: true)
+        gallery.tap()
+        let read = app.buttons["阅读"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        waitUntil(profileTab, isHittable: false)
+        read.tap()
+
+        let close = app.buttons["reader-close"]
+        let pages = app.buttons["reader-pages"]
+        XCTAssertTrue(close.waitForExistence(timeout: 8))
+        waitUntil(pages, isHittable: true)
+        waitUntil(profileTab, isHittable: false)
+        let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.tap()
+        waitUntil(pages, isHittable: false)
+        waitUntil(profileTab, isHittable: false)
+        center.tap()
+        waitUntil(close, isHittable: true)
+        close.tap()
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        waitUntil(profileTab, isHittable: false)
+
+        let labeledBack = app.buttons["返回"].firstMatch
+        let back = labeledBack.exists ? labeledBack : app.navigationBars.buttons.firstMatch
+        waitUntil(back, isHittable: true)
+        back.tap()
+        waitUntil(profileTab, isHittable: true)
     }
 
     @MainActor private func waitUntil(_ element: XCUIElement, isHittable: Bool, file: StaticString = #filePath, line: UInt = #line) {

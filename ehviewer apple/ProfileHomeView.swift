@@ -47,10 +47,6 @@ struct ProfileHomeView: View {
                 .padding(.bottom, 24)
             }
             .background(EhColor.groupedBackground)
-            #if os(iOS)
-            // 浮起导航条只在 iOS 存在，macOS 是侧边栏
-            .ehTabBarAutoHide()
-            #endif
             .ehCompactHeader()
             .scrollContentBackground(.hidden)
             .navigationDestination(for: ProfileRoute.self) { route in
