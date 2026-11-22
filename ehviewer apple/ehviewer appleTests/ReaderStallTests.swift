@@ -205,3 +205,46 @@ struct ReaderOpeningTests {
         }
     }
 }
+
+struct ReaderPagingCommitTests {
+    @Test func abortedGestureDoesNotCommitTransientCandidate() {
+        var paging = ReaderPagingCommit()
+        paging.begin(from: 1)
+        // Moving/decelerating can cross other native anchors. No commit is
+        // requested until we're told which anchor actually settled.
+        paging.begin(from: 1)
+        #expect(paging.settle(logicalPage: 1, candidate: 1, totalPages: 5) == .unchanged)
+        #expect(paging.settle(logicalPage: 1, candidate: 2, totalPages: 5) == .unchanged)
+    }
+
+    @Test func settleCommitsOnlyTheLandingPageInEitherDirection() {
+        var paging = ReaderPagingCommit()
+        paging.begin(from: 1)
+        paging.begin(from: 1) // interrupted inertia stays in the same session
+        #expect(paging.settle(logicalPage: 1, candidate: 3, totalPages: 5) == .move(to: 3))
+        paging.begin(from: 3)
+        #expect(paging.settle(logicalPage: 3, candidate: 2, totalPages: 5) == .move(to: 2))
+    }
+
+    @Test func concurrentExplicitJumpWinsEvenBeforeItsObserverRuns() {
+        var paging = ReaderPagingCommit()
+        paging.begin(from: 1)
+        #expect(paging.settle(logicalPage: 4, candidate: 2, totalPages: 5) == .restoreExplicitAnchor)
+
+        paging.begin(from: 1)
+        paging.explicitPageChanged()
+        paging.begin(from: 1)
+        #expect(paging.settle(logicalPage: 1, candidate: 2, totalPages: 5) == .restoreExplicitAnchor)
+
+        paging.begin(from: 1)
+        #expect(paging.settle(logicalPage: 1, candidate: 2, totalPages: 5) == .move(to: 2))
+    }
+
+    @Test func nilOrInvalidFinalAnchorDoesNotChangeProgress() {
+        for candidate in [nil, -1, 5] {
+            var paging = ReaderPagingCommit()
+            paging.begin(from: 1)
+            #expect(paging.settle(logicalPage: 1, candidate: candidate, totalPages: 5) == .unchanged)
+        }
+    }
+}

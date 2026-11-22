@@ -74,6 +74,14 @@ struct ImageReaderView: View {
 
     // Perf: 翻页去抖 — 快速滑动时取消上一次预加载，仅处理最终落地页
     @State private var pageChangeTask: Task<Void, Never>?
+    #if os(iOS)
+    @State private var singlePagePaging = ReaderPagingCommit()
+    @State private var spreadPaging = ReaderPagingCommit()
+    // The model's spread index remains the committed one during a swipe
+    // so keyboard, tap and grid actions don't start from a transient ID.
+    @State private var nativeSpreadAnchor: Int?
+    #endif
+
 
     @Environment(\.dismiss) private var dismiss
 
@@ -607,21 +615,41 @@ struct ImageReaderView: View {
                     .scrollTargetLayout()
                 }
                 .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $vm.currentSpreadIndex)
                 #if os(iOS)
+                .scrollPosition(id: $nativeSpreadAnchor)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
-                #endif
-                .onChange(of: vm.currentSpreadIndex) { _, newIdx in
-                    guard let page = vm.pageTurnTarget(forSpreadID: newIdx) else { return }
-                    vm.currentPage = page
-                    // Perf: 去抖 — 快速翻页时只处理最终落地页
-                    pageChangeTask?.cancel()
-                    pageChangeTask = Task {
-                        try? await Task.sleep(nanoseconds: 80_000_000) // 80ms debounce
-                        guard !Task.isCancelled else { return }
-                        await vm.onPageChange(page)
+                .onAppear { nativeSpreadAnchor = vm.currentSpreadIndex }
+                .onDisappear { spreadPaging = ReaderPagingCommit() }
+                .onChange(of: vm.currentPage) { _, _ in spreadPaging.explicitPageChanged() }
+                .onChange(of: vm.currentSpreadIndex) { _, newIndex in
+                    if nativeSpreadAnchor != newIndex {
+                        nativeSpreadAnchor = newIndex
                     }
                 }
+                .onScrollPhaseChange { _, phase in
+                    switch phase {
+                    case .tracking, .interacting, .decelerating, .animating:
+                        spreadPaging.begin(from: vm.currentPage)
+                    case .idle:
+                        let candidate = vm.pageTurnTarget(forSpreadID: nativeSpreadAnchor)
+                        switch spreadPaging.settle(
+                            logicalPage: vm.currentPage, candidate: candidate, totalPages: vm.totalPages
+                        ) {
+                        case .move(let page):
+                            vm.currentSpreadIndex = nativeSpreadAnchor
+                            commitSettledHorizontalPage(page)
+                        case .restoreExplicitAnchor:
+                            nativeSpreadAnchor = vm.currentSpreadIndex
+                        case .unchanged:
+                            break
+                        }
+                    @unknown default:
+                        break
+                    }
+                }
+                #else
+                .scrollPosition(id: $vm.currentSpreadIndex)
+                #endif
             } else {
                 // 单页模式
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -640,27 +668,44 @@ struct ImageReaderView: View {
                 .scrollDisabled(isZoomed)
                 #if os(iOS)
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
-                #endif
-                .onChange(of: vm.lazyCurrentPage) { _, newPage in
-                    guard let page = newPage, page != vm.currentPage else { return }
-                    vm.currentPage = page
-                    // Perf: 去抖 — 快速滑动时取消上一次预加载，仅处理结束页
-                    pageChangeTask?.cancel()
-                    pageChangeTask = Task {
-                        try? await Task.sleep(nanoseconds: 80_000_000) // 80ms debounce
-                        guard !Task.isCancelled else { return }
-                        await vm.onPageChange(vm.currentPage)
-                    }
-                }
+                .onDisappear { singlePagePaging = ReaderPagingCommit() }
                 .onChange(of: vm.currentPage) { _, newPage in
-                    // 外部翻页 (键盘/浮动按钮/slider) → 同步 scrollPosition
+                    singlePagePaging.explicitPageChanged()
                     if vm.lazyCurrentPage != newPage {
                         vm.lazyCurrentPage = newPage
                     }
                 }
+                .onScrollPhaseChange { _, phase in
+                    switch phase {
+                    case .tracking, .interacting, .decelerating, .animating:
+                        singlePagePaging.begin(from: vm.currentPage)
+                    case .idle:
+                        switch singlePagePaging.settle(
+                            logicalPage: vm.currentPage, candidate: vm.lazyCurrentPage, totalPages: vm.totalPages
+                        ) {
+                        case .move(let page):
+                            commitSettledHorizontalPage(page)
+                        case .restoreExplicitAnchor:
+                            vm.lazyCurrentPage = vm.currentPage
+                        case .unchanged:
+                            break
+                        }
+                    @unknown default:
+                        break
+                    }
+                }
+                #endif
             }
         }
     }
+
+    #if os(iOS)
+    private func commitSettledHorizontalPage(_ page: Int) {
+        vm.currentPage = page
+        pageChangeTask?.cancel()
+        pageChangeTask = Task { await vm.onPageChange(page) }
+    }
+    #endif
 
     // MARK: - macOS Page Reader
 
