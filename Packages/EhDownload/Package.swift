@@ -29,6 +29,7 @@ let package = Package(
             name: "EhDownloadTests",
             dependencies: [
                 "EhDownload",
+                .product(name: "EhSpider", package: "EhSpider"),
                 .product(name: "EhModels", package: "EhCore"),
                 .product(name: "EhDatabase", package: "EhCore"),
             ]

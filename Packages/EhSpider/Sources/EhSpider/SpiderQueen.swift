@@ -51,6 +51,9 @@ public actor SpiderQueen {
     private func rateLimitedData(for request: URLRequest) async throws -> (Data, URLResponse) {
         await EhRateLimiter.shared.acquireImageSlot()
         do {
+            // A cancelled waiter may still receive the slot. Return it
+            // without starting a new request for a retired transfer.
+            try Task.checkCancellation()
             let result = try await sharedSession.data(for: request)
             await EhRateLimiter.shared.releaseImageSlot()
             return result
@@ -120,6 +123,7 @@ public actor SpiderQueen {
     /// 开始下载模式 (对应 Android setMode(MODE_DOWNLOAD))
     /// 使用 TaskGroup 实现并发控制，等待所有页面下载完成后再返回
     public func startDownload() async {
+        guard !Task.isCancelled else { return }
         mode = .download
 
         // 收集需要下载的页面索引
@@ -137,14 +141,14 @@ public actor SpiderQueen {
             var inFlight = 0
             var index = 0
 
-            while index < pagesToDownload.count {
+            while index < pagesToDownload.count && !Task.isCancelled {
                 if inFlight < maxConcurrent {
                     let pageIndex = pagesToDownload[index]
-                    pageStates[pageIndex] = Self.stateLoading
-                    group.addTask { [weak self] in
-                        guard let self = self else { return }
+                    guard group.addTaskUnlessCancelled(operation: { [weak self] in
+                        guard let self else { return }
                         await self.loadPage(index: pageIndex)
-                    }
+                    }) else { break }
+                    pageStates[pageIndex] = Self.stateLoading
                     inFlight += 1
                     index += 1
                 } else {
@@ -154,6 +158,7 @@ public actor SpiderQueen {
                 }
             }
 
+            if Task.isCancelled { group.cancelAll() }
             // 等待剩余任务完成
             await group.waitForAll()
         }
@@ -214,6 +219,7 @@ public actor SpiderQueen {
 
         for attempt in 0..<maxRetries {
             do {
+                try Task.checkCancellation()
                 // 0. 检查是否已在缓存/下载目录中 (快速路径)
                 if await spiderDen.contain(index: index) {
                     pageStates[index] = Self.stateFinish
@@ -275,7 +281,9 @@ public actor SpiderQueen {
                 }
 
                 // 5. 下载图片并存储
+                try Task.checkCancellation()
                 try await downloadAndStore(imageUrl: finalImageUrl, index: index)
+                try Task.checkCancellation()
 
                 // 6. 保存结果
                 imageUrls[index] = finalImageUrl
@@ -284,11 +292,12 @@ public actor SpiderQueen {
                 activeTasks.removeValue(forKey: index)
                 return
 
-            } catch is CancellationError {
-                pageStates[index] = Self.stateNone
-                activeTasks.removeValue(forKey: index)
-                return
             } catch {
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    pageStates[index] = Self.stateNone
+                    activeTasks.removeValue(forKey: index)
+                    return
+                }
                 lastError = error
                 // showKey 可能过期，清除后下次使用 HTML 方式
                 if attempt > 0 { showKey = nil }
@@ -343,6 +352,7 @@ public actor SpiderQueen {
             throw SpiderError.diskFull
         }
 
+        try Task.checkCancellation()
         let success = await spiderDen.write(data: data, index: index, extension: ext)
         if !success {
             throw SpiderError.storageFailed

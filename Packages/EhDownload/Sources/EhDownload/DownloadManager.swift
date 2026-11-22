@@ -28,19 +28,42 @@ public actor DownloadManager {
     ///   以前是 init 里 `Task { await loadFromDatabase() }` —— Actor 不保证 Task 之间的
     ///   执行顺序，App 启动后立刻打开已下载画廊时队列可能还是空的，
     ///   于是被判定为"未下载"、整本走网络 (issue #8 问题二)
-    private lazy var downloadQueue: [DownloadTask] = Self.tasksFromDatabase(downloadDirectory: downloadDirectory)
-    private var activeTask: DownloadTask?
-    /// 当前真正在执行的任务 gid — executeDownload 每次从 await 恢复后都要用它确认
-    /// 自己是否仍然是活跃任务 (可能已被 pause/delete/pauseAll 取代)
-    private var runningGid: Int64?
-    private let maxConcurrent = 1  // 同一时间只下载一个画廊
-    private var isRunning = false
+    private lazy var downloadQueue = Self.tasksFromDatabase(
+        database: database, downloadDirectory: downloadDirectory
+    )
+
+    fileprivate struct Attempt: Equatable, Sendable {
+        let gid: Int64
+        private let identity: UUID
+
+        init(gid: Int64) {
+            self.gid = gid
+            self.identity = UUID()
+        }
+    }
+
+    private struct FileDeletion {
+        let gid: Int64
+        let title: String?
+        let pages: Int
+    }
+
+    private var activeAttempt: Attempt?
+    // A retired attempt no longer accepts updates, but keeps the transfer
+    // slot until its structured children finish touching the download files.
+    private var runner: (attempt: Attempt, task: Task<Void, Never>)?
+    private var startQueueAfterDrain = false
+    private var pendingFileDeletion: FileDeletion?
+    private let database: EhDatabase
+    private nonisolated let directoryOverride: URL?
+    private let makeTransfer: @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer
 
     /// 下载监听器（用于通知集成）
     public weak var listener: DownloadListener?
 
     /// 下载目录
     public nonisolated var downloadDirectory: URL {
+        if let directoryOverride { return directoryOverride }
         // macOS: 支持用户自定义路径
         #if os(macOS)
         if let customPath = UserDefaults.standard.string(forKey: "downloadPath"),
@@ -52,7 +75,16 @@ public actor DownloadManager {
         return docs.appendingPathComponent("download")
     }
 
-    private init() {
+    init(
+        database: EhDatabase = .shared,
+        directory: URL? = nil,
+        makeTransfer: @escaping @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer = {
+            SpiderQueen(galleryInfo: $0, spiderInfo: $1, mode: .download)
+        }
+    ) {
+        self.database = database
+        self.directoryOverride = directory
+        self.makeTransfer = makeTransfer
         // 确保下载目录存在
         var dir = downloadDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -66,9 +98,9 @@ public actor DownloadManager {
     }
 
     /// 从数据库加载已有下载任务 (nonisolated static: 供 lazy 属性同步初始化)
-    private nonisolated static func tasksFromDatabase(downloadDirectory: URL) -> [DownloadTask] {
+    private nonisolated static func tasksFromDatabase(database: EhDatabase, downloadDirectory: URL) -> [DownloadTask] {
         do {
-            let records = try EhDatabase.shared.getAllDownloads()
+            let records = try database.getAllDownloads()
             return records.map { record in
                 DownloadTaskPersistence.restore(record) { gallery in
                     let dir = downloadDirectory.appendingPathComponent(
@@ -93,8 +125,8 @@ public actor DownloadManager {
             if existingState == Self.stateNone || existingState == Self.stateFailed {
                 // 已暂停或已失败 → 重置为等待并恢复
                 downloadQueue[existingIndex].state = Self.stateWait
-                try? EhDatabase.shared.updateDownloadState(gid: gallery.gid, state: Self.stateWait)
-                if !isRunning { processQueue() }
+                try? database.updateDownloadState(gid: gallery.gid, state: Self.stateWait)
+                processQueue()
             }
             // stateWait / stateDownload / stateFinish → 不重复操作
             return
@@ -104,50 +136,35 @@ public actor DownloadManager {
         downloadQueue.append(task)
 
         // 持久化到数据库
-        try? EhDatabase.shared.insertDownload(DownloadTaskPersistence.record(for: task))
+        try? database.insertDownload(DownloadTaskPersistence.record(for: task))
 
         // 启动队列处理
-        if !isRunning {
-            processQueue()
-        }
+        processQueue()
     }
 
     /// 暂停下载
     public func pauseDownload(gid: Int64) {
-        let wasActive = activeTask?.gallery.gid == gid
-        if wasActive {
-            if let spider = spider(forGid: gid) {
-                Task { await spider.cancelAll() }
-            }
-            // ★ 先失效 runningGid: 正在 await 中的 executeDownload 恢复后会自行退出，
-            //   不会再把状态写回队列 (否则会覆盖这里设置的"已暂停")
-            runningGid = nil
-            activeTask = nil
-        }
+        let wasActive = activeAttempt?.gid == gid
+        if wasActive { retireActiveAttempt() }
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
             downloadQueue[index].state = Self.stateNone
             downloadQueue[index].spider = nil
-            try? EhDatabase.shared.updateDownloadState(gid: gid, state: Self.stateNone)
+            try? database.updateDownloadState(gid: gid, state: Self.stateNone)
         }
         if wasActive { processQueue() }
     }
 
     /// 暂停所有下载（磁盘满时紧急调用）
     public func pauseAllDownloads() {
-        // 取消当前活跃任务
-        if let gid = activeTask?.gallery.gid, let spider = spider(forGid: gid) {
-            Task { await spider.cancelAll() }
-        }
-        runningGid = nil
-        activeTask = nil
-        isRunning = false
+        retireActiveAttempt()
+        startQueueAfterDrain = false
 
         // 暂停队列中所有等待/下载中的任务
         for i in downloadQueue.indices {
             if downloadQueue[i].state == Self.stateWait || downloadQueue[i].state == Self.stateDownload {
                 downloadQueue[i].state = Self.stateNone
                 downloadQueue[i].spider = nil
-                try? EhDatabase.shared.updateDownloadState(gid: downloadQueue[i].gallery.gid, state: Self.stateNone)
+                try? database.updateDownloadState(gid: downloadQueue[i].gallery.gid, state: Self.stateNone)
             }
         }
         print("[DownloadManager] ⚠️ 所有下载已暂停（磁盘空间不足）")
@@ -157,67 +174,35 @@ public actor DownloadManager {
     public func resumeDownload(gid: Int64) {
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
             downloadQueue[index].state = Self.stateWait
-            try? EhDatabase.shared.updateDownloadState(gid: gid, state: Self.stateWait)
-            // 用 activeTask == nil 判断，避免 isRunning 残留 true 时队列卡死
-            if activeTask == nil {
-                runningGid = nil
-                isRunning = false
-                processQueue()
-            }
-        }
-    }
-
-    /// 强制尝试处理队列 (外部调用，修复 isRunning 残留问题)
-    public func kickQueue() {
-        if activeTask == nil {
-            runningGid = nil
-            isRunning = false
+            try? database.updateDownloadState(gid: gid, state: Self.stateWait)
             processQueue()
         }
     }
 
+    /// 强制尝试处理队列 (外部调用)
+    public func kickQueue() {
+        processQueue()
+    }
+
     /// 删除下载 (可选删除文件)
     public func deleteDownload(gid: Int64, deleteFiles: Bool = false) {
-        // 先获取 gallery 信息 (必须在 removeAll 之前)
         let task = downloadQueue.first(where: { $0.gallery.gid == gid })
-        let title = task?.gallery.bestTitle
-        let pages = task?.gallery.pages ?? 0
-
-        if activeTask?.gallery.gid == gid {
-            if let spider = spider(forGid: gid) {
-                Task { await spider.cancelAll() }
-            }
-            // ★ 失效 runningGid，正在执行的 executeDownload 恢复后不会再访问已删除的任务
-            runningGid = nil
-            activeTask = nil
-        }
-
+        if activeAttempt?.gid == gid { retireActiveAttempt() }
         downloadQueue.removeAll { $0.gallery.gid == gid }
-        try? EhDatabase.shared.deleteDownload(gid: gid)
+        try? database.deleteDownload(gid: gid)
         // 列表行上的「已下载」标记要跟着消失
         NotificationCenter.default.post(name: Notification.Name("galleryDownloadChanged"),
                                         object: nil,
                                         userInfo: ["gid": gid, "downloading": false])
 
         if deleteFiles {
-            // 清除 SpiderDen 阅读缓存
-            if pages > 0 {
-                SpiderDen.clearCache(forGid: gid, pages: pages)
-            }
-
-            if let title = title, !title.isEmpty {
-                // 精确匹配: 使用实际标题
-                let dir = galleryDirectory(gid: gid, title: title)
-                try? FileManager.default.removeItem(at: dir)
+            let deletion = FileDeletion(gid: gid, title: task?.gallery.bestTitle, pages: task?.gallery.pages ?? 0)
+            if runner?.attempt.gid == gid {
+                // The old transfer may already be in a disk write. Delete
+                // after it drains and before any replacement starts.
+                if pendingFileDeletion == nil { pendingFileDeletion = deletion }
             } else {
-                // 回退: 枚举下载目录中匹配 "gid-*" 前缀的目录
-                let prefix = "\(gid)-"
-                if let contents = try? FileManager.default.contentsOfDirectory(
-                    at: downloadDirectory, includingPropertiesForKeys: nil) {
-                    for item in contents where item.lastPathComponent.hasPrefix(prefix) {
-                        try? FileManager.default.removeItem(at: item)
-                    }
-                }
+                removeFiles(deletion)
             }
         }
 
@@ -225,15 +210,33 @@ public actor DownloadManager {
     }
 
     /// 获取所有下载任务
+    private func removeFiles(_ deletion: FileDeletion) {
+        if deletion.pages > 0 {
+            // A caller supplying an isolated directory is not using the app's
+            // shared read cache.
+            if directoryOverride == nil { SpiderDen.clearCache(forGid: deletion.gid, pages: deletion.pages) }
+        }
+        if let title = deletion.title, !title.isEmpty {
+            try? FileManager.default.removeItem(at: galleryDirectory(gid: deletion.gid, title: title))
+        } else {
+            let prefix = "\(deletion.gid)-"
+            if let contents = try? FileManager.default.contentsOfDirectory(
+                at: downloadDirectory, includingPropertiesForKeys: nil
+            ) {
+                for item in contents where item.lastPathComponent.hasPrefix(prefix) {
+                    try? FileManager.default.removeItem(at: item)
+                }
+            }
+        }
+    }
+
     public func getAllTasks() -> [DownloadTask] {
         downloadQueue
     }
 
     /// 获取任务状态
     public func getTaskState(gid: Int64) -> Int {
-        if activeTask?.gallery.gid == gid {
-            return activeTask?.state ?? Self.stateNone
-        }
+        if activeAttempt?.gid == gid { return Self.stateDownload }
         return downloadQueue.first(where: { $0.gallery.gid == gid })?.state ?? Self.stateInvalid
     }
 
@@ -243,9 +246,9 @@ public actor DownloadManager {
             if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
                 downloadQueue[index].label = label
                 // 同步到数据库
-                if var record = try? EhDatabase.shared.getDownload(gid: gid) {
+                if var record = try? database.getDownload(gid: gid) {
                     record.label = label
-                    try? EhDatabase.shared.updateDownload(record)
+                    try? database.updateDownload(record)
                 }
             }
         }
@@ -274,63 +277,62 @@ public actor DownloadManager {
 
     /// 暂停当前活跃下载 (用于后台任务过期时, 保留 stateWait 以便恢复)
     public func pauseActiveIfNeeded() {
-        guard let task = activeTask else { return }
-        if let spider = spider(forGid: task.gallery.gid) {
-            Task { await spider.cancelAll() }
-        }
-        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == task.gallery.gid }) {
+        guard let attempt = activeAttempt else { return }
+        pauseForExpiration(of: attempt)
+    }
+
+    private func pauseForExpiration(of attempt: Attempt) {
+        guard activeAttempt == attempt else { return }
+        retireActiveAttempt()
+        startQueueAfterDrain = false
+        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == attempt.gid }) {
             downloadQueue[index].state = Self.stateWait
             downloadQueue[index].spider = nil
-            try? EhDatabase.shared.updateDownloadState(gid: task.gallery.gid, state: Self.stateWait)
+            try? database.updateDownloadState(gid: attempt.gid, state: Self.stateWait)
         }
-        runningGid = nil
-        activeTask = nil
-        isRunning = false
     }
 
     /// 恢复队列处理 (用于 BGProcessingTask 唤醒时)
     public func resumeAllWaiting() {
-        guard !isRunning else { return }
-        if downloadQueue.contains(where: { $0.state == Self.stateWait }) {
-            processQueue()
-        }
+        processQueue()
     }
 
     // MARK: - 队列处理
 
-    private func processQueue() {
-        guard activeTask == nil else { return }
+    private func retireActiveAttempt() {
+        activeAttempt = nil
+        // This task owns SpiderQueen's batch TaskGroup. cancelAll() only
+        // covers independently requested pages, not those children.
+        runner?.task.cancel()
+    }
 
-        // 找到下一个等待中的任务
-        guard let nextIndex = downloadQueue.firstIndex(where: { $0.state == Self.stateWait }) else {
-            isRunning = false
-            runningGid = nil
+    private func processQueue() {
+        guard activeAttempt == nil else { return }
+        guard let index = downloadQueue.firstIndex(where: { $0.state == Self.stateWait }) else { return }
+        guard runner == nil else {
+            startQueueAfterDrain = true
             return
         }
 
-        isRunning = true
-        downloadQueue[nextIndex].state = Self.stateDownload
-        activeTask = downloadQueue[nextIndex]
-
-        // ★ 只向下传递 gid，绝不传递数组索引:
-        //   executeDownload 内部有多个 await 挂起点，挂起期间 deleteDownload /
-        //   pauseAllDownloads 会修改 downloadQueue，旧索引会越界或指向别的任务
-        //   (对应 issue #8 问题四: 下载管理删除/恢复任务时闪退)
-        let gid = downloadQueue[nextIndex].gallery.gid
-        runningGid = gid
-
-        Task {
-            await executeDownload(gid: gid)
+        let attempt = Attempt(gid: downloadQueue[index].gallery.gid)
+        downloadQueue[index].state = Self.stateDownload
+        activeAttempt = attempt
+        let task = Task {
+            let bgToken = await beginBackgroundTask(for: attempt)
+            await executeDownload(attempt)
+            await endBackgroundTask(bgToken)
+            finishRunner(attempt)
         }
+        runner = (attempt, task)
     }
 
     // MARK: - 后台任务句柄 (iOS: 申请后台执行时间; 其他平台 no-op)
 
-    private func beginBackgroundTask() async -> Int {
+    private func beginBackgroundTask(for attempt: Attempt) async -> Int {
         #if canImport(UIKit)
         let identifier = await MainActor.run {
             UIApplication.shared.beginBackgroundTask(withName: "EhGalleryDownload") {
-                Task { await DownloadManager.shared.pauseActiveIfNeeded() }
+                Task { await self.pauseForExpiration(of: attempt) }
             }
         }
         return identifier.rawValue
@@ -348,40 +350,28 @@ public actor DownloadManager {
         #endif
     }
 
-    /// 取出某个任务正在使用的 SpiderQueen
-    /// ⚠️ 必须从 downloadQueue 取: activeTask 是 processQueue 时的**值拷贝**,
-    ///    spider 是之后才写进 downloadQueue 的, activeTask?.spider 永远是 nil ——
-    ///    以前 pause/delete 都是对着 nil 调 cancelAll, 暂停/删除根本停不下正在跑的下载
-    private func spider(forGid gid: Int64) -> SpiderQueen? {
-        downloadQueue.first(where: { $0.gallery.gid == gid })?.spider
-    }
-
-    /// 当前任务收尾 — 仅当 gid 仍是活跃任务时才清理并继续队列
-    /// (防止已被 pause/delete 取代的旧任务把新任务的 activeTask 清空)
-    private func finishRunning(gid: Int64) {
-        guard runningGid == gid else { return }
-        runningGid = nil
-        activeTask = nil
-        processQueue()
-    }
-
-    private func executeDownload(gid: Int64) async {
-        // iOS: 申请后台执行时间, 防止进入后台后 ~30 秒被系统杀死
-        let bgToken = await beginBackgroundTask()
-
-        // ★ 每个 await 挂起点之后都必须按 gid 重新定位任务，并确认自己仍是活跃任务
-        guard let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
-              runningGid == gid else {
-            await endBackgroundTask(bgToken)
-            finishRunning(gid: gid)
-            return
+    private func finishRunner(_ attempt: Attempt) {
+        guard runner?.attempt == attempt else { return }
+        let shouldContinue = activeAttempt == attempt || startQueueAfterDrain
+        if activeAttempt == attempt { activeAttempt = nil }
+        runner = nil
+        startQueueAfterDrain = false
+        if let deletion = pendingFileDeletion {
+            pendingFileDeletion = nil
+            removeFiles(deletion)
         }
+        if shouldContinue { processQueue() }
+    }
+
+    private func executeDownload(_ attempt: Attempt) async {
+        let gid = attempt.gid
+        guard activeAttempt == attempt,
+              let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
 
         let gallery = downloadQueue[index].gallery
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
-
-        // 通知监听器下载开始
         await listener?.onDownloadStart(gid: gallery.gid, title: gallery.bestTitle)
+        guard activeAttempt == attempt else { return }
 
         // 尝试从 .ehviewer 文件读取已有的 SpiderInfo
         var spiderInfo: SpiderInfo
@@ -399,62 +389,50 @@ public actor DownloadManager {
         }
 
         // 创建 SpiderQueen
-        let spider = SpiderQueen(galleryInfo: gallery, spiderInfo: spiderInfo, mode: .download)
+        let transfer = makeTransfer(gallery, spiderInfo)
 
         // 统计已有的下载页数作为初始值
         let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
 
-        // onDownloadStart 是 await — 队列可能已在此期间变化，重新定位
-        guard let setupIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
-              runningGid == gid else {
-            await endBackgroundTask(bgToken)
-            finishRunning(gid: gid)
-            return
-        }
-        downloadQueue[setupIndex].spider = spider
+        // No suspension since we revalidated ownership after the callback.
+        guard let setupIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
+        downloadQueue[setupIndex].spider = transfer as? SpiderQueen
         downloadQueue[setupIndex].downloadedPages = initialDownloaded
 
-        // 设置代理以便更新 .ehviewer 文件和进度通知
         let updater = SpiderInfoUpdater(
             directory: dir,
-            gid: gallery.gid,
+            attempt: attempt,
             title: gallery.bestTitle,
             total: gallery.pages,
-            listener: listener,
+            manager: self,
             initialDownloaded: initialDownloaded
         )
-        await spider.setDelegate(updater)
+        await transfer.setDelegate(updater)
+        guard activeAttempt == attempt else { return }
 
-        // 开始下载所有页面 (startDownload() 是真正的 async，会等待全部页面完成)
-        await spider.startDownload()
+        await transfer.startDownload()
+        guard activeAttempt == attempt else { return }
 
-        // 下载完成后更新 .ehviewer 文件
-        let finalInfo = await spider.getSpiderInfo()
-        try? SpiderInfoFile.write(finalInfo, to: dir)
-
-        // 统计下载结果 (对齐 Android DownloadManager.onFinished)
+        let finalInfo = await transfer.getSpiderInfo()
         var finishedCount = 0
         for i in 0..<gallery.pages {
-            if await spider.getPageState(i) == SpiderQueen.stateFinish {
+            guard activeAttempt == attempt else { return }
+            if await transfer.getPageState(i) == SpiderQueen.stateFinish {
                 finishedCount += 1
             }
         }
 
-        // ★ 长时间 await 之后任务可能已被删除或暂停 —— 此时不得再写回状态，
-        //   否则会数组越界崩溃 (旧索引失效) 或把状态写到别的画廊头上
-        guard let finalIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
-              runningGid == gid else {
-            await endBackgroundTask(bgToken)
-            finishRunning(gid: gid)
-            return
-        }
+        // All terminal disk, database and state writes require ownership.
+        guard activeAttempt == attempt,
+              let finalIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
+        try? SpiderInfoFile.write(finalInfo, to: dir)
 
         // 下载完成
         let success = finishedCount == gallery.pages
         downloadQueue[finalIndex].state = success ? Self.stateFinish : Self.stateFailed
         downloadQueue[finalIndex].downloadedPages = finishedCount
         downloadQueue[finalIndex].spider = nil  // 释放 spider 引用
-        try? EhDatabase.shared.updateDownloadState(gid: gallery.gid, state: downloadQueue[finalIndex].state)
+        try? database.updateDownloadState(gid: gallery.gid, state: downloadQueue[finalIndex].state)
 
         // 通知监听器下载完成。
         //
@@ -469,11 +447,30 @@ public actor DownloadManager {
         }
         await listener?.onDownloadFinish(gid: gallery.gid, title: gallery.bestTitle,
                                          success: success, isBatchFinished: !stillPending)
+    }
 
-        // iOS: 释放后台执行时间
-        await endBackgroundTask(bgToken)
+    fileprivate func reportPageProgress(
+        for attempt: Attempt, title: String, downloaded: Int, total: Int,
+        speed: Int64, notify: Bool
+    ) async {
+        guard activeAttempt == attempt else { return }
+        updateDownloadedPages(gid: attempt.gid, count: downloaded)
+        updateDownloadSpeed(gid: attempt.gid, speed: speed)
+        if notify {
+            await listener?.onDownloadProgress(gid: attempt.gid, title: title,
+                                               downloaded: downloaded, total: total, speed: speed)
+        }
+    }
 
-        finishRunning(gid: gid)
+    fileprivate func reportImageLimit(for attempt: Attempt) async {
+        guard activeAttempt == attempt else { return }
+        await listener?.on509Error()
+    }
+
+    fileprivate func reportDiskFull(for attempt: Attempt) async {
+        guard activeAttempt == attempt else { return }
+        pauseAllDownloads()
+        await listener?.onDiskFull()
     }
 
     // MARK: - 文件管理
@@ -541,7 +538,8 @@ public actor DownloadManager {
     public func saveWhileReading(
         gallery: GalleryInfo, pageIndex: Int, data: Data, extension ext: String
     ) -> Bool {
-        guard pageIndex >= 0, !data.isEmpty else { return false }
+        guard pageIndex >= 0, !data.isEmpty,
+              pendingFileDeletion?.gid != gallery.gid else { return false }
 
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
         // 已经有这一页就不重复写 (可能是之前下载过的)
@@ -575,7 +573,7 @@ public actor DownloadManager {
             // (否则列表会一直显示"已暂停"，但 4/4 页其实都在盘上)
             if saved >= gallery.pages, downloadQueue[index].state != Self.stateFinish {
                 downloadQueue[index].state = Self.stateFinish
-                try? EhDatabase.shared.updateDownloadState(gid: gallery.gid, state: Self.stateFinish)
+                try? database.updateDownloadState(gid: gallery.gid, state: Self.stateFinish)
             }
         }
         return true
@@ -599,7 +597,7 @@ public actor DownloadManager {
         ).count
         downloadQueue.append(task)
 
-        try? EhDatabase.shared.insertDownload(DownloadTaskPersistence.record(for: task))
+        try? database.insertDownload(DownloadTaskPersistence.record(for: task))
     }
 
     /// 获取已下载画廊的目录路径 (由 ReaderViewModel 调用，替代硬编码路径)
@@ -654,14 +652,25 @@ extension SpiderInfo {
     }
 }
 
+/// Download-only surface: tests can hold a transfer at a known suspension
+/// point without networking, while production keeps the existing SpiderQueen.
+protocol DownloadTransfer: Sendable {
+    func setDelegate(_ delegate: SpiderDelegate?) async
+    func startDownload() async
+    func getSpiderInfo() async -> SpiderInfo
+    func getPageState(_ index: Int) async -> Int
+}
+
+extension SpiderQueen: DownloadTransfer {}
+
 // MARK: - SpiderInfoUpdater (用于下载时更新 .ehviewer 文件)
 
 actor SpiderInfoUpdater: SpiderDelegate {
     private let directory: URL
-    private let gid: Int64
+    private let attempt: DownloadManager.Attempt
     private let title: String
     private let totalPages: Int
-    private weak var listener: DownloadListener?
+    private weak var manager: DownloadManager?
 
     private var downloadedCount: Int
     private var totalBytesDownloaded: Int64 = 0
@@ -669,12 +678,15 @@ actor SpiderInfoUpdater: SpiderDelegate {
     private var lastNotifyTime: Date = .distantPast
     private let notifyInterval: TimeInterval = 1.0 // 每秒最多通知一次
 
-    init(directory: URL, gid: Int64, title: String, total: Int, listener: DownloadListener?, initialDownloaded: Int = 0) {
+    fileprivate init(
+        directory: URL, attempt: DownloadManager.Attempt, title: String,
+        total: Int, manager: DownloadManager, initialDownloaded: Int = 0
+    ) {
         self.directory = directory
-        self.gid = gid
+        self.attempt = attempt
         self.title = title
         self.totalPages = total
-        self.listener = listener
+        self.manager = manager
         self.downloadedCount = initialDownloaded
         self.startTime = Date()
     }
@@ -699,28 +711,14 @@ actor SpiderInfoUpdater: SpiderDelegate {
         let pageSize = getPageFileSize(index: index)
         totalBytesDownloaded += pageSize
 
-        // 同步更新 DownloadManager 队列中的进度 (便于 UI 读取)
-        await DownloadManager.shared.updateDownloadedPages(gid: gid, count: downloadedCount)
-
-        // 计算真实下载速度 (字节/秒)
-        let elapsed = Date().timeIntervalSince(startTime)
-        let speed = elapsed > 0 ? Int64(Double(totalBytesDownloaded) / elapsed) : 0
-
-        // 同步速度到 DownloadManager 队列 (便于 UI 读取)
-        await DownloadManager.shared.updateDownloadSpeed(gid: gid, speed: speed)
-
-        // 节流通知
         let now = Date()
-        if now.timeIntervalSince(lastNotifyTime) >= notifyInterval {
-            lastNotifyTime = now
-            await listener?.onDownloadProgress(
-                gid: gid,
-                title: title,
-                downloaded: downloadedCount,
-                total: totalPages,
-                speed: speed
-            )
-        }
+        let elapsed = now.timeIntervalSince(startTime)
+        let speed = elapsed > 0 ? Int64(Double(totalBytesDownloaded) / elapsed) : 0
+        let notify = now.timeIntervalSince(lastNotifyTime) >= notifyInterval
+        if notify { lastNotifyTime = now }
+        await manager?.reportPageProgress(for: attempt, title: title,
+                                          downloaded: downloadedCount, total: totalPages,
+                                          speed: speed, notify: notify)
     }
 
     func onPageFailed(index: Int, error: Error) async {
@@ -729,13 +727,12 @@ actor SpiderInfoUpdater: SpiderDelegate {
 
     func onImageLimitReached() async {
         print("[SpiderInfoUpdater] Image limit (509) reached")
-        await listener?.on509Error()
+        await manager?.reportImageLimit(for: attempt)
     }
 
     func onDiskFull() async {
         print("[SpiderInfoUpdater] ⚠️ 磁盘空间不足，暂停所有下载")
-        await DownloadManager.shared.pauseAllDownloads()
-        await listener?.onDiskFull()
+        await manager?.reportDiskFull(for: attempt)
     }
 
     func onDownloadProgress(downloaded: Int, total: Int) async {
