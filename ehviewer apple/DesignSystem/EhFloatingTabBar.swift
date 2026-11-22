@@ -259,4 +259,12 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     }
 }
 
+#else
+import SwiftUI
+
+extension View {
+    // The Mac shell has no floating tab bar.
+    func ehSuspendTabBarDriver(_ suspended: Bool) -> some View { self }
+}
+
 #endif
