@@ -134,6 +134,11 @@ enum EhOfflineUIFixture {
            let components = URLComponents(string: url) {
             let values = components.queryItems ?? []
             func value(_ name: String) -> String? { values.first { $0.name == name }?.value }
+            if value("f_search") == "offline-filter-reset" {
+                if value("advsearch") == "1" { return GalleryListResult() }
+                return GalleryListResult(galleries: [.init(gid: 900010001085, token: "fixture",
+                                                            title: "Synthetic same query after clearing filters")])
+            }
             if value("f_search") == nil, value("advsearch") == "1", value("f_sr") == "on",
                let rating = value("f_srdd"), ["4", "5"].contains(rating) {
                 let gid: Int64 = rating == "4" ? 900010001064 : 900010001065

@@ -248,6 +248,29 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertFalse(five.exists)
     }
 
+    @MainActor func testClearFiltersKeepsTypedQuery() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_ADVANCED_SEARCH"] = "1"
+        app.launch()
+        let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 8))
+        field.tap()
+        field.typeText("offline-filter-reset")
+        let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "高级搜索")).firstMatch
+        XCTAssertTrue(advanced.waitForExistence(timeout: 5))
+        if !advanced.isHittable { app.swipeUp() }
+        advanced.tap()
+        app.switches["Enable advance options"].firstMatch.tap()
+        app.buttons["应用"].firstMatch.tap()
+
+        let relax = app.buttons["清除筛选条件"].firstMatch
+        XCTAssertTrue(relax.waitForExistence(timeout: 8))
+        relax.tap()
+        XCTAssertTrue(app.staticTexts["Synthetic same query after clearing filters"].waitForExistence(timeout: 8))
+    }
+
     @MainActor func testHomeAndPopularUseSubmittedSearchQuery() {
         let app = launch(cloud: "empty")
         XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
