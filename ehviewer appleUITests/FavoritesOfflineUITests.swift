@@ -195,8 +195,11 @@ final class FavoritesOfflineUITests: XCTestCase {
         app.launch()
 
         func openOptions() {
-            let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题"))
-                .allElementsBoundByIndex.first(where: \.isHittable)
+            let fields = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题"))
+                .allElementsBoundByIndex.filter(\.isHittable)
+            // On blank filtered results the visible field leaves room for its
+            // Clear affordance; the retained origin can still appear in AX.
+            let field = fields.min(by: { $0.frame.width < $1.frame.width })
             XCTAssertNotNil(field)
             field?.tap()
             let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "高级搜索")).firstMatch
