@@ -516,11 +516,23 @@ struct GalleryListView: View {
         }
     }
 
+    @ViewBuilder
     private var galleryList: some View {
         // Perf P0-3: 一次性读取配置，避免每个 Row 重复读 UserDefaults
         let showJpn = AppSettings.shared.showJpnTitle
         let fixThumb = AppSettings.shared.fixThumbUrl
-        return List {
+        let list = List {
+            #if os(iOS)
+            if browseSource != nil && !isPushed {
+                // An anchor before the optional resume card and the first result.
+                Color.clear
+                    .frame(height: 0)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .accessibilityHidden(true)
+                    .id(EhCompactHomeScrollOnReselect.topAnchor)
+            }
+            #endif
             // Fix F2-1: \u9996\u9875\u9876\u90e8\u663e\u793a\u201c\u7ee7\u7eed\u9605\u8bfb\u201d\u5361\u7247
             if case .home = mode {
                 ContinueReadingCard()
@@ -627,6 +639,16 @@ struct GalleryListView: View {
         .refreshable {
             await viewModel.refreshAsync(mode: effectiveMode)
         }
+        #if os(iOS)
+        if browseSource != nil && !isPushed {
+            list.environment(\.defaultMinListRowHeight, 0)
+                .modifier(EhCompactHomeScrollOnReselect())
+        } else {
+            list
+        }
+        #else
+        list
+        #endif
     }
 
     // 嵌入模式内容（无导航包装器，用于三栏布局的 content 列）

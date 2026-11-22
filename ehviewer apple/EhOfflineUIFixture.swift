@@ -95,6 +95,8 @@ enum EhOfflineUIFixture {
         }
     }
 
+    private static var homeReselectRequests = 0
+
     static func listResponse(_ url: String = "") throws -> GalleryListResult {
         if url.contains("favorites.php") {
             switch ProcessInfo.processInfo.environment["EH_FIXTURE_CLOUD"] {
@@ -105,6 +107,13 @@ enum EhOfflineUIFixture {
         }
         // Assert the actual submitted request, not merely a selected tab label.
         if let term = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "f_search" })?.value {
+            if term == "offlineretap", ProcessInfo.processInfo.environment["EH_FIXTURE_HOME_RESELECT"] == "1" {
+                homeReselectRequests += 1
+                return GalleryListResult(galleries: (1...36).map { row in
+                    GalleryInfo(gid: 900010000300 + Int64(row), token: "fixture",
+                                title: "Reselect result \(row), request \(homeReselectRequests)")
+                })
+            }
             let results: (Int64, String)? = switch term {
             case "offlinehome": (900010000006, "Synthetic home search result")
             case "offlinepopular": (900010000007, "Synthetic popular search result")

@@ -187,6 +187,24 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
     }
 }
 
+/// Only the root Browse Home list opts in; retained inactive tabs never scroll.
+struct EhCompactHomeScrollOnReselect: ViewModifier {
+    static let topAnchor = "eh-compact-home-list-top"
+    @Environment(\.ehTabBarDriverActive) private var isActive
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onReceive(NotificationCenter.default.publisher(for: .ehScrollToTop)) { notification in
+                guard isActive, notification.userInfo?["tab"] as? String == MainTab.home.rawValue else { return }
+                // Scroll the current list without changing its identity, source or request state.
+                withAnimation(.easeOut(duration: 0.22)) {
+                    proxy.scrollTo(Self.topAnchor, anchor: .top)
+                }
+            }
+        }
+    }
+}
+
 private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     let items: [EhFloatingTabBar<Tab>.Item]
     @Binding var selection: Tab
