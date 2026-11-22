@@ -261,7 +261,7 @@ struct ReaderDownloadedPageIOTests {
 
         let gate = HeldReaderFileDecode()
         let task = Task {
-            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: { gate.decode($0) })
         }
         var entered = gate.entered.makeAsyncIterator()
         #expect(await entered.next() == false)
@@ -281,7 +281,7 @@ struct ReaderDownloadedPageIOTests {
 
         let gate = HeldReaderFileDecode()
         let task = Task {
-            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: { gate.decode($0) })
         }
         var entered = gate.entered.makeAsyncIterator()
         #expect(await entered.next() == false)
@@ -301,7 +301,7 @@ struct ReaderDownloadedPageIOTests {
 
         let gate = HeldReaderFileDecode()
         let task = Task {
-            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: { gate.decode($0) })
         }
         var entered = gate.entered.makeAsyncIterator()
         #expect(await entered.next() == false)

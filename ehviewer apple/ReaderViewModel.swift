@@ -989,7 +989,7 @@ class ReaderViewModel {
     /// outlive an explicit cancellation, a retry, or a gallery replacement.
     func loadDownloadedPage(
         _ index: Int, from url: URL, source: String,
-        decode: @escaping @Sendable (URL) -> PlatformImage? = ReaderViewModel.readAndDecodeDownloadedPage
+        decode: (@Sendable (URL) -> PlatformImage?)? = nil
     ) async {
         let gallery = gid
         let session = localImageSession
@@ -998,7 +998,8 @@ class ReaderViewModel {
 
         let worker = Task.detached(priority: .userInitiated) {
             guard !Task.isCancelled else { return nil as PlatformImage? }
-            return decode(url)
+            if let decode { return decode(url) }
+            return Self.readAndDecodeDownloadedPage(url)
         }
         let image = await withTaskCancellationHandler {
             await worker.value
