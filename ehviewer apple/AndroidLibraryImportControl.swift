@@ -21,6 +21,12 @@ struct AndroidLibraryImportControl: View {
 
     var body: some View {
         Button {
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            if let fixture = EhOfflineUIFixture.injectedImportURL {
+                preparePreview(fixture)
+                return
+            }
+            #endif
             showsFilePicker = true
         } label: {
             HStack {
