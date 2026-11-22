@@ -20,7 +20,8 @@ import AppKit
 /// 流程: 18+警告 → 安全认证 → 站点选择 → 登录检查 → 主界面
 struct RootView: View {
     @State private var appState: AppState   // 仅在 init() 中初始化，避免创建多余实例
-    @State private var flowStep: OnboardingStep
+    @State private var flowStep: StartupGate.Step
+    @State private var startupGate = StartupGate()
     
     /// 后台进入时间戳，用于判断是否需要重新认证
     @State private var backgroundTime: Date?
@@ -42,42 +43,22 @@ struct RootView: View {
     @State private var showDiskFullAlert = false
     /// 隐私遮罩：App 失活时盖住界面，让 App 切换器拍到的是遮罩而不是内容
     @State private var isPrivacyCovered = false
-    enum OnboardingStep {
-        case checking      // 检查状态中
-        case warning       // 18+ 警告
-        case rejected      // 拒绝 18+ 警告 (iOS 不能 exit, 显示永久阻断页)
-        case security      // 安全认证
-        case selectSite    // 站点选择
-        case login         // 登录页
-        case main          // 主界面
-    }
 
     // MARK: - 同步计算初始页面 (消除白屏)
     init() {
         let settings = AppSettings.shared
-        let step: OnboardingStep
-        if settings.showWarning {
-            step = .warning
-        } else if settings.enableSecurity {
-            step = .security
-        } else if !settings.hasSelectedSite {
-            step = .selectSite
-        } else if settings.skipSignIn {
-            step = .main
-        } else {
-            // 先把钥匙串里的凭据同步放回 Cookie 罐再判断。
-            //
-            // 认证 Cookie 改成会话 Cookie 之后，进程重启时罐子里本来就是空的，
-            // 全靠 EhCookieManager.init 从钥匙串补回来。不主动碰一下这个单例，
-            // 它根本不会被创建 —— 下面这段就会读到空罐子，于是明明登录着，
-            // App 却停在登录页、配额也读不出来。
-            EhCookieManager.shared.ensureCredentialsRestored()
+        let step = StartupGate().nextStep(
+            showWarning: settings.showWarning,
+            lockEnabled: settings.enableSecurity,
+            hasSelectedSite: settings.hasSelectedSite
+        ) {
+            if settings.skipSignIn { return true }
 
-            // 直接检查 Cookie 判断登录状态 (无需 @MainActor)
+            // Restore session cookies before deciding whether this cold launch can sign in.
+            EhCookieManager.shared.ensureCredentialsRestored()
             let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
-            let hasAuth = cookies.contains { $0.name == "ipb_member_id" } &&
-                          cookies.contains { $0.name == "ipb_pass_hash" }
-            step = hasAuth ? .main : .login
+            return cookies.contains { $0.name == "ipb_member_id" } &&
+                   cookies.contains { $0.name == "ipb_pass_hash" }
         }
         _flowStep = State(initialValue: step)
         // 同步初始化 appState 登录状态，避免首帧后异步 mutation 导致重渲染
@@ -91,7 +72,7 @@ struct RootView: View {
 
     var body: some View {
         // ★ 主界面 + 引导层分离
-        //   - flowStep == .main/.checking → 直接显示主界面
+        //   - flowStep == .main → 直接显示主界面
         //   - 其他 → 显示对应引导/登录页面
         //   不使用 ZStack/opacity，消除不必要的 MainTabView 提前渲染
         #if DEBUG
@@ -99,7 +80,7 @@ struct RootView: View {
         #endif
         let _ = NSLog("[RENDER] RootView body, flowStep=%@", String(describing: flowStep))
         Group {
-            if flowStep == .main || flowStep == .checking {
+            if flowStep == .main {
                 MainTabView()
                     .environment(appState)
             } else {
@@ -147,15 +128,17 @@ struct RootView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ehGuestModeEntered)) { _ in
+            // An entry event from the login screen cannot dismiss a gate mounted since it fired.
+            guard flowStep == .login else { return }
             flowStep = .main
         }
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             GalleryStatusCache.shared.resetCloudState()
             GalleryCache.shared.clearAccountSnapshots()
             if isSignedIn {
-                flowStep = .main
-                // 登录后异步任务：获取资料 + ExH 检测
-                if !AppSettings.shared.skipSignIn {
+                if flowStep == .login { flowStep = .main }
+                // 登录后异步任务：获取资料 + ExH 检测。锁屏时不在这里推进引导。
+                if flowStep == .main && !AppSettings.shared.skipSignIn {
                     Task { await postLoginActions() }
                 }
             }
@@ -285,6 +268,8 @@ struct RootView: View {
 
         case .security:
             SecurityView(onAuthenticated: {
+                guard flowStep == .security else { return }
+                startupGate.didAuthenticate()
                 // Fix: 清除 backgroundTime，防止 FaceID 对话框触发的
                 // willResignActive 被 checkSecurityOnResume 误判为"从后台恢复"
                 // → 再次设 .security → 无限循环
@@ -301,7 +286,7 @@ struct RootView: View {
             LoginView()
                 .environment(appState)
 
-        case .checking, .main:
+        case .main:
             EmptyView()
         }
     }
@@ -365,41 +350,16 @@ struct RootView: View {
     
     private func determineNextStep() {
         let settings = AppSettings.shared
-        
-        // 1. 检查 18+ 警告
-        if settings.showWarning {
-            flowStep = .warning
-            return
-        }
-        
-        // 2. 检查安全认证 (仅在启用时)
-        if settings.enableSecurity && flowStep != .security {
-            // 首次进入或从后台恢复需要认证
-            if flowStep == .checking {
-                flowStep = .security
-                return
-            }
-        }
-        
-        // 3. 检查站点选择
-        if !settings.hasSelectedSite {
-            flowStep = .selectSite
-            return
-        }
-        
-        // 4. 检查登录状态
-        appState.checkLoginStatus()
-        
-        // 如果设置了跳过登录 (游客模式)，直接进入主界面
-        if appState.canEnterApp {
-            if false {  // 访客不再改写 isSignedIn
-            }
-            flowStep = .main
-        } else {
-            flowStep = .login
+        flowStep = startupGate.nextStep(
+            showWarning: settings.showWarning,
+            lockEnabled: settings.enableSecurity,
+            hasSelectedSite: settings.hasSelectedSite
+        ) {
+            appState.checkLoginStatus()
+            return appState.canEnterApp
         }
     }
-    
+
     private func checkSecurityOnResume() {
         guard AppSettings.shared.enableSecurity else { return }
         guard flowStep == .main || flowStep == .login else { return }
@@ -410,6 +370,7 @@ struct RootView: View {
             let elapsed = Date().timeIntervalSince(bgTime)
             
             if elapsed > Double(delaySeconds) {
+                startupGate.requireAuthentication()
                 flowStep = .security
             }
         }
