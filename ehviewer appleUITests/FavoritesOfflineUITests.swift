@@ -3,12 +3,12 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importing: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         app.launchEnvironment["EH_FIXTURE_CLOUD"] = cloud
-        if importing { app.launchEnvironment["EH_FIXTURE_IMPORT"] = "1" }
+        if let importID { app.launchEnvironment["EH_FIXTURE_IMPORT"] = importID }
         app.launch()
         return app
     }
@@ -98,7 +98,9 @@ final class FavoritesOfflineUITests: XCTestCase {
     }
 
     @MainActor func testRealFilesImportRefreshesMountedTabsAndKeepsHomeResume() {
-        let app = launch(cloud: "empty", importing: true)
+        let importID = UUID().uuidString
+        let fileBase = "offline-regression-" + importID
+        let app = launch(cloud: "empty", importID: importID)
         XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
         tab("收藏", in: app)
         XCTAssertTrue(header(app).waitForExistence(timeout: 8))
@@ -118,13 +120,15 @@ final class FavoritesOfflineUITests: XCTestCase {
         let searchField = app.searchFields.firstMatch
         XCTAssertTrue(searchField.waitForExistence(timeout: 6))
         searchField.tap()
-        searchField.typeText("offline-regression-fixture")
+        searchField.typeText(importID)
         let file = app.cells.matching(NSPredicate(format: "identifier CONTAINS %@ OR label CONTAINS %@",
-                                                 "offline-regression-fixture", "offline-regression-fixture")).firstMatch
+                                                 fileBase, fileBase)).firstMatch
         XCTAssertTrue(file.waitForExistence(timeout: 8))
-        file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
 
-        XCTAssertTrue(app.staticTexts["导入预览"].waitForExistence(timeout: 8))
+        let preview = app.staticTexts["导入预览"]
+        if !preview.waitForExistence(timeout: 8) { attachHierarchy(app, note: "Native file selection did not open preview") }
+        XCTAssertTrue(preview.exists)
         app.buttons["导入"].tap()
         let success = app.alerts["导入完成"]
         if !success.waitForExistence(timeout: 8) { attachHierarchy(app, note: "Import failed") }

@@ -20,12 +20,13 @@ enum EhOfflineUIFixture {
         try? EhDatabase.shared.deleteLocalFavorite(gid: cloud.gid)
         GalleryCache.shared.putDetail(.init(info: synthetic))
         GalleryCache.shared.putDetail(.init(info: cloud, isFavorited: true))
-        if ProcessInfo.processInfo.environment["EH_FIXTURE_IMPORT"] == "1" {
-            seedImportScenario()
+        if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMPORT"],
+           UUID(uuidString: identifier) != nil {
+            seedImportScenario(identifier: identifier)
         }
     }
 
-    private static func seedImportScenario() {
+    private static func seedImportScenario(identifier: String) {
         let prior: Int64 = 900010000003
         AppSettings.shared.historyInfoSize = 100
         UserDefaults.standard.set(prior, forKey: "eh_last_reading_gid")
@@ -38,7 +39,7 @@ enum EhOfflineUIFixture {
         }
         try? EhDatabase.shared.deleteLocalFavorite(gid: 900010000099)
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let url = documents.appendingPathComponent("offline-regression-fixture.db")
+        let url = documents.appendingPathComponent("offline-regression-\(identifier).db")
         try? FileManager.default.removeItem(at: url)
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { return }
