@@ -481,9 +481,11 @@ class ReaderViewModel {
         guard index >= 0 && index < spreads.count else { return nil }
         let spread = spreads[index]
 
-        guard let primary = cachedImages[spread.primaryPage] else { return nil }
+        // Use the same shared-memory fallback as a single page: during
+        // a rapid return the observable window may not be restored yet.
+        guard let primary = image(at: spread.primaryPage) else { return nil }
         guard let secPage = spread.secondaryPage,
-              let secondary = cachedImages[secPage] else {
+              let secondary = image(at: secPage) else {
             return SpreadPresentation(image: primary, logicalSize: nil)
         }
 
