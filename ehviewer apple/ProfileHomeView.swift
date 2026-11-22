@@ -70,6 +70,9 @@ struct ProfileHomeView: View {
             }
             .task {
                 await loadSummary()
+                #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+                if EhOfflineUIFixture.enabled { return }
+                #endif
                 await updateChecker.checkOnLaunchIfNeeded()
             }
             .refreshable { await loadSummary() }

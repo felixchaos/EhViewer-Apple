@@ -312,19 +312,6 @@ struct MainTabView: View {
 
     @ViewBuilder
     private func tabContent(_ tab: Tab) -> some View {
-        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
-        if EhOfflineUIFixture.enabled && tab == .profile {
-            Text("Synthetic profile").accessibilityIdentifier("fixture-profile")
-        } else {
-            regularTabContent(tab)
-        }
-        #else
-        regularTabContent(tab)
-        #endif
-    }
-
-    @ViewBuilder
-    private func regularTabContent(_ tab: Tab) -> some View {
         switch tab {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
