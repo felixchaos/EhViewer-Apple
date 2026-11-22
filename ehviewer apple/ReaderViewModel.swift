@@ -28,6 +28,16 @@ enum ReadingDirection: Int, CaseIterable {
     case rightToLeft = 1
     case topToBottom = 2
 
+    init(persistedRawValue: Int) {
+        // Older settings exposed 3 as “滚动模式”; it already read as vertical.
+        self = Self(rawValue: persistedRawValue) ?? .topToBottom
+    }
+
+    /// Opening the picker or reselecting the current direction must not rewrite a legacy value.
+    func persistedUpdate(from storedValue: Int) -> Int? {
+        self == Self(persistedRawValue: storedValue) ? nil : rawValue
+    }
+
     var label: String {
         switch self {
         case .leftToRight: return "从左到右"

@@ -677,15 +677,16 @@ struct SettingsView: View {
 
     private var readingSection: some View {
         Section("阅读") {
-            // 阅读方向 (对齐 Android Settings.KEY_READING_DIRECTION)
             Picker("阅读方向", selection: Binding(
-                get: { AppSettings.shared.readingDirection },
-                set: { AppSettings.shared.readingDirection = $0 }
+                get: { ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection) },
+                set: { direction in
+                    guard let value = direction.persistedUpdate(from: AppSettings.shared.readingDirection) else { return }
+                    AppSettings.shared.readingDirection = value
+                }
             )) {
-                Text("左→右").tag(0)
-                Text("右→左").tag(1)
-                Text("上→下").tag(2)
-                Text("滚动模式").tag(3)
+                ForEach(ReadingDirection.allCases, id: \.rawValue) { direction in
+                    Text(ReaderGestureGuidance(direction: direction).directionTitle).tag(direction)
+                }
             }
 
             // 页面缩放 (对齐 Android Settings.KEY_PAGE_SCALING)

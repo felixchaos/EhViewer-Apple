@@ -356,7 +356,7 @@ struct ImageReaderView: View {
     // MARK: - Setup
 
     private func setupReader() {
-        readingDirection = ReadingDirection(rawValue: AppSettings.shared.readingDirection) ?? .topToBottom
+        readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
         scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
         startPosition = StartPosition(rawValue: AppSettings.shared.startPosition) ?? .topRight
         verticalPageInterval = AppSettings.shared.showPageInterval
