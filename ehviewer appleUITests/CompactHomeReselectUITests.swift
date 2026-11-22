@@ -37,7 +37,10 @@ final class CompactHomeReselectUITests: XCTestCase {
 
         waitUntil(first, isHittable: true)
         XCTAssertEqual(first.label, startingTitle, "The search results should not be refetched.")
-        XCTAssertEqual(search.value as? String, "offlineretap")
+        // The previous Browse origin is retained with an empty native text
+        // field; assert the visible results editor rather than the first AX match.
+        let applied = app.textFields.matching(NSPredicate(format: "value == %@", "offlineretap"))
+        XCTAssertTrue(applied.allElementsBoundByIndex.contains(where: \.isHittable))
     }
 
     @MainActor func testDetailAndReaderStillKeepApplicationTabsOutOfTheWay() throws {
