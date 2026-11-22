@@ -254,6 +254,7 @@ struct ProfileHomeView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier(entry.route == .favorites ? "settings-favorites-entry" : "")
 
                     if index < SettingsEntry.all.count - 1 {
                         EhHairline(inset: EhSpacing.page + 34)

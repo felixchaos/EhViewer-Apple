@@ -32,12 +32,27 @@ final class FavoritesOfflineUITests: XCTestCase {
 
     @MainActor private func back(_ app: XCUIApplication) {
         let custom = app.buttons["gallery-detail-back"]
-        if custom.exists { custom.tap() }
+        let labeled = app.buttons["返回"]
+        if custom.waitForExistence(timeout: 2) { custom.tap() }
+        else if labeled.exists { labeled.tap() }
         else {
             let native = app.navigationBars.buttons.firstMatch
+            if !native.exists { attachHierarchy(app, note: "Missing detail Back") }
             XCTAssertTrue(native.exists)
             native.tap()
         }
+    }
+
+    @MainActor private func attachHierarchy(_ app: XCUIApplication, note: String) {
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = note + " hierarchy"
+        tree.lifetime = .keepAlways
+        add(tree)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = note + " screenshot"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        print(note, app.debugDescription)
     }
 
     @MainActor private func expectSelection(_ selected: Bool, heart: XCUIElement) {
@@ -91,12 +106,13 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
         tab("我的", in: app)
 
-        let entry = app.staticTexts["收藏"].firstMatch
+        let entry = app.buttons["settings-favorites-entry"].firstMatch
         for _ in 0..<3 where !entry.isHittable { app.swipeUp() }
         XCTAssertTrue(entry.isHittable)
         entry.tap()
-        let importButton = app.buttons.containing(.staticText, identifier: "从安卓导入收藏与历史").firstMatch
-        XCTAssertTrue(importButton.waitForExistence(timeout: 8))
+        let importButton = app.buttons["settings-android-library-import"].firstMatch
+        if !importButton.waitForExistence(timeout: 8) { attachHierarchy(app, note: "Missing import control") }
+        XCTAssertTrue(importButton.exists)
         importButton.tap()
 
         let searchField = app.searchFields.firstMatch

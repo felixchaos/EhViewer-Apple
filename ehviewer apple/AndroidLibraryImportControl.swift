@@ -28,6 +28,7 @@ struct AndroidLibraryImportControl: View {
                 if isWorking { ProgressView().controlSize(.small) }
             }
         }
+        .accessibilityIdentifier("settings-android-library-import")
         .disabled(isWorking)
         // Some file providers mark SQLite exports as generic data. Validate
         // inside the importer rather than relying on extension/UTI alone.
