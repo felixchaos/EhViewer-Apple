@@ -1,0 +1,26 @@
+EHVIEWER FEATURE BOUNDARIES
+
+Dependency direction:
+  SwiftUI presentation -> feature state/use case -> narrow data/source interface -> package facilities.
+  Keep render state (focus, scroll, layout, accessibility and presentation style)
+  in the view. Avoid a protocol, target or type unless it enables a real alternate
+  implementation or meaningful isolated tests. Never add dependencies back to
+  SwiftUI from model/parser/storage modules to communicate a state change.
+
+Examples:
+  An alternative shell can select destinations through MainTabNavigation and
+  render retainedTabs. It does not need to know saved settings indexes or decode
+  clipboard payloads, and can present the same selection as sidebar or bottom tabs.
+  An alternative reader can open a session through ReaderViewModel and use its
+  cursor/progress operations. Presentation owns gestures, image layout and chrome.
+  The database facade still exposes the existing methods. Schema versioning and
+  migration work live behind it and can be verified against temporary databases
+  without launching the app.
+
+Offline workflow: scripts/regression.sh --packages-only
+Then choose one device/runtime from: xcrun simctl list devicetypes / runtimes
+Run: scripts/regression.sh SIM_DEVICE_TYPE SIM_RUNTIME
+Set EH_QA_OUTPUT_ROOT for a different output location (a new run dir per invocation).
+A fresh simulator is created and shut down by the runner. Do not run on a real
+account, edit Keychain entries, sign, upload, or reuse a user's simulator.
+regression-matrix.tsv separates tested behavior from build-only and absent gates.
