@@ -54,6 +54,11 @@ struct GalleryDetailView: View {
     @Environment(\.dismiss) private var dismiss
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var contentWidth: CGFloat?
+    private var showsCompactChrome: Bool {
+        if let contentWidth { return !ResponsiveLayout.usesTabSidebar(width: contentWidth) }
+        return horizontalSizeClass != .regular
+    }
     #endif
 
     var body: some View {
@@ -94,10 +99,15 @@ struct GalleryDetailView: View {
         // 详情是沉浸式页面：底部浮条会盖住预览网格，且这一屏没有平级切换的需要
         .ehHidesTabBar()
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(horizontalSizeClass == .compact ? .hidden : .automatic, for: .navigationBar)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if width > 0 { contentWidth = width }
+        }
+        // Home explicitly hides its navigation bar; automatic visibility here
+        // can inherit that choice even when detail uses system back controls.
+        .toolbar(showsCompactChrome ? .hidden : .visible, for: .navigationBar)
         .overlay(alignment: .topLeading) {
             // iPhone: 自定义返回按钮 (导航栏隐藏后)
-            if horizontalSizeClass == .compact {
+            if showsCompactChrome {
                 AppBackButton(action: { dismiss() }, style: .dark)
                 .padding(.top, 4)
                 .padding(.leading, 12)
@@ -107,7 +117,7 @@ struct GalleryDetailView: View {
             // 详情页此前没有任何菜单入口：导航栏在 iPhone 上是隐藏的，
             // 只留了个返回按钮，于是 Android 菜单里的「刷新」和
             // 「用其他应用打开」在这边一个都没有。
-            if horizontalSizeClass == .compact {
+            if showsCompactChrome {
                 detailMenu
                     .padding(.top, 4)
                     .padding(.trailing, 12)
@@ -332,7 +342,7 @@ struct GalleryDetailView: View {
     private var backButtonClearance: CGFloat {
         #if os(iOS)
         // 17pt 图标 + 上下各 8pt 内边距 = 33pt，再加 overlay 自己的 4pt 顶距
-        horizontalSizeClass == .compact ? 41 : 0
+        showsCompactChrome ? 41 : 0
         #else
         0
         #endif
