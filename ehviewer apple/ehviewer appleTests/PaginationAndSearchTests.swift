@@ -493,3 +493,55 @@ struct GalleryTagRouteTests {
                 GalleryListRequest(source: .home).pageURL(0, site: .eHentai))
     }
 }
+
+struct GalleryAppliedAdvancedBrowseSearchTests {
+    private func items(_ url: String) throws -> [String: String] {
+        let components = try #require(URLComponents(string: url))
+        return Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    }
+
+    @Test func blankRatingIsASeparateResultsRouteAndPreservesPagination() throws {
+        let search = GalleryBrowseSearch(query: "  \r\n ", applying: .init(advanceSearch: 3, minRating: 5))
+        #expect(search.showsResults)
+        #expect(search.query.isEmpty)
+        let request = GalleryListRequest(source: .search(keyword: search.query), filters: search.initialFilters)
+        let first = try items(request.pageURL(0, site: .eHentai))
+        #expect(first["advsearch"] == "1")
+        #expect(first["f_sr"] == "on")
+        #expect(first["f_srdd"] == "5")
+        #expect(first["f_search"] == nil)
+        let next = try items(request.pageURL(2, site: .eHentai))
+        #expect(next == first.merging(["page": "2"]) { _, page in page })
+
+        let four = GalleryBrowseSearch(query: "", applying: .init(advanceSearch: 3, minRating: 4))
+        #expect(four != search)
+        let other = GalleryListRequest(source: .search(keyword: four.query), filters: four.initialFilters)
+        #expect(other.cacheKey(page: 0) != request.cacheKey(page: 0))
+        #expect(other.cacheKey(page: 2) != request.cacheKey(page: 2))
+    }
+
+    @Test func emptyPlainSearchAndInactiveOrDefaultOptionsKeepTheOriginalSource() {
+        #expect(!GalleryBrowseSearch(query: "").showsResults)
+        #expect(!GalleryBrowseSearch(query: "", savedMinimumRating: 5).showsResults)
+        #expect(!GalleryBrowseSearch(query: "", applying: .init(advanceSearch: 3)).showsResults)
+        #expect(!GalleryBrowseSearch(query: "", applying: .init(minRating: 5, pageFrom: 20)).showsResults)
+        #expect(!GalleryBrowseSearch(query: "", applying: .init(mode: .uploader)).showsResults)
+        #expect(!GalleryBrowseSearch(query: "", applying: .init(mode: .tag)).showsResults)
+        #expect(GalleryBrowseSearch(query: "", applying: .init(category: EhCategory.manga.rawValue)).showsResults)
+    }
+
+    @Test func normalizedSnapshotKeepsExplicitOptionsAndUnchangedTextSemantics() throws {
+        let search = GalleryBrowseSearch(
+            query: "  artist:\"fixture example\"  ",
+            applying: .init(category: EhCategory.manga.rawValue, advanceSearch: 0x14, minRating: 5,
+                            pageFrom: 20, pageTo: 60)
+        )
+        let request = GalleryListRequest(source: .search(keyword: search.query), filters: search.initialFilters)
+        let params = try items(request.pageURL(1, site: .exHentai))
+        #expect(params == [
+            "page": "1", "f_cats": String((~EhCategory.manga.rawValue) & 0x3FF),
+            "f_search": "artist:\"fixture example\"", "advsearch": "1", "f_sdesc": "on", "f_sto": "on",
+            "f_sr": "on", "f_srdd": "5", "f_sp": "on", "f_spf": "20", "f_spt": "60"
+        ])
+    }
+}
