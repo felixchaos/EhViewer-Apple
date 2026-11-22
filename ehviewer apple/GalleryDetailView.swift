@@ -487,8 +487,10 @@ struct GalleryDetailView: View {
             // 对齐 Android: 长按收藏始终弹出收藏夹选择，即使已设默认
             .onLongPressGesture { showFavoritePicker = true }
 
-            EhSquareIconButton(symbol: vm.downloadIcon) {
-                if vm.downloadState == DownloadManager.stateFinish {
+            let downloadAction = vm.downloadAction
+            EhSquareIconButton(symbol: downloadAction.detailSymbol) {
+                switch vm.downloadAction {
+                case .openReader:
                     Haptics.tap()
                     vm.readerLaunchItem = ReaderLaunchItem(
                         gid: gallery.gid,
@@ -497,14 +499,24 @@ struct GalleryDetailView: View {
                         previewSet: vm.detail?.previewSet,
                         initialPage: nil
                     )
-                } else if GalleryActionService.shared.shouldWarnAboutCellular {
-                    // 移动网络下先问一句，整本下载很容易吃掉几百 MB
-                    showCellularWarning = true
-                } else {
-                    Haptics.impact()
-                    Task { await vm.startDownload(gallery: gallery) }
+                case .enqueue, .resume, .retry:
+                    if GalleryActionService.shared.shouldWarnAboutCellular {
+                        // 仅当有实际的下载操作时才询问蜂窝网络。
+                        showCellularWarning = true
+                    } else {
+                        Haptics.impact()
+                        Task { await vm.startDownload(gallery: gallery) }
+                    }
+                case .queued, .downloading:
+                    break
                 }
             }
+            .disabled(!downloadAction.isActionable)
+            .accessibilityLabel(Text(downloadAction.detailLabel))
+            .accessibilityIdentifier("gallery-detail-download")
+            #if os(macOS)
+            .help(Text(downloadAction.detailLabel))
+            #endif
 
             // 归档与种子并进一个「资源下载」sheet：两者都不是每本都有，
             // 各占一个入口会让常用操作被挤窄，而它们的选择又需要成本对比
@@ -1217,34 +1229,8 @@ class GalleryDetailViewModel {
         }
     }
 
-    /// 根据 downloadState 返回按钮图标 (对齐 Android 下载状态)
-    var downloadIcon: String {
-        switch downloadState {
-        case DownloadManager.stateDownload, DownloadManager.stateWait:
-            return "arrow.down.circle.fill"
-        case DownloadManager.stateFinish:
-            return "checkmark.circle.fill"
-        case DownloadManager.stateFailed:
-            return "exclamationmark.circle"
-        default:
-            return "arrow.down.circle"
-        }
-    }
-
-    /// 根据 downloadState 返回按钮标题
-    var downloadTitle: String {
-        switch downloadState {
-        case DownloadManager.stateDownload:
-            return "下载中"
-        case DownloadManager.stateWait:
-            return "等待中"
-        case DownloadManager.stateFinish:
-            return "已下载"
-        case DownloadManager.stateFailed:
-            return "失败"
-        default:
-            return "下载"
-        }
+    var downloadAction: GalleryDetailDownloadAction {
+        .init(state: downloadState)
     }
 
     func rateGallery(gid: Int64, token: String, rating: Float) async {
@@ -1565,5 +1551,29 @@ struct FavoriteSlotPicker: View {
 
     private func favSlotColor(_ slot: Int) -> Color {
         Self.favSlotColor(slot)
+    }
+}
+
+private extension GalleryDetailDownloadAction {
+    var detailLabel: String {
+        switch self {
+        case .enqueue: "下载"
+        case .resume: "继续下载"
+        case .retry: "重试下载"
+        case .queued: "等待下载"
+        case .downloading: "下载中"
+        case .openReader: "已下载，打开阅读器"
+        }
+    }
+
+    var detailSymbol: String {
+        switch self {
+        case .enqueue: "arrow.down.circle"
+        case .resume: "play.circle"
+        case .retry: "arrow.clockwise.circle"
+        case .queued: "clock"
+        case .downloading: "arrow.down.circle.fill"
+        case .openReader: "checkmark.circle.fill"
+        }
     }
 }
