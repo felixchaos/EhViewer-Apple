@@ -525,3 +525,103 @@ struct ReaderDirectResponseOwnershipTests {
         await active.value
     }
 }
+
+#if DEBUG
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReaderDirectResponsePipelineTests {
+    @Test func retryPublishesOnlyTheReplacementStreamAndWritesItsBytes() async throws {
+        let original = URL(string: "https://image.invalid/old.png")!
+        let replacement = URL(string: "https://image.invalid/new.png")!
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReaderDirectFixtureProtocol.self]
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let cachedPage = cache.appendingPathComponent("read-cache.png")
+        let persistedPage = cache.appendingPathComponent("reading-sync.png")
+
+        let oldHold = HeldReaderCacheLookup()
+        let newHold = HeldReaderCacheLookup()
+        let vm = ReaderViewModel()
+        let gallery: Int64 = 900010001025
+        vm.gid = gallery
+        vm.totalPages = 1
+        vm.imageURLs[0] = original.absoluteString
+        var writeKeys: [String] = []
+        vm.directResponseFixture = .init(
+            session: session, retryURL: replacement,
+            beforeDecode: { url in
+                if url == original { _ = await oldHold.read() }
+                else if url == replacement { _ = await newHold.read() }
+            },
+            cacheWriter: { data, gid, page in
+                writeKeys.append("cache:\(gid):\(page)")
+                do { try data.write(to: cachedPage) } catch { Issue.record(error) }
+            },
+            persistentWriter: { data, gid, page in
+                writeKeys.append("persistent:\(gid):\(page)")
+                do { try data.write(to: persistedPage) } catch { Issue.record(error) }
+            }
+        )
+
+        let first = Task { await vm.downloadImageData(0) }
+        await oldHold.waitUntilStarted()
+        #expect(vm.downloadProgress[0] == 1)
+        let retry = Task { await vm.retryLoadPage(0) }
+        await newHold.waitUntilStarted()
+        #expect(vm.retryGeneration[0] == 1)
+        await oldHold.finish()
+        await first.value
+        #expect(writeKeys.isEmpty)
+        #expect(vm.cachedImages[0] == nil)
+        #expect(vm.downloadProgress[0] == 1)
+        #expect(vm.activeDownloadPages().contains(0))
+        await newHold.finish()
+        await retry.value
+
+        #expect(writeKeys == ["cache:\(gallery):0", "persistent:\(gallery):0"])
+        #expect(try Data(contentsOf: cachedPage) == ReaderDirectFixtureProtocol.replacementPNG)
+        #expect(try Data(contentsOf: persistedPage) == ReaderDirectFixtureProtocol.replacementPNG)
+        #expect(vm.cachedImages[0]?.size == CGSize(width: 1, height: 1))
+        #expect(vm.downloadProgress[0] == nil)
+        #expect(vm.errorPages.isEmpty)
+        #expect(!vm.activeDownloadPages().contains(0))
+    }
+}
+
+private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendable {
+    private static let originalPNG = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )!
+    static let replacementPNG = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
+    )!
+
+    // Catch every request from the isolated ephemeral session. Nothing can escape
+    // this protocol to a live service, even if production retry constructs a wrong URL.
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url, url.host == "image.invalid",
+              url.path == "/old.png" || url.path == "/new.png" else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+            return
+        }
+        let data = url.path == "/old.png" ? Self.originalPNG : Self.replacementPNG
+        let response = HTTPURLResponse(
+            url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "image/png", "Content-Length": "\(data.count)"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+#endif

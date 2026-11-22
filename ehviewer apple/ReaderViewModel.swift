@@ -116,6 +116,19 @@ struct PageSpread: Identifiable, Equatable {
 @Observable
 class ReaderViewModel {
 
+    #if DEBUG
+    /// Test-only boundaries for running the real response pipeline without any shared disk or service.
+    struct DirectResponseFixture {
+        let session: URLSession
+        let retryURL: URL
+        let beforeDecode: (URL) async -> Void
+        let cacheWriter: (Data, Int64, Int) -> Void
+        let persistentWriter: (Data, Int64, Int) async -> Void
+    }
+
+    @ObservationIgnored var directResponseFixture: DirectResponseFixture?
+    #endif
+
     // MARK: - Page State
 
     var currentPage: Int = 0
@@ -850,7 +863,12 @@ class ReaderViewModel {
         // 同一页要重新从网络下一遍。这是「同一本看两遍付两份流量」的来源，
         // 也是设置里那个「阅读缓存大小」一直没有真正生效的原因——
         // 阅读器根本没往那块缓存里写过东西。
-        guard await readPageFromDiskCache(index, lookup: cacheLookup) == .missing,
+        #if DEBUG
+        let diskLookup = directResponseFixture == nil ? cacheLookup : { @Sendable _, _ in nil }
+        #else
+        let diskLookup = cacheLookup
+        #endif
+        guard await readPageFromDiskCache(index, lookup: diskLookup) == .missing,
               ownsDownload(index, owner) else { return }
 
         guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
@@ -890,7 +908,12 @@ class ReaderViewModel {
                 // ⚠️ download(for:delegate:) 的 async 包装不转发 URLSessionDownloadDelegate 的
                 //    didWriteData 回调，导致进度始终为 0 → 直接跳到 100%
                 // bytes(for:) 虽逐字节迭代，但配合 16KB 缓冲区按 chunk 更新进度，开销可控
-                let (asyncBytes, response) = try await Self.session.bytes(for: request)
+                #if DEBUG
+                let imageSession = directResponseFixture?.session ?? Self.session
+                #else
+                let imageSession = Self.session
+                #endif
+                let (asyncBytes, response) = try await imageSession.bytes(for: request)
                 guard ownsDownload(index, owner) else { return }
                 let expectedLength = response.expectedContentLength > 0
                     ? response.expectedContentLength
@@ -927,6 +950,16 @@ class ReaderViewModel {
                 // 下载完成 → 标记 100%，让用户看到从进度到解码的过渡
                 downloadProgress[index] = 1.0
 
+                #if DEBUG
+                if let fixture = directResponseFixture {
+                    await fixture.beforeDecode(url)
+                    await completeDirectImage(
+                        index, data: data, url: url, owner: owner,
+                        cacheWriter: fixture.cacheWriter, persistentWriter: fixture.persistentWriter
+                    )
+                    return
+                }
+                #endif
                 await completeDirectImage(index, data: data, url: url, owner: owner)
                 return
             } catch {
@@ -935,6 +968,14 @@ class ReaderViewModel {
                     downloadProgress.removeValue(forKey: index)
                     return
                 }
+                #if DEBUG
+                // The isolated response fixture must never enter the shared online fallback.
+                if directResponseFixture != nil {
+                    errorPages.insert(index)
+                    downloadProgress.removeValue(forKey: index)
+                    return
+                }
+                #endif
                 debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
 
                 // ★ 兜底 1: 改走 EhAPI 的域名前置直连回退
@@ -1300,7 +1341,15 @@ class ReaderViewModel {
         usedSkipHathKeys.removeValue(forKey: index)
         GalleryCache.shared.removeImageURL(gid: gid, page: index)
         loadingPages.remove(index)
+        #if DEBUG
+        if let fixture = directResponseFixture {
+            imageURLs[index] = fixture.retryURL.absoluteString
+        } else {
+            await loadPageWithRetry(index)
+        }
+        #else
         await loadPageWithRetry(index)
+        #endif
         await downloadImageData(index)
     }
 
