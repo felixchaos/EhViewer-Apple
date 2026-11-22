@@ -174,6 +174,9 @@ struct ImageReaderView: View {
         #if os(iOS)
         .statusBarHidden(AppSettings.shared.readingFullscreen)
         .persistentSystemOverlays(AppSettings.shared.readingFullscreen ? .hidden : .automatic)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            vm.discardSpreadComposition()
+        }
         #endif
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
@@ -407,6 +410,7 @@ struct ImageReaderView: View {
         UIApplication.shared.isIdleTimerDisabled = false
         UIDevice.current.isBatteryMonitoringEnabled = false
         volumePageTurner.stop()
+        vm.discardSpreadComposition()
         #endif
         timeTimer?.invalidate()
         autoPageTask?.cancel()

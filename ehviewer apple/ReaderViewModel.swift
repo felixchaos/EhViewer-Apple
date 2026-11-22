@@ -154,7 +154,17 @@ class ReaderViewModel {
 
     var imageURLs: [Int: String] = [:]
     /// 已解码的图片 (Observable 层，触发 SwiftUI 刷新)
-    var cachedImages: [Int: PlatformImage] = [:]
+    var cachedImages: [Int: PlatformImage] = [:] {
+        didSet {
+            #if os(iOS)
+            if let lastSpread,
+               !lastSpread.hasSources(primary: cachedImages[lastSpread.pages.primaryPage],
+                                      secondary: lastSpread.pages.secondaryPage.flatMap({ cachedImages[$0] })) {
+                self.lastSpread = nil
+            }
+            #endif
+        }
+    }
     var errorPages: Set<Int> = []
     var errorMessages: [Int: String] = [:]
     var retryingPages: [Int: Int] = [:]
@@ -347,6 +357,9 @@ class ReaderViewModel {
     private func applyDoublePageMode(_ enabled: Bool) {
         guard enabled != isDoublePageEnabled else { return }
         isDoublePageEnabled = enabled
+        #if os(iOS)
+        if !enabled { discardSpreadComposition() }
+        #endif
         computeSpreads()
         // Both scroll views can be rebuilt at a new size. Re-anchor them to the
         // logical page (including the secondary page of a spread), not a stale ID.
@@ -414,6 +427,43 @@ class ReaderViewModel {
         let logicalSize: CGSize?
     }
 
+    #if os(iOS)
+    /// One bounded bitmap for the most recently rendered pair. Inputs are
+    /// weak: retaining the composite must not defeat page image eviction.
+    private final class SpreadReuse {
+        let pages: PageSpread
+        let direction: ReadingDirection
+        weak var primary: UIImage?
+        weak var secondary: UIImage?
+        let primarySize: CGSize
+        let secondarySize: CGSize
+        let presentation: SpreadPresentation
+
+        init(pages: PageSpread, direction: ReadingDirection, primary: UIImage, secondary: UIImage,
+             presentation: SpreadPresentation) {
+            self.pages = pages
+            self.direction = direction
+            self.primary = primary
+            self.secondary = secondary
+            primarySize = primary.size
+            secondarySize = secondary.size
+            self.presentation = presentation
+        }
+
+        func hasSources(primary: UIImage?, secondary: UIImage?) -> Bool {
+            guard let primary, let secondary else { return false }
+            return self.primary === primary && self.secondary === secondary &&
+                primarySize == primary.size && secondarySize == secondary.size
+        }
+    }
+
+    @ObservationIgnored private var lastSpread: SpreadReuse?
+
+    func discardSpreadComposition() {
+        lastSpread = nil
+    }
+    #endif
+
     /// 将一个 spread 的两页合成为一张图片
     func spreadPresentation(at index: Int, direction: ReadingDirection) -> SpreadPresentation? {
         guard index >= 0 && index < spreads.count else { return nil }
@@ -425,6 +475,15 @@ class ReaderViewModel {
             return SpreadPresentation(image: primary, logicalSize: nil)
         }
 
+        #if os(iOS)
+        if let lastSpread, lastSpread.pages == spread, lastSpread.direction == direction,
+           lastSpread.hasSources(primary: primary, secondary: secondary) {
+            return lastSpread.presentation
+        }
+        // Drop the previous large bitmap before allocating its replacement.
+        discardSpreadComposition()
+        #endif
+
         // RTL: 高页码在左 (漫画翻书序)
         let (left, right): (PlatformImage, PlatformImage)
         if direction == .rightToLeft {
@@ -434,7 +493,12 @@ class ReaderViewModel {
             left = primary
             right = secondary
         }
-        return compositeImages(left: left, right: right)
+        let presentation = compositeImages(left: left, right: right)
+        #if os(iOS)
+        lastSpread = SpreadReuse(pages: spread, direction: direction, primary: primary, secondary: secondary,
+                                presentation: presentation)
+        #endif
+        return presentation
     }
 
     /// 拼合保持原始布局比例，iOS 按实际输出像素而非设备点数限制位图。
@@ -644,6 +708,9 @@ class ReaderViewModel {
     /// 彻底重置所有状态 — 在加载新画廊前调用
     /// UI 会因 totalPages == 0 立即切入 Loading 状态
     private func resetState() {
+        #if os(iOS)
+        discardSpreadComposition()
+        #endif
         readerImageSession &+= 1
         for page in activeDownloadPages() { cancelDownload(page) }
         // 页面状态

@@ -690,6 +690,45 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
         #expect(layout(.origin, logicalSize: nil) == raster.size)
     }
 
+    @Test func repeatsReuseOneBitmapButDirectionAndReplacementDoNot() throws {
+        let first = page(CGSize(width: 32, height: 32), color: .red)
+        let second = page(CGSize(width: 32, height: 32), color: .blue)
+        let model = spread(first, second)
+        let original = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)).image
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight)?.image === original)
+
+        let reversed = try #require(model.spreadPresentation(at: 0, direction: .rightToLeft)).image
+        #expect(reversed !== original)
+        #expect(model.spreadPresentation(at: 0, direction: .rightToLeft)?.image === reversed)
+
+        model.cachedImages[1] = nil
+        #expect(model.spreadPresentation(at: 0, direction: .rightToLeft)?.image === first)
+        model.cachedImages[1] = second
+        let restored = try #require(model.spreadPresentation(at: 0, direction: .rightToLeft)).image
+        #expect(restored !== reversed)
+
+        model.cachedImages[1] = page(CGSize(width: 48, height: 32), color: .green)
+        let replacement = try #require(model.spreadPresentation(at: 0, direction: .rightToLeft))
+        #expect(replacement.image !== restored)
+        #expect(replacement.logicalSize == CGSize(width: 80, height: 32))
+    }
+
+    @Test func composingAnotherPairAndDiscardingKeepsAtMostOneEntry() throws {
+        let first = page(CGSize(width: 32, height: 32), color: .red)
+        let second = page(CGSize(width: 32, height: 32), color: .blue)
+        let model = spread(first, second)
+        model.spreads.append(.init(id: 1, primaryPage: 1, secondaryPage: 2))
+        model.cachedImages[2] = first
+        let previous = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)).image
+        _ = model.spreadPresentation(at: 1, direction: .leftToRight)
+        let current = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)).image
+        #expect(current !== previous)
+        model.discardSpreadComposition()
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight)?.image !== current)
+        _ = model.prepareForGallery(targetGid: 471, targetToken: "fixture")
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight) == nil)
+    }
+
     private func rgb(_ image: CGImage, x: Int) throws -> [UInt8] {
         let sample = try #require(image.cropping(to: CGRect(x: x, y: 8, width: 1, height: 1)))
         var pixel = [UInt8](repeating: 0, count: 4)
