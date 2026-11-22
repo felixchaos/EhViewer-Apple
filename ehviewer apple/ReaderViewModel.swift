@@ -529,6 +529,57 @@ class ReaderViewModel {
         }
     }
 
+    // MARK: - Reader Session
+
+    /// Opens (or re-enters) a gallery independently of the reader's layout.
+    /// Check local storage before exposing the page count to the UI: rendering
+    /// can start per-page loading as soon as pages become available.
+    func openGallery(
+        gid: Int64, token: String, pageCount: Int,
+        previewSet: PreviewSet?, initialPage: Int?
+    ) async {
+        let needsLoad = prepareForGallery(targetGid: gid, targetToken: token)
+        if needsLoad {
+            await setupLocalGallery()
+            if pageCount > 0 {
+                totalPages = pageCount
+            }
+            if let previewSet {
+                extractPTokens(from: previewSet)
+            }
+            if totalPages == 0 {
+                await fetchGalleryInfo()
+            }
+            computeSpreads()
+        }
+
+        // A cached gallery may still open at a different thumbnail or at the
+        // saved resume page. Cache identity is not a navigation policy.
+        applyOpeningPage(initialPage, galleryID: gid)
+        if needsLoad {
+            await loadCurrentPage()
+        } else {
+            await onPageChange(currentPage)
+        }
+    }
+
+    func applyOpeningPage(_ requested: Int?, galleryID: Int64, progress: ReaderProgressStore = .init()) {
+        if let page = progress.openingPage(for: galleryID, requested: requested, pageCount: totalPages) {
+            currentPage = page
+        }
+        // SwiftUI's onChange does not apply initial scroll values. Keep the
+        // presentation anchors coherent even when the logical page stays put.
+        lazyCurrentPage = currentPage
+        verticalScrollPage = currentPage
+        if isDoublePageEnabled {
+            syncSpreadIndex()
+        }
+    }
+
+    func saveReadingProgress(for galleryID: Int64, progress: ReaderProgressStore = .init()) {
+        progress.save(currentPage, for: galleryID)
+    }
+
     // MARK: - Context Switch (画廊切换身份守卫)
 
     /// 身份核对守卫 — 检测是否需要切换画廊上下文

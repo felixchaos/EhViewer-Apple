@@ -138,3 +138,70 @@ struct ReaderResizeTests {
         #expect(vm.currentPage == 0)
     }
 }
+
+@MainActor
+struct ReaderOpeningTests {
+    private func withStore(_ operation: (ReaderProgressStore, UserDefaults) -> Void) throws {
+        let suite = "ehviewer.reader-opening.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        operation(ReaderProgressStore(defaults: defaults), defaults)
+    }
+
+    @Test func explicitPageOverridesResumeWithoutFallingBackForInvalidLinks() throws {
+        try withStore { progress, _ in
+            progress.save(4, for: 42)
+            #expect(progress.openingPage(for: 42, requested: 0, pageCount: 6) == 0)
+            #expect(progress.openingPage(for: 42, requested: 5, pageCount: 6) == 5)
+            #expect(progress.openingPage(for: 42, requested: -1, pageCount: 6) == nil)
+            #expect(progress.openingPage(for: 42, requested: 6, pageCount: 6) == nil)
+            #expect(progress.openingPage(for: 42, requested: 0, pageCount: 0) == nil)
+        }
+    }
+
+    @Test func persistedResumeUsesExistingKeysAndGalleryIsolation() throws {
+        try withStore { progress, defaults in
+            defaults.set(9, forKey: "reading_progress_42")
+            #expect(progress.openingPage(for: 42, requested: nil, pageCount: 5) == 4)
+            #expect(progress.openingPage(for: 42, requested: nil, pageCount: 0) == nil)
+            #expect(progress.openingPage(for: 43, requested: nil, pageCount: 9) == nil)
+
+            progress.save(0, for: 43)
+            let reopened = ReaderProgressStore(defaults: defaults)
+            #expect(reopened.openingPage(for: 43, requested: nil, pageCount: 9) == 0)
+            #expect(defaults.object(forKey: "reading_progress_43") as? Int == 0)
+            #expect(defaults.object(forKey: "reading_progress_42") as? Int == 9)
+        }
+    }
+
+    @Test func sameGalleryReentryResynchronizesAllReaderAnchors() throws {
+        try withStore { progress, _ in
+            let vm = ReaderViewModel()
+            vm.gid = 42
+            vm.token = "fixture"
+            vm.totalPages = 12
+            vm.currentPage = 1
+            vm.isDoublePageEnabled = true
+            vm.computeSpreads()
+            progress.save(7, for: 42)
+
+            #expect(!vm.prepareForGallery(targetGid: 42, targetToken: "fixture"))
+            vm.applyOpeningPage(nil, galleryID: 42, progress: progress)
+            #expect(vm.currentPage == 7)
+            #expect(vm.lazyCurrentPage == 7)
+            #expect(vm.verticalScrollPage == 7)
+            #expect(vm.currentSpreadIndex == vm.spreadIndex(for: 7))
+
+            vm.applyOpeningPage(3, galleryID: 42, progress: progress)
+            #expect(vm.currentPage == 3)
+            #expect(vm.lazyCurrentPage == 3)
+            #expect(vm.verticalScrollPage == 3)
+            #expect(vm.currentSpreadIndex == vm.spreadIndex(for: 3))
+
+            vm.applyOpeningPage(12, galleryID: 42, progress: progress)
+            #expect(vm.currentPage == 3)
+            vm.saveReadingProgress(for: 42, progress: progress)
+            #expect(progress.savedPage(for: 42) == 3)
+        }
+    }
+}

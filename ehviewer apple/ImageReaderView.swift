@@ -110,7 +110,7 @@ struct ImageReaderView: View {
         let viewModel = ReaderViewModel()
         viewModel.gid = gid
         viewModel.token = token
-        // Fix Race: 不在 init 中设置 totalPages — 延迟到 initializeReader()
+        // Fix Race: 不在 init 中设置 totalPages — 延迟到 openGallery()
         // 中 setupLocalGallery() 完成后再设置，防止页面 .task 在 isDownloaded
         // 确定前就触发 loadPage → 已下载画廊首页无意义走网络
 
@@ -178,12 +178,15 @@ struct ImageReaderView: View {
             if readingDirection != .topToBottom {
                 enterFullscreenOnAdvance(from: oldPage, to: newPage)
             }
-            saveReadingProgress()
+            vm.saveReadingProgress(for: gid)
         }
         .onAppear(perform: setupReader)
         .onDisappear(perform: cleanupReader)
         .task {
-            await initializeReader()
+            await vm.openGallery(
+                gid: gid, token: token, pageCount: pages,
+                previewSet: previewSet, initialPage: initialPage
+            )
             // Fix F2-2: 只有真正打开阅读器才记录历史 (从详情页 loadDetail 迁移到这里)
             recordReadingHistory()
         }
@@ -400,7 +403,7 @@ struct ImageReaderView: View {
         timeTimer?.invalidate()
         autoPageTask?.cancel()
         pageChangeTask?.cancel()
-        saveReadingProgress()
+        vm.saveReadingProgress(for: gid)
     }
 
     /// 从本地已有的记录里凑出一条历史。
@@ -483,67 +486,6 @@ struct ImageReaderView: View {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "eh_last_reading_time")
     }
 
-    private func initializeReader() async {
-        // 🛡️ 身份守卫: 将 View 持有的 gid 显式传给 ViewModel
-        // Context Switch → resetState() → UI 立即转 Loading
-        // Hit Cache → 跳过初始化但仍应用 initialPage
-        let needsLoad = vm.prepareForGallery(targetGid: gid, targetToken: token)
-
-        if needsLoad {
-            // Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，替代硬编码 isDownloaded
-            await vm.setupLocalGallery()
-
-            // Fix Race: setupLocalGallery 完成后再设置 totalPages
-            if pages > 0 {
-                vm.totalPages = pages
-            }
-
-            if let ps = previewSet {
-                vm.extractPTokens(from: ps)
-            }
-
-            if vm.totalPages == 0 {
-                await vm.fetchGalleryInfo()
-            }
-
-            // 获取页数后重算 spreads
-            vm.computeSpreads()
-        }
-
-        // Fix: 无论是否缓存命中，都应用目标页面
-        // 用户可能从不同缩略图进入同一画廊 → initialPage 必须被尊重
-        if let initial = initialPage, initial >= 0, initial < vm.totalPages {
-            vm.currentPage = initial
-        } else if initialPage == nil {
-            // 没指定页就恢复上次读到的位置。
-            //
-            // 这里原本还要求 needsLoad——也就是「只在首次加载时恢复」。
-            // 但 needsLoad 为 false 表示这个 ViewModel 已经载着同一本书了，
-            // 此时两个分支都不成立，currentPage 保持默认的 0：
-            // 明明有进度，却从第一页开始。恢复只该看「调用方有没有指定页」，
-            // 与要不要重新加载数据无关。
-            let key = "reading_progress_\(gid)"
-            if let saved = UserDefaults.standard.object(forKey: key) as? Int, vm.totalPages > 0 {
-                vm.currentPage = min(saved, max(0, vm.totalPages - 1))
-            }
-        }
-
-        // 🔑 同步所有滚动位置绑定 — onChange 不触发初始值，必须显式设置
-        // lazyCurrentPage 驱动 .scrollPosition(id:)，不同步会导致 ScrollView 停留在第 0 页
-        vm.lazyCurrentPage = vm.currentPage
-        vm.verticalScrollPage = vm.currentPage
-        if vm.isDoublePageEnabled {
-            vm.syncSpreadIndex()
-        }
-
-        if needsLoad {
-            await vm.loadCurrentPage()
-        } else {
-            // 缓存命中: 仍然触发目标页的加载/预加载
-            await vm.onPageChange(vm.currentPage)
-        }
-    }
-
     /// 往后翻就收起工具条，进入全屏。
     ///
     /// 只在「前进」时收，不在回退时展开：读者往下读是连续动作，工具条留在
@@ -552,13 +494,6 @@ struct ImageReaderView: View {
     private func enterFullscreenOnAdvance(from old: Int?, to new: Int?) {
         guard let new, let old, new > old, showOverlay else { return }
         withAnimation(.easeInOut(duration: 0.2)) { showOverlay = false }
-    }
-
-    // MARK: - Progress Persistence
-
-    private func saveReadingProgress() {
-        let key = "reading_progress_\(gid)"
-        UserDefaults.standard.set(vm.currentPage, forKey: key)
     }
 
     // MARK: - Navigation
