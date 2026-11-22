@@ -136,8 +136,20 @@ enum EhOfflineUIFixture {
             func value(_ name: String) -> String? { values.first { $0.name == name }?.value }
             if value("f_search") == nil, value("advsearch") == "1", value("f_sr") == "on",
                let rating = value("f_srdd"), ["4", "5"].contains(rating) {
-                return GalleryListResult(galleries: [.init(gid: rating == "4" ? 900010001064 : 900010001065,
-                                                            token: "fixture", title: "Synthetic rating \(rating)")])
+                let gid: Int64 = rating == "4" ? 900010001064 : 900010001065
+                if rating == "4", value("next") == "fixture-rating-four" {
+                    return GalleryListResult(galleries: [.init(gid: gid + 10, token: "fixture", title: "Synthetic rating 4 cursor page")])
+                }
+                if rating == "5", value("page") == "1" {
+                    return GalleryListResult(galleries: [.init(gid: gid + 10, token: "fixture", title: "Synthetic rating 5 numbered page")])
+                }
+                let item = GalleryInfo(gid: gid, token: "fixture", title: "Synthetic rating \(rating)")
+                if rating == "4" {
+                    var cursor = components
+                    cursor.queryItems = values + [URLQueryItem(name: "next", value: "fixture-rating-four")]
+                    return GalleryListResult(galleries: [item], pages: -1, nextHref: cursor.url?.absoluteString)
+                }
+                return GalleryListResult(galleries: [item], pages: 2, nextPage: 1)
             }
         }
         // Assert the actual submitted request, not merely a selected tab label.

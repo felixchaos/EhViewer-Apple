@@ -228,6 +228,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         let four = app.staticTexts["Synthetic rating 4"].firstMatch
         let five = app.staticTexts["Synthetic rating 5"].firstMatch
         XCTAssertTrue(four.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Synthetic rating 4 cursor page"].waitForExistence(timeout: 8))
 
         openOptions()
         chooseRating("4 stars", "5 stars")
@@ -240,6 +241,11 @@ final class FavoritesOfflineUITests: XCTestCase {
         apply()
         XCTAssertTrue(five.waitForExistence(timeout: 8))
         XCTAssertFalse(four.exists)
+        XCTAssertFalse(app.staticTexts["Synthetic rating 4 cursor page"].exists)
+        XCTAssertTrue(app.staticTexts["Synthetic rating 5 numbered page"].waitForExistence(timeout: 8))
+        app.buttons["清除搜索"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.isHittable)
+        XCTAssertFalse(five.exists)
     }
 
     @MainActor func testHomeAndPopularUseSubmittedSearchQuery() {
