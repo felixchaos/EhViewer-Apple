@@ -435,3 +435,93 @@ private actor HeldReaderCacheLookup {
         result = nil
     }
 }
+
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReaderDirectResponseOwnershipTests {
+    private let fixtureURL = URL(string: "https://image.invalid/fixture.jpg")!
+
+    @Test(arguments: [false, true])
+    func staleDirectDecodeCannotWriteAfterGallerySwitch(returnToOriginal: Bool) async {
+        let vm = ReaderViewModel()
+        let original: Int64 = 900010001020
+        vm.gid = original
+        let lookup = HeldReaderCacheLookup()
+        let active = Task { await vm.downloadImageData(0, cacheLookup: { _, _ in await lookup.read() }) }
+        await lookup.waitUntilStarted()
+        guard let owner = vm.imageDownloadOwner(for: 0) else {
+            await lookup.finish()
+            await active.value
+            Issue.record("Expected an active page slot")
+            return
+        }
+
+        let decode = HeldReaderCacheLookup()
+        var writes: [Int64] = []
+        let response = Task {
+            await vm.completeDirectImage(
+                0, data: Data([1]), url: fixtureURL, owner: owner,
+                decode: { _ = await decode.read(); return PlatformImage() },
+                cacheWriter: { _, gallery, _ in writes.append(gallery) },
+                persistentWriter: { _, gallery, _ in writes.append(gallery) }
+            )
+        }
+        await decode.waitUntilStarted()
+        _ = vm.prepareForGallery(targetGid: original + 1, targetToken: "fixture")
+        if returnToOriginal {
+            _ = vm.prepareForGallery(targetGid: original, targetToken: "fixture")
+        }
+        let replacementLookup = HeldReaderCacheLookup()
+        let replacement = Task {
+            await vm.downloadImageData(0, cacheLookup: { _, _ in await replacementLookup.read() })
+        }
+        await replacementLookup.waitUntilStarted()
+        vm.downloadProgress[0] = 0.25
+        await decode.finish()
+        await response.value
+        await lookup.finish()
+        await active.value
+        #expect(writes.isEmpty)
+        #expect(vm.cachedImages[0] == nil)
+        #expect(vm.downloadProgress[0] == 0.25)
+        #expect(vm.activeDownloadPages().contains(0))
+        await replacementLookup.finish()
+        await replacement.value
+    }
+
+    @Test func directResponseUsesOriginalKeyAndDoesNotPublishAfterCancellationDuringPersistence() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001022
+        let lookup = HeldReaderCacheLookup()
+        let active = Task { await vm.downloadImageData(0, cacheLookup: { _, _ in await lookup.read() }) }
+        await lookup.waitUntilStarted()
+        guard let owner = vm.imageDownloadOwner(for: 0) else {
+            await lookup.finish()
+            await active.value
+            Issue.record("Expected an active page slot")
+            return
+        }
+        let persistence = HeldReaderCacheLookup()
+        var writes: [String] = []
+        let response = Task {
+            await vm.completeDirectImage(
+                0, data: Data([1]), url: fixtureURL, owner: owner,
+                decode: { PlatformImage() },
+                cacheWriter: { _, gid, page in writes.append("cache:\(gid):\(page)") },
+                persistentWriter: { _, gid, page in
+                    writes.append("persistent:\(gid):\(page)")
+                    _ = await persistence.read()
+                }
+            )
+        }
+        await persistence.waitUntilStarted()
+        #expect(writes == ["cache:900010001022:0", "persistent:900010001022:0"])
+        #expect(vm.cachedImages[0] == nil)
+        vm.cancelDownload(0)
+        await persistence.finish()
+        await response.value
+        #expect(vm.cachedImages[0] == nil)
+        await lookup.finish()
+        await active.value
+    }
+}

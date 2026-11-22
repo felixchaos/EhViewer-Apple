@@ -538,7 +538,7 @@ public actor DownloadManager {
     public func saveWhileReading(
         gallery: GalleryInfo, pageIndex: Int, data: Data, extension ext: String
     ) -> Bool {
-        guard pageIndex >= 0, !data.isEmpty,
+        guard !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
               pendingFileDeletion?.gid != gallery.gid else { return false }
 
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)

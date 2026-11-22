@@ -618,6 +618,7 @@ class ReaderViewModel {
     /// UI 会因 totalPages == 0 立即切入 Loading 状态
     private func resetState() {
         readerImageSession &+= 1
+        for page in activeDownloadPages() { cancelDownload(page) }
         // 页面状态
         currentPage = 0
         totalPages = 0
@@ -789,11 +790,14 @@ class ReaderViewModel {
         }
         // Task {} 不继承调用方的取消状态：视图消失、预加载被取消，
         // 都不会再打断已经开始的下载。要停只能显式调 cancelDownload。
+        let identity = UUID()
+        let owner = ImageDownloadOwner(
+            gallery: gid, session: readerImageSession, retry: retryGeneration[index, default: 0], slot: identity
+        )
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.performImageDownload(index, cacheLookup: cacheLookup)
+            await self.performImageDownload(index, owner: owner, cacheLookup: cacheLookup)
         }
-        let identity = UUID()
         downloadTasks[index] = (identity, task)
         await task.value
         if downloadTasks[index]?.id == identity {
@@ -804,21 +808,40 @@ class ReaderViewModel {
     /// 显式取消某一页的下载。只在这一页确实不再需要时调
     /// （evictDistantPages 判定它已经离得太远）。
     func cancelDownload(_ index: Int) {
-        downloadTasks[index]?.task.cancel()
-        downloadTasks[index] = nil
+        guard let active = downloadTasks.removeValue(forKey: index) else { return }
+        active.task.cancel()
+        downloadingImages.remove(index)
+        downloadProgress.removeValue(forKey: index)
+    }
+
+    struct ImageDownloadOwner {
+        let gallery: Int64
+        let session: UInt64
+        let retry: Int
+        let slot: UUID
+    }
+
+    func imageDownloadOwner(for index: Int) -> ImageDownloadOwner? {
+        guard let slot = downloadTasks[index]?.id else { return nil }
+        return ImageDownloadOwner(
+            gallery: gid, session: readerImageSession, retry: retryGeneration[index, default: 0],
+            slot: slot
+        )
+    }
+
+    private func ownsDownload(_ index: Int, _ owner: ImageDownloadOwner) -> Bool {
+        ownsImageRead(index, gallery: owner.gallery, session: owner.session, retry: owner.retry)
+            && downloadTasks[index]?.id == owner.slot
     }
 
     private func performImageDownload(
-        _ index: Int, cacheLookup: (@Sendable (Int64, Int) async -> Data?)?
+        _ index: Int, owner: ImageDownloadOwner, cacheLookup: (@Sendable (Int64, Int) async -> Data?)?
     ) async {
+        guard ownsDownload(index, owner) else { return }
         // 已缓存 → 直接提升到 Observable 层 (使用 gid:page 复合 key)
         let key = cacheKey(for: index)
         if let cached = Self.imageCache.object(forKey: key) {
-            await MainActor.run {
-                if self.cachedImages[index] == nil {
-                    self.cachedImages[index] = cached
-                }
-            }
+            if cachedImages[index] == nil { cachedImages[index] = cached }
             return
         }
         // 内存里没有 → 先看磁盘缓存。
@@ -827,7 +850,8 @@ class ReaderViewModel {
         // 同一页要重新从网络下一遍。这是「同一本看两遍付两份流量」的来源，
         // 也是设置里那个「阅读缓存大小」一直没有真正生效的原因——
         // 阅读器根本没往那块缓存里写过东西。
-        guard await readPageFromDiskCache(index, lookup: cacheLookup) == .missing else { return }
+        guard await readPageFromDiskCache(index, lookup: cacheLookup) == .missing,
+              ownsDownload(index, owner) else { return }
 
         guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
 
@@ -845,17 +869,16 @@ class ReaderViewModel {
         // 可变: 换 H@H 节点后 URL 会变 (对齐 Android SpiderQueen 的 nl= 重试)
         var url = initialURL
         downloadingImages.insert(index)
-        defer { downloadingImages.remove(index) }
+        defer {
+            if downloadTasks[index]?.id == owner.slot { downloadingImages.remove(index) }
+        }
 
         // 立即设置初始进度 0，让 UI 渲染圆形进度条而非纯 spinner
-        await MainActor.run {
-            if self.downloadProgress[index] == nil {
-                self.downloadProgress[index] = 0.0
-            }
-        }
+        if downloadProgress[index] == nil { downloadProgress[index] = 0.0 }
 
         let maxAttempts = 4
         for attempt in 0..<maxAttempts {
+            guard ownsDownload(index, owner) else { return }
             do {
                 var request = URLRequest(url: url)
                 request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -868,6 +891,7 @@ class ReaderViewModel {
                 //    didWriteData 回调，导致进度始终为 0 → 直接跳到 100%
                 // bytes(for:) 虽逐字节迭代，但配合 16KB 缓冲区按 chunk 更新进度，开销可控
                 let (asyncBytes, response) = try await Self.session.bytes(for: request)
+                guard ownsDownload(index, owner) else { return }
                 let expectedLength = response.expectedContentLength > 0
                     ? response.expectedContentLength
                     : Int64(2_000_000) // 估算 ~2MB
@@ -881,6 +905,7 @@ class ReaderViewModel {
                 for try await byte in asyncBytes {
                     buffer.append(byte)
                     if buffer.count >= chunkSize {
+                        guard ownsDownload(index, owner) else { return }
                         data.append(contentsOf: buffer)
                         received += Int64(buffer.count)
                         buffer.removeAll(keepingCapacity: true)
@@ -888,10 +913,7 @@ class ReaderViewModel {
                         let progress = min(0.95, Double(received) / Double(expectedLength))
                         if progress - lastReportedProgress >= 0.05 {
                             lastReportedProgress = progress
-                            let p = progress
-                            await MainActor.run {
-                                self.downloadProgress[index] = p
-                            }
+                            downloadProgress[index] = progress
                         }
                     }
                 }
@@ -900,52 +922,17 @@ class ReaderViewModel {
                     data.append(contentsOf: buffer)
                 }
 
+                guard ownsDownload(index, owner) else { return }
+
                 // 下载完成 → 标记 100%，让用户看到从进度到解码的过渡
-                await MainActor.run {
-                    self.downloadProgress[index] = 1.0
-                }
+                downloadProgress[index] = 1.0
 
-                // 图片解码移到后台线程，避免阻塞 MainActor
-                let img = await Task.detached(priority: .userInitiated) {
-                    Self.downsampledImage(data: data)
-                }.value
-
-                if let img = img {
-                    // 先落缓存：这一页以后再看就不用再下了。
-                    // 写的是 Caches/ 下受 readCacheSize 约束的那块，超了自动淘汰。
-                    SpiderDen.cacheImageData(data, gid: gid, page: index)
-
-                    // 阅读时同步下载 —— 这是「下载」不是「缓存」：
-                    // 它把图写进 Documents/download 并登记下载任务，默认关闭。
-                    await syncDownloadIfEnabled(index: index, data: data, url: url)
-
-                    let cost = Self.decodedCost(of: img)
-                    let cacheKey = self.cacheKey(for: index)
-                    Self.imageCache.setObject(img, forKey: cacheKey, cost: cost)
-                    await MainActor.run {
-                        self.cachedImages[index] = img
-                        self.downloadProgress.removeValue(forKey: index)
-                        // 审计修复 M-2: 每次新图片加入后立即淘汰远处页面
-                        self.evictDistantPages(from: self.currentPage)
-                    }
-                    return
-                } else {
-                    await MainActor.run {
-                        self.errorPages.insert(index)
-                        self.errorMessages[index] = "图片数据无效"
-                        self.downloadProgress.removeValue(forKey: index)
-                    }
-                    return
-                }
-            } catch is CancellationError {
-                await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
-                return
-            } catch let urlError as URLError where urlError.code == .cancelled {
-                await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
+                await completeDirectImage(index, data: data, url: url, owner: owner)
                 return
             } catch {
-                if Task.isCancelled {
-                    await MainActor.run { _ = self.downloadProgress.removeValue(forKey: index) }
+                guard ownsDownload(index, owner) else { return }
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    downloadProgress.removeValue(forKey: index)
                     return
                 }
                 debugLog("[Reader] Image download error page \(index) attempt \(attempt + 1): \(error.localizedDescription)")
@@ -960,38 +947,79 @@ class ReaderViewModel {
                        let img = await Task.detached(priority: .userInitiated, operation: {
                            Self.downsampledImage(data: data)
                        }).value {
+                        guard ownsDownload(index, owner) else { return }
                         Self.imageCache.setObject(img, forKey: self.cacheKey(for: index), cost: Self.decodedCost(of: img))
-                        await MainActor.run {
-                            self.cachedImages[index] = img
-                            self.errorPages.remove(index)
-                            self.downloadProgress.removeValue(forKey: index)
-                            self.evictDistantPages(from: self.currentPage)
-                        }
+                        cachedImages[index] = img
+                        errorPages.remove(index)
+                        downloadProgress.removeValue(forKey: index)
+                        evictDistantPages(from: currentPage)
                         return
                     }
                 }
 
-                if Task.isCancelled { return }
+                guard ownsDownload(index, owner) else { return }
 
                 // ★ 兜底 2: 换一个 H@H 节点 (对齐 Android SpiderQueen 的 nl= 重试)
                 //   节点掉线 / 证书异常时，同一个 URL 重试多少次都没用，必须换节点
-                if attempt >= 1, let newURL = await switchHathNode(index) {
+                if attempt >= 1, let newURL = await switchHathNode(index, owner: owner) {
                     url = newURL
                     continue
                 }
 
+                guard ownsDownload(index, owner) else { return }
                 if attempt < maxAttempts - 1 {
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
-                    if Task.isCancelled { return }
+                    guard ownsDownload(index, owner) else { return }
                     continue
                 }
-                await MainActor.run {
-                    self.errorPages.insert(index)
-                    self.errorMessages[index] = "下载失败: \(error.localizedDescription)"
-                    self.downloadProgress.removeValue(forKey: index)
-                }
+                errorPages.insert(index)
+                errorMessages[index] = "下载失败: \(error.localizedDescription)"
+                downloadProgress.removeValue(forKey: index)
             }
         }
+    }
+
+    // The response owner must survive both suspension points before page publication.
+    func completeDirectImage(
+        _ index: Int, data: Data, url: URL, owner: ImageDownloadOwner,
+        decode: (() async -> PlatformImage?)? = nil,
+        cacheWriter: ((Data, Int64, Int) -> Void)? = nil,
+        persistentWriter: ((Data, Int64, Int) async -> Void)? = nil
+    ) async {
+        guard ownsDownload(index, owner) else { return }
+        let image: PlatformImage?
+        if let decode {
+            image = await decode()
+        } else {
+            image = await Task.detached(priority: .userInitiated) {
+                Self.downsampledImage(data: data)
+            }.value
+        }
+        guard ownsDownload(index, owner) else { return }
+        guard let image else {
+            errorPages.insert(index)
+            errorMessages[index] = "图片数据无效"
+            downloadProgress.removeValue(forKey: index)
+            return
+        }
+
+        // Cache writes stay synchronous and ahead of optional permanent storage.
+        if let cacheWriter {
+            cacheWriter(data, owner.gallery, index)
+        } else {
+            SpiderDen.cacheImageData(data, gid: owner.gallery, page: index)
+        }
+        if let persistentWriter {
+            await persistentWriter(data, owner.gallery, index)
+        } else {
+            await syncDownloadIfEnabled(index: index, data: data, url: url, gallery: owner.gallery)
+        }
+        guard ownsDownload(index, owner) else { return }
+
+        Self.imageCache.setObject(image, forKey: cacheKey(for: index), cost: Self.decodedCost(of: image))
+        cachedImages[index] = image
+        downloadProgress.removeValue(forKey: index)
+        evictDistantPages(from: currentPage)
     }
 
     enum ReaderDiskCacheResult: Equatable {
@@ -1087,11 +1115,11 @@ class ReaderViewModel {
     /// 对齐 Android 上游 2026-06-16「添加"阅读时同步下载"功能」。
     /// Android 是在 SpiderDen 的写管道里分流；Apple 端阅读器自己下图，所以挂在这里。
     /// 已经在读本地文件 (isDownloaded) 时不重复写。
-    private func syncDownloadIfEnabled(index: Int, data: Data, url: URL) async {
+    private func syncDownloadIfEnabled(index: Int, data: Data, url: URL, gallery: Int64) async {
         guard AppSettings.shared.syncDownloadWhileReading else { return }
         guard !isDownloaded else { return }          // 本地已有整本，无需再存
         guard !url.isFileURL else { return }         // 读的就是本地文件
-        guard let info = GalleryCache.shared.getDetail(gid: gid)?.info else { return }
+        guard let info = GalleryCache.shared.getDetail(gid: gallery)?.info else { return }
 
         // 扩展名优先用图片 URL 上的，拿不到就按数据头猜
         var ext = "." + url.pathExtension.lowercased()
@@ -1118,7 +1146,7 @@ class ReaderViewModel {
     /// E-Hentai 把图片分发到用户自建的 H@H 节点上，某个节点掉线 / 证书过期 / 被墙时，
     /// 该页会一直下载失败。带上 nl= 参数重新请求页面，服务器就会换一个节点。
     /// 这是"检索和预览都正常、点进阅读加载不出图片"最常见的原因之一 (issue #6)。
-    private func switchHathNode(_ index: Int) async -> URL? {
+    private func switchHathNode(_ index: Int, owner: ImageDownloadOwner) async -> URL? {
         guard let key = skipHathKeys[index], !key.isEmpty else { return nil }
         var used = usedSkipHathKeys[index] ?? []
         // 同一个 key 再次出现 → 服务器已经没有别的节点可分配 (对齐 Android leakSkipHathKey)
@@ -1132,13 +1160,14 @@ class ReaderViewModel {
         pageUrl += pageUrl.contains("?") ? "&nl=\(key)" : "?nl=\(key)"
 
         guard let result = try? await EhAPI.shared.getGalleryPage(url: pageUrl),
+              ownsDownload(index, owner),
               !result.imageUrl.isEmpty,
               let newURL = URL(string: result.imageUrl) else { return nil }
 
         skipHathKeys[index] = result.skipHathKey
         if let showKey = result.showKey { showKeys[index] = showKey }
         GalleryCache.shared.putImageURL(result.imageUrl, gid: gid, page: index)
-        await MainActor.run { self.imageURLs[index] = result.imageUrl }
+        imageURLs[index] = result.imageUrl
         debugLog("[Reader] Page \(index): switched H@H node → \(newURL.host ?? "?")")
         return newURL
     }
@@ -1258,15 +1287,14 @@ class ReaderViewModel {
     }
 
     func retryLoadPage(_ index: Int) async {
-        await MainActor.run {
-            self.imageURLs[index] = nil
-            self.cachedImages.removeValue(forKey: index)
-            self.errorPages.remove(index)
-            self.errorMessages.removeValue(forKey: index)
-            self.retryingPages.removeValue(forKey: index)
-            self.downloadProgress.removeValue(forKey: index)
-            self.retryGeneration[index, default: 0] += 1
-        }
+        cancelDownload(index)
+        imageURLs[index] = nil
+        cachedImages.removeValue(forKey: index)
+        errorPages.remove(index)
+        errorMessages.removeValue(forKey: index)
+        retryingPages.removeValue(forKey: index)
+        downloadProgress.removeValue(forKey: index)
+        retryGeneration[index, default: 0] += 1
         Self.imageCache.removeObject(forKey: cacheKey(for: index))
         pTokens.removeValue(forKey: index)
         usedSkipHathKeys.removeValue(forKey: index)

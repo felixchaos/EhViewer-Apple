@@ -85,6 +85,30 @@ import EhSpider
         #expect(try store.getDownload(gid: sibling.gid)?.state == DownloadManager.stateFinish)
     }
 
+    @Test func cancelledReadingSyncDoesNotCreateAFileOrDownloadRecord() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = fixture(44)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in
+            fatalError("Reading sync must not start a transfer")
+        })
+
+        let cancelled = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await manager.saveWhileReading(
+                gallery: gallery, pageIndex: 0, data: Data([1]), extension: ".jpg"
+            )
+        }.value
+        #expect(!cancelled)
+        #expect(try store.getDownload(gid: gallery.gid) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+        #expect(await manager.saveWhileReading(
+            gallery: gallery, pageIndex: 0, data: Data([1]), extension: ".jpg"
+        ))
+        #expect(try store.getDownload(gid: gallery.gid) != nil)
+    }
+
     private func fixture(_ gid: Int64) -> GalleryInfo {
         GalleryInfo(gid: gid, token: "neutral", title: "Download fixture \(gid)", pages: 1)
     }
