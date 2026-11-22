@@ -16,6 +16,7 @@ struct MainTabView: View {
     )
     #else
     @State private var navigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage)
+    @State private var homeReselect: UUID?
     #endif
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
@@ -107,6 +108,7 @@ struct MainTabView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .environment(\.ehHomeReselect, homeReselect)
                 .ehFloatingTabBar(
                     items: Tab.bottomTabs.map {
                         .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
@@ -114,9 +116,7 @@ struct MainTabView: View {
                     selection: tabSelection,
                     isEnabled: !showsSidebar,
                     onReselect: { tab in
-                        NotificationCenter.default.post(
-                            name: .ehScrollToTop, object: nil, userInfo: ["tab": tab.rawValue]
-                        )
+                        if tab == .home { homeReselect = UUID() }
                     }
                 )
             }

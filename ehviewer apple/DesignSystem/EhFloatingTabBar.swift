@@ -8,7 +8,7 @@
 //  的侧边栏：底部标签栏这个形态在大屏上是错的，横向空间应该给内容而不是导航。
 //
 //  自绘导航条会丢掉系统 TabView 的一些免费行为，这里逐项补回：
-//    - 重复点击当前标签回到顶部 → 经 `.ehScrollToTop` 通知，各页自行订阅
+//    - 重复点击当前首页标签回到顶部 → 由当前窗口的首页列表处理
 //    - 安全区避让 → 用 safeAreaInset 挂载，内容自动获得正确的底部内边距
 //    - 无障碍 → 显式给出 label / traits，并保证 44pt 点按目标
 //
@@ -16,11 +16,6 @@
 #if os(iOS)
 
 import SwiftUI
-
-extension Notification.Name {
-    /// 重复点击已选中的标签时发出，携带 userInfo["tab"] = 标签的 rawValue
-    static let ehScrollToTop = Notification.Name("EhScrollToTop")
-}
 
 /// 让被推入的页面声明「这一屏不要底部导航条」。
 ///
@@ -187,15 +182,28 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
     }
 }
 
+private struct EhHomeReselectKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
+extension EnvironmentValues {
+    /// The floating tab bar and Browse Home share this signal only within a window.
+    var ehHomeReselect: UUID? {
+        get { self[EhHomeReselectKey.self] }
+        set { self[EhHomeReselectKey.self] = newValue }
+    }
+}
+
 /// Only the root Browse Home list opts in; retained inactive tabs never scroll.
 struct EhCompactHomeScrollOnReselect: ViewModifier {
     static let topAnchor = "eh-compact-home-list-top"
     @Environment(\.ehTabBarDriverActive) private var isActive
+    @Environment(\.ehHomeReselect) private var reselect
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
-            content.onReceive(NotificationCenter.default.publisher(for: .ehScrollToTop)) { notification in
-                guard isActive, notification.userInfo?["tab"] as? String == MainTab.home.rawValue else { return }
+            content.onChange(of: reselect) { _, _ in
+                guard isActive else { return }
                 // Scroll the current list without changing its identity, source or request state.
                 withAnimation(.easeOut(duration: 0.22)) {
                     proxy.scrollTo(Self.topAnchor, anchor: .top)
