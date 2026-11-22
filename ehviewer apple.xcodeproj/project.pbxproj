@@ -78,6 +78,7 @@
 				"ehviewer appleTests/TopListParsingTests.swift",
 				"ehviewer appleTests/ProxySettingsTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
+				"ehviewer appleTests/SettingsBackupTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 				Info.plist,
 			);
@@ -96,6 +97,7 @@
 				"ehviewer appleTests/TopListParsingTests.swift",
 				"ehviewer appleTests/ProxySettingsTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
+				"ehviewer appleTests/SettingsBackupTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 			);
 			target = DC4A07782F3DA21800717C38 /* ehviewer appleTests */;
