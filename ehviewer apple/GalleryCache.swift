@@ -95,6 +95,11 @@ final class GalleryCache: @unchecked Sendable {
         imageURLCache.removeAllObjects()
     }
 
+    func clearAccountSnapshots() {
+        detailCache.removeAllObjects()
+        listCache.removeAllObjects()
+    }
+
     func clearListCache() {
         listCache.removeAllObjects()
     }

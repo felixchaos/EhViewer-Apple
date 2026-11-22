@@ -55,6 +55,11 @@ extension EhPageHeader where Trailing == EmptyView {
 }
 
 extension View {
+    /// Keep the header anchored when an empty/loading body has no flexible content.
+    func ehTopAlignedPage() -> some View {
+        frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
     /// 用紧凑页头替代系统大标题。
     ///
     /// 必须同时隐藏系统导航栏，否则会出现「空的导航栏带 + 自绘标题」两层。

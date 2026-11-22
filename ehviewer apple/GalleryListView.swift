@@ -74,6 +74,7 @@ struct GalleryListView: View {
     /// 收藏页的「全部」把本地收藏区块和这个在线列表叠在一起：没登录时在线
     /// 列表永远是空的，于是本地收藏下面永远吊着一句「这个收藏夹是空的」。
     private var hidesEmptyState = false
+    private var embeddedFavorites = false
     /// 多选模式。由父视图（收藏页）驱动：云端收藏夹此前完全没有批量操作，
     /// 想从收藏夹里删掉一本只能一本本进详情页。
     private var selectionBindings: (isSelecting: Binding<Bool>, selected: Binding<Set<Int64>>)?
@@ -138,7 +139,7 @@ struct GalleryListView: View {
 
     /// 收藏搜索模式
     init(mode: ListMode, searchKeyword: String?, hidesOwnSearchBar: Bool = false,
-         hidesEmptyState: Bool = false,
+         hidesEmptyState: Bool = false, embeddedFavorites: Bool = false,
          isSelecting: Binding<Bool>? = nil,
          selectedGids: Binding<Set<Int64>>? = nil,
          visibleGalleries: Binding<[GalleryInfo]>? = nil) {
@@ -147,6 +148,7 @@ struct GalleryListView: View {
         self.externalSelection = nil
         self.hidesOwnSearchBar = hidesOwnSearchBar
         self.hidesEmptyState = hidesEmptyState
+        self.embeddedFavorites = embeddedFavorites
         self.visibleGalleries = visibleGalleries
         if let isSelecting, let selectedGids {
             self.selectionBindings = (isSelecting, selectedGids)
@@ -189,7 +191,9 @@ struct GalleryListView: View {
         #endif
         let _ = NSLog("[RENDER] GalleryListView body, mode=%@, galleries=%d", String(describing: mode), viewModel.galleries.count)
         Group {
-            if isEmbedded {
+            if embeddedFavorites {
+                favoritesListContent
+            } else if isEmbedded {
                 // 嵌入模式: 仅展示列表，由父视图管理导航
                 embeddedContent
             } else if isPushed {
@@ -265,16 +269,26 @@ struct GalleryListView: View {
             // 收藏状态同步: 详情页收藏/取消收藏后，列表内对应画廊的收藏标记实时更新，无需刷新
             guard let userInfo = notification.userInfo,
                   let gid = userInfo["gid"] as? Int64 else { return }
-            let favorited = userInfo["favorited"] as? Bool ?? false
-            let slot = userInfo["slot"] as? Int ?? -1
-            if let index = viewModel.galleries.firstIndex(where: { $0.gid == gid }) {
-                viewModel.galleries[index].favoriteSlot = favorited ? slot : -1
+            if let slot = userInfo["cloudSlot"] as? Int {
+                viewModel.applyCloudFavoriteChange(gid: gid, slot: slot, mode: mode)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
             // 站点切换后清除缓存并重新加载 (对齐 Android: 切换站点 → 刷新列表)
             // 同样用 effectiveMode，否则切站点会把用户正在看的搜索结果换成首页
             viewModel.refresh(mode: effectiveMode)
+        }
+    }
+
+    // Favorites provides its own navigation and search controls.
+    @ViewBuilder
+    private var favoritesListContent: some View {
+        if viewModel.galleries.isEmpty && !viewModel.isLoading {
+            if viewModel.errorMessage != nil { errorView }
+            else if !hidesEmptyState { emptyStateView }
+            // When the local section has rows, it supplies the empty cloud state.
+        } else {
+            galleryList
         }
     }
 
@@ -326,6 +340,7 @@ struct GalleryListView: View {
                     }
                 }
             }
+            .ehTopAlignedPage()
             // ★ navigationDestination 只在 NavigationStack 顶层注册一次，避免 pushedContent 重复注册导致未定义行为
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery)
@@ -649,7 +664,7 @@ struct GalleryListView: View {
         let fixThumb = AppSettings.shared.fixThumbUrl
         return VStack(spacing: 0) {
             // 搜索栏 (全宽，置于内容顶部)
-            searchBarView
+            if !hidesOwnSearchBar { searchBarView }
 
             Group {
                 if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
@@ -1481,6 +1496,15 @@ class GalleryListViewModel {
     }
 
     private var visibleGalleries: [GalleryInfo] = []
+    func applyCloudFavoriteChange(gid: Int64, slot: Int, mode: GalleryListView.ListMode) {
+        guard let index = visibleGalleries.firstIndex(where: { $0.gid == gid }) else { return }
+        if case let .favorites(category) = mode, slot < 0 || (category >= 0 && category != slot) {
+            visibleGalleries.remove(at: index)
+        } else {
+            visibleGalleries[index].favoriteSlot = slot
+        }
+    }
+
     @ObservationIgnored private let filterGalleries: @MainActor (inout [GalleryInfo]) -> Int
 
     init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil) {

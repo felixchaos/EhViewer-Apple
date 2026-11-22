@@ -115,6 +115,7 @@ struct FavoritesView: View {
                             mode: .favorites(slot: selectedSlot),
                             searchKeyword: searchText.isEmpty ? nil : searchText,
                             hidesOwnSearchBar: true,
+                            embeddedFavorites: true,
                             isSelecting: $isCloudSelecting,
                             selectedGids: $cloudSelection,
                             visibleGalleries: $cloudGalleries
@@ -124,6 +125,12 @@ struct FavoritesView: View {
                 }
                 .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
                 .ehCompactHeader()
+                .navigationDestination(for: GalleryInfo.self) { gallery in
+                    GalleryDetailView(gallery: gallery).id(gallery.gid)
+                }
+                .navigationDestination(for: TagSearchDestination.self) { destination in
+                    GalleryListView(mode: .tag(keyword: destination.tag), isPushed: true)
+                }
                 // 去掉 .searchable：iOS 26 把搜索栏放在屏幕底部，与浮起导航条重叠。
                 // 设计稿这一屏顶部只有标题与过滤胶囊，检索由胶囊承担。
                 .onChange(of: searchText) { _, _ in
@@ -222,9 +229,7 @@ struct FavoritesView: View {
                     try await EhAPI.shared.addFavorites(
                         gid: info.gid, token: info.token, dstCat: slot)
                     moved += 1
-                    NotificationCenter.default.post(
-                        name: .galleryFavoriteChanged, object: nil,
-                        userInfo: ["gid": info.gid, "favorited": slot >= 0, "slot": slot])
+                    GalleryActionService.shared.recordCloudFavorite(gid: info.gid, slot: slot)
                 } catch {
                     debugLog("[Favorites] 批量操作失败 gid=\(info.gid): \(error)")
                 }
@@ -322,7 +327,7 @@ struct FavoritesView: View {
 
     private var localFavoritesContent: some View {
         Group {
-            if isLoadingLocal {
+            if isLoadingLocal && localFavorites.isEmpty {
                 ProgressView("加载中...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if localFavorites.isEmpty {
@@ -372,6 +377,9 @@ struct FavoritesView: View {
             }
         }
         .onAppear { loadLocalFavorites() }
+        .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { _ in
+            loadLocalFavorites()
+        }
         .onChange(of: selectedSlot) { _, newSlot in
             if newSlot == -2 || newSlot == -1 { loadLocalFavorites() }
             isSelectMode = false
@@ -455,7 +463,7 @@ struct FavoritesView: View {
                 GalleryListView(mode: .favorites(slot: -1),
                                 searchKeyword: searchText.isEmpty ? nil : searchText,
                                 hidesOwnSearchBar: true,
-                                hidesEmptyState: !localFavorites.isEmpty)
+                                hidesEmptyState: !localFavorites.isEmpty, embeddedFavorites: true)
             }
         }
         .onAppear { loadLocalFavorites() }
@@ -512,8 +520,12 @@ struct FavoritesView: View {
         isBatchProcessing = true
         Task {
             for record in selected {
-                try? await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
-                try? EhDatabase.shared.deleteLocalFavorite(gid: record.gid)
+                do {
+                    try await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
+                    try GalleryActionService.shared.removeLocalFavorite(gid: record.gid)
+                } catch {
+                    debugLog("[Favorites] Move to cloud failed; local copy retained: \(error)")
+                }
             }
             await MainActor.run {
                 isBatchProcessing = false
@@ -525,20 +537,24 @@ struct FavoritesView: View {
     }
 
     private func batchDeleteSelected() {
-        for gid in selectedGids {
-            try? EhDatabase.shared.deleteLocalFavorite(gid: gid)
-        }
-        localFavorites.removeAll { selectedGids.contains($0.gid) }
+        deleteLocalFavorites(gids: selectedGids)
         isSelectMode = false
         selectedGids.removeAll()
     }
 
     private func deleteLocalFavorites(at offsets: IndexSet) {
-        for index in offsets {
-            let record = localFavorites[index]
-            try? EhDatabase.shared.deleteLocalFavorite(gid: record.gid)
+        deleteLocalFavorites(gids: Set(offsets.map { localFavorites[$0].gid }))
+    }
+
+    private func deleteLocalFavorites(gids: Set<Int64>) {
+        for gid in gids {
+            do {
+                try GalleryActionService.shared.removeLocalFavorite(gid: gid)
+            } catch {
+                EhToast.failure("移出本地收藏失败")
+            }
         }
-        localFavorites.remove(atOffsets: offsets)
+        loadLocalFavorites()
     }
 
     // MARK: - Slot Picker

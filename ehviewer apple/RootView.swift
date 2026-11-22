@@ -150,6 +150,8 @@ struct RootView: View {
             flowStep = .main
         }
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
+            GalleryStatusCache.shared.resetCloudState()
+            GalleryCache.shared.clearAccountSnapshots()
             if isSignedIn {
                 flowStep = .main
                 // 登录后异步任务：获取资料 + ExH 检测
@@ -157,6 +159,10 @@ struct RootView: View {
                     Task { await postLoginActions() }
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
+            GalleryStatusCache.shared.resetCloudState()
+            GalleryCache.shared.clearAccountSnapshots()
         }
         .alert("ExHentai 可用", isPresented: $showExHAlert) {
             Button("切换到 ExHentai") {

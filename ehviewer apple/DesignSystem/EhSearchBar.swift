@@ -289,6 +289,7 @@ struct EhPageSearchModifier: ViewModifier {
             }
             content
         }
+        .ehTopAlignedPage()
         .animation(.easeInOut(duration: 0.2), value: isActive)
         .onChange(of: isActive) { _, active in
             if active {

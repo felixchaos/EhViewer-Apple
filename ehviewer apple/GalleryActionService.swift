@@ -23,6 +23,36 @@ final class GalleryActionService {
 
     // MARK: - 收藏
 
+    struct FavoriteState: Equatable {
+        var local: Bool
+        var cloud: Bool
+        var isFavorited: Bool { local || cloud }
+    }
+
+    func favoriteState(gid: Int64, cloud: Bool) -> FavoriteState {
+        Self.favoriteState(cloud: cloud, readLocal: { try EhDatabase.shared.containsLocalFavorite(gid: gid) })
+    }
+
+    static func favoriteState(cloud: Bool, readLocal: () throws -> Bool) -> FavoriteState {
+        FavoriteState(local: (try? readLocal()) ?? false, cloud: cloud)
+    }
+
+    enum FavoriteLocation: Equatable { case local, cloud }
+
+    /// Prefer removing a local copy without touching the network. If both copies
+    /// exist the cloud favorite stays intact and remains selected.
+    static func removePreferredFavorite(
+        readLocal: () throws -> Bool, removeLocal: () throws -> Void,
+        removeCloud: () async throws -> Void
+    ) async throws -> FavoriteLocation {
+        if try readLocal() {
+            try removeLocal()
+            return .local
+        }
+        try await removeCloud()
+        return .cloud
+    }
+
     /// 快速收藏的三种结局。
     ///
     /// 此前这里返回 Bool，把「没设默认收藏夹」和「网络失败」压成了同一个
@@ -64,9 +94,7 @@ final class GalleryActionService {
         }
         EhToast.success("已添加至收藏")
         AppSettings.shared.recentFavCat = slot
-        NotificationCenter.default.post(name: .galleryFavoriteChanged,
-                                        object: nil,
-                                        userInfo: ["gid": gid, "favorited": true, "slot": slot])
+        recordCloudFavorite(gid: gid, slot: slot)
     }
 
     /// 添加本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
@@ -85,9 +113,7 @@ final class GalleryActionService {
         record.simpleLanguage = gallery.simpleLanguage
         do {
             try EhDatabase.shared.insertLocalFavorite(record)
-            NotificationCenter.default.post(name: .galleryFavoriteChanged,
-                                            object: nil,
-                                            userInfo: ["gid": gallery.gid, "favorited": true, "slot": -1])
+            postFavoriteUpdate(gid: gallery.gid, local: true)
             EhToast.success("已添加至本地收藏")
             return true
         } catch {
@@ -97,21 +123,54 @@ final class GalleryActionService {
         }
     }
 
-    /// 取消收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
-    func removeFavorite(gid: Int64, token: String) async throws {
+    @discardableResult
+    func removeFavorite(gid: Int64, token: String) async throws -> FavoriteLocation {
         do {
-            try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
+            return try await Self.removePreferredFavorite(
+                readLocal: { try EhDatabase.shared.containsLocalFavorite(gid: gid) },
+                removeLocal: {
+                    try self.removeLocalFavorite(gid: gid)
+                    EhToast.success("已移出本地收藏")
+                },
+                removeCloud: {
+                    try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
+                    self.recordCloudFavorite(gid: gid, slot: -1)
+                    EhToast.success("已取消云端收藏")
+                }
+            )
         } catch {
-            // addFavorite 有成功/失败提示，这里一条都没有：
-            // 取消收藏看起来永远像是「点了没反应」
             EhToast.failure("取消收藏失败")
             throw error
         }
-        try? EhDatabase.shared.deleteLocalFavorite(gid: gid)
-        EhToast.success("已取消收藏")
-        NotificationCenter.default.post(name: .galleryFavoriteChanged,
-                                        object: nil,
-                                        userInfo: ["gid": gid, "favorited": false])
+    }
+
+    func removeLocalFavorite(gid: Int64) throws {
+        try EhDatabase.shared.deleteLocalFavorite(gid: gid)
+        postFavoriteUpdate(gid: gid, local: false)
+    }
+
+    /// A single notification for an atomic bulk import, without one reload per row.
+    func localFavoritesDidImport() {
+        GalleryStatusCache.shared.reloadLocalFavorites()
+        NotificationCenter.default.post(name: .galleryFavoriteChanged, object: nil,
+                                        userInfo: ["localBulk": true])
+    }
+
+    func recordCloudFavorite(gid: Int64, slot: Int) {
+        if var cached = GalleryCache.shared.getDetail(gid: gid) {
+            cached.isFavorited = slot >= 0
+            cached.info.favoriteSlot = slot
+            GalleryCache.shared.putDetail(cached)
+        }
+        GalleryCache.shared.clearListCache()
+        postFavoriteUpdate(gid: gid, cloudSlot: slot)
+    }
+
+    private func postFavoriteUpdate(gid: Int64, local: Bool? = nil, cloudSlot: Int? = nil) {
+        var data: [String: Any] = ["gid": gid]
+        if let local { data["local"] = local }
+        if let cloudSlot { data["cloudSlot"] = cloudSlot }
+        NotificationCenter.default.post(name: .galleryFavoriteChanged, object: nil, userInfo: data)
     }
 
     // MARK: - 下载

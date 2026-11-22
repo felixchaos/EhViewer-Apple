@@ -150,6 +150,16 @@ struct GalleryDetailView: View {
             vm.reset()
             await vm.loadDetail(gid: gallery.gid, token: gallery.token)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { note in
+            if note.userInfo?["localBulk"] as? Bool == true {
+                let local = try? EhDatabase.shared.containsLocalFavorite(gid: gallery.gid)
+                vm.favoriteDidChange(local: local, cloudSlot: nil)
+                return
+            }
+            guard note.userInfo?["gid"] as? Int64 == gallery.gid else { return }
+            vm.favoriteDidChange(local: note.userInfo?["local"] as? Bool,
+                                 cloudSlot: note.userInfo?["cloudSlot"] as? Int)
+        }
         // Fix F3-2: 每次详情页出现时重新查询下载状态 (解决导航栈返回时状态不同步)
         .onAppear {
             Task {
@@ -166,7 +176,9 @@ struct GalleryDetailView: View {
                 Task { await vm.removeFavorite(gid: gallery.gid, token: gallery.token) }
             } else {
                 let defaultSlot = AppSettings.shared.defaultFavSlot
-                if defaultSlot >= 0 && defaultSlot <= 9 {
+                if defaultSlot == -1 {
+                    vm.addLocalFavorite(gallery: gallery)
+                } else if defaultSlot >= 0 && defaultSlot <= 9 {
                     Task { await vm.addFavorite(gid: gallery.gid, token: gallery.token, slot: defaultSlot) }
                 } else {
                     showFavoritePicker = true
@@ -915,7 +927,9 @@ class GalleryDetailViewModel {
     var isLoading = false
     var errorMessage: String?
     var detail: GalleryDetail?
-    var isFavorited = false
+    private var favoriteMutationInFlight = false
+    private(set) var favoriteState = GalleryActionService.FavoriteState(local: false, cloud: false)
+    var isFavorited: Bool { favoriteState.isFavorited }
     var downloadState: Int = DownloadManager.stateInvalid
     /// 阅读器启动项 — 非 nil 时弹出阅读器 (item: 绑定确保视图完全重建)
     var readerLaunchItem: ReaderLaunchItem? = nil
@@ -982,7 +996,7 @@ class GalleryDetailViewModel {
         isLoading = false
         errorMessage = nil
         detail = nil
-        isFavorited = false
+        favoriteState = .init(local: false, cloud: false)
         downloadState = DownloadManager.stateInvalid
         readerLaunchItem = nil
         displayRating = nil
@@ -991,15 +1005,21 @@ class GalleryDetailViewModel {
         processedComments = []
     }
 
-    func loadDetail(gid: Int64, token: String) async {
+    func loadDetail(
+        gid: Int64, token: String,
+        fetchDetail: ((String) async throws -> GalleryDetail)? = nil,
+        readLocalFavorite: (() throws -> Bool)? = nil
+    ) async {
         guard !isLoading else { return }
 
         // 1) 先查内存缓存 (对标 Android: EhApplication.getGalleryDetailCache().get(gid))
         if let cached = GalleryCache.shared.getDetail(gid: gid) {
             // 查询下载状态 (对齐 Android: DownloadManager 状态查询)
             let dlState = await DownloadManager.shared.getTaskState(gid: gid)
+            guard !Task.isCancelled else { return }
             self.detail = cached
-            self.isFavorited = cached.isFavorited
+            applyFavoriteState(gid: gid, cloud: GalleryCache.shared.getDetail(gid: gid)?.isFavorited ?? cached.isFavorited,
+                               readLocal: readLocalFavorite)
             self.displayRating = cached.info.rating
             self.downloadState = dlState
             self.isLoading = false
@@ -1007,6 +1027,7 @@ class GalleryDetailViewModel {
             preprocessComments(cached.comments.comments)
             // Perf P0-5: 一次性检查阅读进度
             checkReadingProgress(gid: gid)
+            startDownloadPollingIfNeeded(gid: gid)
             debugLog("Loaded from cache - Comments: \(cached.comments.comments.count), HasMore: \(cached.comments.hasMore)")
             return
         }
@@ -1018,7 +1039,10 @@ class GalleryDetailViewModel {
             let site = GalleryActionService.siteBaseURL
             let urlStr = "\(site)g/\(gid)/\(token)/"
             debugLog("Fetching detail from: \(urlStr)")
-            let result = try await EhAPI.shared.getGalleryDetail(url: urlStr)
+            let result: GalleryDetail
+            if let fetchDetail { result = try await fetchDetail(urlStr) }
+            else { result = try await EhAPI.shared.getGalleryDetail(url: urlStr) }
+            guard !Task.isCancelled else { return }
 
             // 2) 存入缓存 (对标 Android: EhApplication.getGalleryDetailCache().put(result.gid, result))
             GalleryCache.shared.putDetail(result)
@@ -1031,11 +1055,10 @@ class GalleryDetailViewModel {
 
             // 查询下载状态
             let dlState = await DownloadManager.shared.getTaskState(gid: gid)
-            // Fix B-2: 同时检查服务器收藏和本地收藏
-            let hasLocalFav = (try? EhDatabase.shared.containsLocalFavorite(gid: gid)) ?? false
-
+            guard !Task.isCancelled else { return }
             self.detail = result
-            self.isFavorited = result.isFavorited || hasLocalFav
+            applyFavoriteState(gid: gid, cloud: GalleryCache.shared.getDetail(gid: gid)?.isFavorited ?? result.isFavorited,
+                               readLocal: readLocalFavorite)
             self.displayRating = result.info.rating
             self.downloadState = dlState
             self.isLoading = false
@@ -1048,39 +1071,59 @@ class GalleryDetailViewModel {
             // Fix F3-4: 如果当前正在下载，启动轮询任务监听状态变化
             startDownloadPollingIfNeeded(gid: gid)
         } catch {
+            guard !Task.isCancelled else { return }
             debugLog("Error loading detail: \(error)")
             self.errorMessage = EhError.localizedMessage(for: error)
             self.isLoading = false
         }
     }
 
-    /// Fix B-3: 乐观更新 + API 失败回滚
-    func addFavorite(gid: Int64, token: String, slot: Int) async {
-        self.isFavorited = true  // 乐观更新
-        do {
-            try await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
-            Haptics.success()
-        } catch {
-            self.isFavorited = false  // 回滚
-            self.errorMessage = "收藏失败: \(error.localizedDescription)"
+    private func applyFavoriteState(gid: Int64, cloud: Bool, readLocal: (() throws -> Bool)?) {
+        if let readLocal {
+            favoriteState = GalleryActionService.favoriteState(cloud: cloud, readLocal: readLocal)
+        } else {
+            favoriteState = GalleryActionService.shared.favoriteState(gid: gid, cloud: cloud)
         }
     }
 
-    /// 添加到本地收藏 (对齐 Android FAV_CAT_LOCAL = -1, EhDB.putLocalFavorite)
-    func addLocalFavorite(gallery: GalleryInfo) {
-        GalleryActionService.shared.addLocalFavorite(gallery: gallery)
-        self.isFavorited = true
+    func favoriteDidChange(local: Bool?, cloudSlot: Int?) {
+        if let local { favoriteState.local = local }
+        if let cloudSlot { favoriteState.cloud = cloudSlot >= 0 }
     }
 
-    /// Fix B-3: 乐观更新 + API 失败回滚
-    func removeFavorite(gid: Int64, token: String) async {
-        self.isFavorited = false  // 乐观更新
+    func addFavorite(gid: Int64, token: String, slot: Int) async {
+        guard !favoriteMutationInFlight else { return }
+        favoriteMutationInFlight = true
+        defer { favoriteMutationInFlight = false }
         do {
-            try await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
+            try await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
+            favoriteDidChange(local: nil, cloudSlot: slot)
+            Haptics.success()
+        } catch {
+            // The shared service reports failure without changing the existing heart.
+        }
+    }
+
+    func addLocalFavorite(gallery: GalleryInfo) {
+        guard !favoriteMutationInFlight else { return }
+        if GalleryActionService.shared.addLocalFavorite(gallery: gallery) {
+            favoriteDidChange(local: true, cloudSlot: nil)
+        }
+    }
+
+    func removeFavorite(gid: Int64, token: String) async {
+        guard !favoriteMutationInFlight else { return }
+        favoriteMutationInFlight = true
+        defer { favoriteMutationInFlight = false }
+        do {
+            let location = try await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
+            switch location {
+            case .local: favoriteDidChange(local: false, cloudSlot: nil)
+            case .cloud: favoriteDidChange(local: nil, cloudSlot: -1)
+            }
             Haptics.impact()
         } catch {
-            self.isFavorited = true  // 回滚
-            self.errorMessage = "取消收藏失败: \(error.localizedDescription)"
+            // The shared service reports failure without changing the existing heart.
         }
     }
 

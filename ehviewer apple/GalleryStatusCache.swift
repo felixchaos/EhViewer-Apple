@@ -25,6 +25,7 @@ final class GalleryStatusCache {
 
     private var downloadedGids: Set<Int64> = []
     private var favoritedGids: Set<Int64> = []
+    private var changedCloudSlots: [Int64: Int] = [:]
     private(set) var isLoaded = false
 
     private init() {
@@ -32,11 +33,15 @@ final class GalleryStatusCache {
             forName: .galleryFavoriteChanged, object: nil, queue: .main
         ) { [weak self] note in
             guard let gid = note.userInfo?["gid"] as? Int64 else { return }
-            let favorited = note.userInfo?["favorited"] as? Bool ?? false
+            let local = note.userInfo?["local"] as? Bool
+            let cloudSlot = note.userInfo?["cloudSlot"] as? Int
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if favorited { self.favoritedGids.insert(gid) }
-                else { self.favoritedGids.remove(gid) }
+                if let local {
+                    if local { self.favoritedGids.insert(gid) }
+                    else { self.favoritedGids.remove(gid) }
+                }
+                if let cloudSlot { self.changedCloudSlots[gid] = cloudSlot }
             }
         }
         NotificationCenter.default.addObserver(
@@ -58,7 +63,17 @@ final class GalleryStatusCache {
     /// 已收藏 = 云端收藏夹里有，或本地收藏里有。
     /// 对齐 Android：本地收藏和云端收藏在列表上是同一个心形标记。
     func isFavorited(_ gallery: GalleryInfo) -> Bool {
-        gallery.favoriteSlot >= 0 || favoritedGids.contains(gallery.gid)
+        (changedCloudSlots[gallery.gid] ?? gallery.favoriteSlot) >= 0 || favoritedGids.contains(gallery.gid)
+    }
+
+    func resetCloudState() {
+        changedCloudSlots.removeAll()
+    }
+
+    func reloadLocalFavorites() {
+        if let records = try? EhDatabase.shared.getAllLocalFavorites() {
+            favoritedGids = Set(records.map(\.gid))
+        }
     }
 
     /// App 启动时灌一次。
@@ -67,7 +82,7 @@ final class GalleryStatusCache {
         // 只要建过任务就算「下载过」——半途暂停的也在本地留了页，
         // 列表里标出来比假装没有更有用
         downloadedGids = Set(tasks.map { $0.gallery.gid })
-        favoritedGids = Set((try? EhDatabase.shared.getAllLocalFavorites())?.map(\.gid) ?? [])
+        reloadLocalFavorites()
         isLoaded = true
     }
 }
