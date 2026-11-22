@@ -296,7 +296,7 @@ struct ProfileHomeView: View {
     private var siteStatusText: String {
         let site = AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
         if appState.isSignedIn { return "\(site) · 已登录" }
-        return "\(site) · 登录后可用收藏与配额"
+        return "\(site) · 可本地收藏，登录后使用云端收藏与配额"
     }
 
     private var quotaValueText: String {

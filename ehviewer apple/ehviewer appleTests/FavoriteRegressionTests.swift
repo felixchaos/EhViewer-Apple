@@ -195,3 +195,29 @@ struct FavoriteHeaderRegressionTests {
     }
 }
 #endif
+
+struct FavoriteSlotPickerPurposeTests {
+    @Test func standardPickerStillLetsTheUserRememberOrClearTheDefault() {
+        let picker = FavoriteSlotPickerPurpose.addFavorite
+        #expect(picker.allowsLocalFolder)
+        #expect(picker.allowsRemember)
+        #expect(picker.defaultSlotUpdate(selectedSlot: 3, remember: true) == 3)
+        #expect(picker.defaultSlotUpdate(selectedSlot: -1, remember: true) == -1)
+        #expect(picker.defaultSlotUpdate(selectedSlot: 3, remember: false) == -2)
+    }
+
+    @Test func bulkMoveNeverTouchesTheExistingDefaultOrShowsRemember() {
+        let picker = FavoriteSlotPickerPurpose.moveToCloud
+        #expect(!picker.allowsLocalFolder)
+        #expect(!picker.allowsRemember)
+        #expect(picker.defaultSlotUpdate(selectedSlot: 8, remember: false) == nil)
+        #expect(picker.defaultSlotUpdate(selectedSlot: 8, remember: true) == nil)
+    }
+
+    @Test func cancellingEitherPickerLeavesTheExistingDefaultAlone() {
+        for picker in [FavoriteSlotPickerPurpose.addFavorite, .moveToCloud] {
+            #expect(picker.defaultSlotUpdate(selectedSlot: nil, remember: false) == nil)
+            #expect(picker.defaultSlotUpdate(selectedSlot: nil, remember: true) == nil)
+        }
+    }
+}

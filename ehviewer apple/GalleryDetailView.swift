@@ -1459,11 +1459,25 @@ struct SpritePreviewView: View {
 
 // MARK: - FavoriteSlotPicker (对齐 Android FavoritesActivity 收藏夹选择器)
 
+nonisolated enum FavoriteSlotPickerPurpose: Equatable {
+    case addFavorite
+    case moveToCloud
+
+    var allowsLocalFolder: Bool { self == .addFavorite }
+    var allowsRemember: Bool { self == .addFavorite }
+
+    /// Nil is an intentional no-op (one-off moves and cancellation). The
+    /// standard picker still clears an old default when Remember is off.
+    func defaultSlotUpdate(selectedSlot: Int?, remember: Bool) -> Int? {
+        guard allowsRemember, let selectedSlot else { return nil }
+        return remember ? selectedSlot : -2
+    }
+}
+
 struct FavoriteSlotPicker: View {
     let onSelect: (Int) -> Void
     let onCancel: () -> Void
-    /// 是否显示本地收藏选项 (对齐 Android: slot -1 = 本地收藏)
-    var showLocalOption: Bool = true
+    var purpose: FavoriteSlotPickerPurpose = .addFavorite
 
     /// 「记住这个收藏夹，下次不再询问」。
     ///
@@ -1473,18 +1487,24 @@ struct FavoriteSlotPicker: View {
     /// 我们此前完全没有这个开关，用户每次收藏都要选一遍。
     @State private var remember = false
 
-    private func pick(_ slot: Int) {
-        AppSettings.shared.defaultFavSlot = remember ? slot : -2
-        onSelect(slot)
+    private func finish(_ slot: Int?) {
+        if let update = purpose.defaultSlotUpdate(selectedSlot: slot, remember: remember) {
+            AppSettings.shared.defaultFavSlot = update
+        }
+        if let slot {
+            onSelect(slot)
+        } else {
+            onCancel()
+        }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 // 本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
-                if showLocalOption {
+                if purpose.allowsLocalFolder {
                     Button {
-                        pick(-1)
+                        finish(-1)
                     } label: {
                         HStack {
                             Image(systemName: "internaldrive")
@@ -1499,7 +1519,7 @@ struct FavoriteSlotPicker: View {
                 // 云端收藏 0-9 (对齐 Android favCatArray)
                 ForEach(0..<10) { slot in
                     Button {
-                        pick(slot)
+                        finish(slot)
                     } label: {
                         HStack {
                             Image(systemName: "heart.fill")
@@ -1517,11 +1537,13 @@ struct FavoriteSlotPicker: View {
                     }
                 }
 
-                Section {
-                    Toggle("记住这个收藏夹，下次不再询问", isOn: $remember)
-                        .tint(EhColor.accentFill)
-                } footer: {
-                    Text("之后收藏会直接放进所选收藏夹。可在「我的 → 下载」设置里改回每次询问。")
+                if purpose.allowsRemember {
+                    Section {
+                        Toggle("记住这个收藏夹，下次不再询问", isOn: $remember)
+                            .tint(EhColor.accentFill)
+                    } footer: {
+                        Text("之后收藏会直接放进所选收藏夹。可在「我的」页的设置区打开「收藏」，改回「每次询问」。")
+                    }
                 }
             }
             .navigationTitle("选择收藏夹")
@@ -1530,7 +1552,7 @@ struct FavoriteSlotPicker: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { onCancel() }
+                    Button("取消") { finish(nil) }
                 }
             }
         }

@@ -316,7 +316,7 @@ struct FavoritesView: View {
                     batchMoveToCloud(slot: slot)
                 },
                 onCancel: { showMoveSheet = false },
-                showLocalOption: false
+                purpose: .moveToCloud
             )
             .presentationDetents([.medium])
         }
