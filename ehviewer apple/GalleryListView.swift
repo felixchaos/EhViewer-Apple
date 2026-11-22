@@ -161,6 +161,9 @@ struct GalleryListView: View {
     /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
     /// 但收藏夹模式下搜索应保持在收藏夹内 (对齐 Android: 收藏夹搜索只搜收藏内容)
     private var effectiveMode: ListMode {
+        if case .tag = mode {
+            return .tagRoute(source: mode, submittedQuery: viewModel.submittedTagRouteQuery)
+        }
         if !viewModel.searchText.isEmpty {
             if case .favorites = mode {
                 // 收藏夹下搜索保持在收藏夹模式，搜索关键词通过 searchText 传递给 API
@@ -232,7 +235,7 @@ struct GalleryListView: View {
             if !GalleryStatusCache.shared.isLoaded {
                 await GalleryStatusCache.shared.reload()
             }
-            if case .tag(let keyword) = mode, viewModel.searchText.isEmpty {
+            if case .tag(let keyword) = mode, viewModel.submittedTagRouteQuery == nil, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
             }
             // 搜索页刚建好时，把查询摆回输入框——否则搜索页的输入框是空的，
@@ -1586,6 +1589,8 @@ class GalleryListViewModel {
     var isLoading = false
     var errorMessage: String?
     var searchText = ""
+    // nil means the destination seed is still in effect; "" is an explicit clear.
+    private(set) var submittedTagRouteQuery: String?
     var hasMore = false
     var totalPages = 0 // 总页数 (对齐 Android mHelper.mPages)
     var showGoToDialog = false // 跳页对话框 (页码模式，仅 TopList 使用)
@@ -1820,6 +1825,7 @@ class GalleryListViewModel {
 
     func searchWithAdvanced(_ filters: GalleryListRequest.Filters) {
         searchText = ListUrlBuilder.sanitizeKeyword(searchText)
+        submittedTagRouteQuery = searchText
         if !searchText.isEmpty { addSearchToHistory(searchText) }
         syncAdvancedSettings(filters)
 
@@ -1892,6 +1898,7 @@ class GalleryListViewModel {
 
     func applyQuickSearch(_ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool) {
         searchText = preset.query
+        submittedTagRouteQuery = preset.query
         currentFilters = preset.initialFilters
         galleries = []
         isLoading = true

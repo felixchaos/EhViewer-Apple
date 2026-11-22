@@ -300,3 +300,12 @@ nonisolated struct GalleryListRequest: Sendable {
         return url
     }
 }
+
+extension GalleryListRequest.Source {
+    /// The tag route's displayed seed isn't a free-text submission. Preserve
+    /// its endpoint and identity until the user explicitly applies a query.
+    nonisolated static func tagRoute(source: Self, submittedQuery: String?) -> Self {
+        guard let submittedQuery else { return source }
+        return submittedQuery.isEmpty ? .home : .search(keyword: submittedQuery)
+    }
+}

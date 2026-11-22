@@ -471,3 +471,25 @@ struct GalleryQuickSearchRatingTests {
         #expect(standalone == ["f_search": query, "advsearch": "1"])
     }
 }
+
+struct GalleryTagRouteTests {
+    @Test func seedKeepsNamespacedPathAndPagination() {
+        let tag = GalleryListRequest.Source.tag(keyword: "artist:route fixture")
+        let selected = GalleryListRequest.Source.tagRoute(source: tag, submittedQuery: nil)
+        let request = GalleryListRequest(source: selected)
+        #expect(URLComponents(string: request.pageURL(0, site: .eHentai))?.path == "/tag/artist:route fixture")
+        #expect(URLComponents(string: request.pageURL(2, site: .eHentai))?.path == "/tag/artist:route fixture/2")
+    }
+
+    @Test func explicitSearchAndClearMatchTheirOwnRequestModes() {
+        let tag = GalleryListRequest.Source.tag(keyword: "artist:route fixture")
+        for query in ["artist:route fixture", "some new query"] {
+            let edited = GalleryListRequest.Source.tagRoute(source: tag, submittedQuery: query)
+            #expect(GalleryListRequest(source: edited).pageURL(0, site: .eHentai) ==
+                    GalleryListRequest(source: .search(keyword: query)).pageURL(0, site: .eHentai))
+        }
+        let cleared = GalleryListRequest.Source.tagRoute(source: tag, submittedQuery: "")
+        #expect(GalleryListRequest(source: cleared).pageURL(0, site: .eHentai) ==
+                GalleryListRequest(source: .home).pageURL(0, site: .eHentai))
+    }
+}
