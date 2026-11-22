@@ -400,13 +400,7 @@ struct GalleryListView: View {
                 )
             }
             .sheet(isPresented: $showTagSelector) {
-                TagSelectorView { keyword in
-                    // 选中的标签直接进搜索框成为一枚 token，
-                    // 而不是在选择器里另画一条「预览」——预览是同一信息说两遍
-                    if !searchTokens.contains(keyword) {
-                        searchTokens.append(keyword)
-                    }
-                }
+                TagSelectorView { pickSearchTag($0) }
             }
             .onChange(of: selectedQuickSearch) { _, newValue in
                 if let search = newValue {
@@ -476,11 +470,7 @@ struct GalleryListView: View {
             AdvancedSearchView(state: advancedSearch)
         }
         .sheet(isPresented: $showTagSelector) {
-            TagSelectorView { keyword in
-                if !searchTokens.contains(keyword) {
-                    searchTokens.append(keyword)
-                }
-            }
+            TagSelectorView { pickSearchTag($0) }
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
@@ -725,11 +715,7 @@ struct GalleryListView: View {
             AdvancedSearchView(state: advancedSearch)
         }
         .sheet(isPresented: $showTagSelector) {
-            TagSelectorView { keyword in
-                if !searchTokens.contains(keyword) {
-                    searchTokens.append(keyword)
-                }
-            }
+            TagSelectorView { pickSearchTag($0) }
         }
         .onChange(of: selectedQuickSearch) { _, newValue in
             if let search = newValue {
@@ -856,7 +842,7 @@ struct GalleryListView: View {
     }
 
     private func restoreAppliedSearchField() {
-        setSearchField(lastAppliedField ?? .init(tokens: [], text: ""))
+        setSearchField(.restoredOnCancel(lastAppliedField))
     }
 
     private func clearSearchField() {
@@ -949,10 +935,30 @@ struct GalleryListView: View {
         .init(query: query, savedCategory: savedSearchCategory == nil ? nil : advancedSearch.categoryValue)
     }
 
+    private var searchField: GallerySearchQuery.Field {
+        .init(tokens: searchTokens, text: searchFieldText)
+    }
+
+    private func pickSearchTag(_ tag: String) {
+        if let query = searchField.queryPickingTag(tag, lastApplied: lastAppliedField) {
+            submitSearch(query)
+        }
+    }
+
+    private func pickSearchSuggestion(_ tag: String) {
+        let prefix = EhTagDatabase.extractLastKeyword(from: searchFieldText)?.prefix
+        if let query = searchField.queryPickingSuggestion(tag, lastApplied: lastAppliedField,
+                                                         unfinishedPrefix: prefix) {
+            submitSearch(query)
+        }
+    }
+
     private func submitSearch() {
+        submitSearch(searchField.submittedQuery)
+    }
+
+    private func submitSearch(_ query: String) {
         isSearchFocused = false
-        let field = GallerySearchQuery.Field(tokens: searchTokens, text: searchFieldText)
-        let query = field.submittedQuery
         syncField(from: query)
         if let onSearchSubmit {
             onSearchSubmit(browseSearch(for: query))
@@ -999,12 +1005,7 @@ struct GalleryListView: View {
                 tokens: $searchTokens,
                 suggestions: viewModel.suggestions,
                 history: viewModel.searchHistory,
-                onPickSuggestion: { tag in
-                    // 建议取代了正在打的那段文字：清掉它，否则提交时它会再变成
-                    // 一个 token，同一个标签就出现两遍
-                    searchFieldText = ""
-                    if !searchTokens.contains(tag) { searchTokens.append(tag) }
-                },
+                onPickSuggestion: { pickSearchSuggestion($0) },
                 onClearHistory: { viewModel.clearSearchHistory() },
                 onPickHistory: { term in
                     // Restore the selected query for editing, but submit the

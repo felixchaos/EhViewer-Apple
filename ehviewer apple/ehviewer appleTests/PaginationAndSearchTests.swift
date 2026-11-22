@@ -355,3 +355,60 @@ struct GallerySearchRefillTests {
         #expect(items.first { $0.name == "f_srdd" } == nil)
     }
 }
+
+struct GallerySearchEditingTests {
+    private let qualifiers: Set<String> = ["language", "l", "artist", "a"]
+    private let title = "A title with spaces"
+    private let picked = "artist:\"fixture name$\""
+
+    @Test func suggestionKeepsAppliedTitleAndOnlyReplacesAnUnfinishedDraft() {
+        let applied = GallerySearchQuery.restoredField(title, knownQualifiers: qualifiers)
+        // Restoration can produce suggestions without any edit. The last
+        // word of an unchanged applied title is not a draft to replace.
+        #expect(applied.queryPickingSuggestion(picked, lastApplied: applied,
+                                               unfinishedPrefix: "A title with ") == "\(title) \(picked)")
+        let edited = GallerySearchQuery.Field(tokens: [], text: "\(title) a:fix")
+        #expect(edited.queryPickingSuggestion(picked, lastApplied: applied,
+                                              unfinishedPrefix: "\(title) ") == "\(title) \(picked)")
+        let fresh = GallerySearchQuery.Field(tokens: ["l:chinese"], text: "incomplete draft")
+        #expect(fresh.queryPickingSuggestion(picked, lastApplied: nil,
+                                             unfinishedPrefix: "incomplete ") == "l:chinese \(picked)")
+    }
+
+    @Test func pickerKeepsAppliedTermsBeforeNewTagAndFreshDraftAfterIt() {
+        let base = "language:chinese \(title)"
+        let applied = GallerySearchQuery.restoredField(base, knownQualifiers: qualifiers)
+        #expect(applied.queryPickingTag(picked, lastApplied: applied) == "\(base) \(picked)")
+
+        let edited = GallerySearchQuery.Field(tokens: applied.tokens, text: "\(applied.text) trailing draft")
+        #expect(edited.queryPickingTag(picked, lastApplied: applied) == "\(base) \(picked) trailing draft")
+
+        let fresh = GallerySearchQuery.Field(tokens: ["language:chinese"], text: "trailing draft")
+        #expect(fresh.queryPickingTag(picked, lastApplied: nil) == "language:chinese \(picked) trailing draft")
+
+        let alreadySelected = GallerySearchQuery.restoredField("\(base) \(picked)", knownQualifiers: qualifiers)
+        #expect(alreadySelected.queryPickingTag(picked, lastApplied: alreadySelected) == nil)
+    }
+
+    @Test func deletingASelectedChipKeepsTheTitleAndOtherTermsInOrder() throws {
+        let withoutTitle = GallerySearchQuery.restoredField("language:chinese", knownQualifiers: qualifiers)
+        let selected = try #require(withoutTitle.queryPickingTag(picked, lastApplied: withoutTitle))
+        let applied = GallerySearchQuery.restoredField("\(selected) \(title)", knownQualifiers: qualifiers)
+        #expect(applied.tokens == ["language:chinese", picked])
+        let afterDeletion = GallerySearchQuery.Field(
+            tokens: applied.tokens.filter { $0 != picked }, text: applied.text
+        )
+        #expect(afterDeletion.submittedQuery == "language:chinese \(title)")
+    }
+
+    @Test func cancelRestoresAppliedChipsAndLiteralInsteadOfDraft() {
+        let query = "language:chinese \"\(title)\""
+        let applied = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+        let draft = GallerySearchQuery.Field(tokens: applied.tokens, text: "\(applied.text) a:fix")
+        #expect(draft != applied)
+        let restored = GallerySearchQuery.Field.restoredOnCancel(applied)
+        #expect(restored == applied)
+        #expect(restored.submittedQuery == query)
+        #expect(GallerySearchQuery.Field.restoredOnCancel(nil).submittedQuery.isEmpty)
+    }
+}

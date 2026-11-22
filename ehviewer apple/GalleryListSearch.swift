@@ -22,6 +22,75 @@ nonisolated enum GallerySearchQuery {
         var submittedQuery: String {
             GallerySearchQuery.tokensAfterSubmitting(tokens, text: text).joined(separator: " ")
         }
+
+        static func restoredOnCancel(_ lastApplied: Field?) -> Field {
+            lastApplied ?? .init(tokens: [], text: "")
+        }
+
+        /// A restored literal used to live before newly selected chips. Keep
+        /// that order, but put a truly unsent trailing draft after the new tag,
+        /// just as before the refill change.
+        func queryPickingTag(_ tag: String, lastApplied: Field?) -> String? {
+            guard !tag.isEmpty, !tokens.contains(tag) else { return nil }
+            let applied = lastApplied?.text.trimmingCharacters(in: .whitespaces) ?? ""
+            let literal = text.trimmingCharacters(in: .whitespaces)
+            guard !applied.isEmpty, !literal.isEmpty else {
+                return Field(tokens: tokens + [tag], text: text).submittedQuery
+            }
+
+            let tail = literal.hasPrefix(applied) ? literal.dropFirst(applied.count) : nil
+            if let tail, tail.isEmpty || tail.first?.isWhitespace == true {
+                guard !GallerySearchQuery.containsTerm(tag, in: applied) else { return nil }
+                return Field(tokens: tokens + [applied, tag], text: String(tail)).submittedQuery
+            }
+
+            // An edited literal no longer has a reliable old draft boundary.
+            // Preserve its exact order and append the explicit selection.
+            guard !GallerySearchQuery.containsTerm(tag, in: literal) else { return nil }
+            return Field(tokens: tokens + [literal, tag], text: "").submittedQuery
+        }
+
+        /// The suggestion replaces only the unfinished suffix, never an
+        /// unchanged applied title. A fresh draft keeps the prior chip behavior.
+        func queryPickingSuggestion(_ tag: String, lastApplied: Field?, unfinishedPrefix: String?) -> String? {
+            guard !tag.isEmpty, !tokens.contains(tag) else { return nil }
+            let applied = lastApplied?.text.trimmingCharacters(in: .whitespaces) ?? ""
+            let literal = text.trimmingCharacters(in: .whitespaces)
+            let retained: String
+            if applied.isEmpty {
+                retained = ""
+            } else if literal == applied {
+                retained = literal
+            } else {
+                retained = unfinishedPrefix?.trimmingCharacters(in: .whitespaces) ?? literal
+            }
+
+            guard !GallerySearchQuery.containsTerm(tag, in: retained) else { return nil }
+            let terms = retained.isEmpty ? tokens + [tag] : tokens + [retained, tag]
+            return Field(tokens: terms, text: "").submittedQuery
+        }
+    }
+
+    private static func firstTerm(in text: Substring) -> (end: String.Index, complete: Bool) {
+        var inQuotes = false
+        var end = text.startIndex
+        while end < text.endIndex {
+            let character = text[end]
+            if character.isWhitespace && !inQuotes { break }
+            if character == "\"" { inQuotes.toggle() }
+            text.formIndex(after: &end)
+        }
+        return (end, !inQuotes)
+    }
+
+    private static func containsTerm(_ tag: String, in query: String) -> Bool {
+        var rest = query[...]
+        while !rest.isEmpty {
+            let (end, _) = firstTerm(in: rest)
+            if rest[..<end] == tag { return true }
+            rest = rest[end...].drop(while: \.isWhitespace)
+        }
+        return false
     }
 
     /// The editor's chips always precede its text. Promote only the leading
@@ -31,16 +100,9 @@ nonisolated enum GallerySearchQuery {
         var tokens: [String] = []
         var rest = query[...]
         while !rest.isEmpty {
-            var inQuotes = false
-            var end = rest.startIndex
-            while end < rest.endIndex {
-                let character = rest[end]
-                if character.isWhitespace && !inQuotes { break }
-                if character == "\"" { inQuotes.toggle() }
-                rest.formIndex(after: &end)
-            }
+            let (end, complete) = firstTerm(in: rest)
             let term = rest[..<end]
-            guard !inQuotes, let colon = term.firstIndex(of: ":"),
+            guard complete, let colon = term.firstIndex(of: ":"),
                   knownQualifiers.contains(term[..<colon].lowercased()),
                   term.index(after: colon) < term.endIndex else { break }
             if end == rest.endIndex {
