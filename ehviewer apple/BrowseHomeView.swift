@@ -43,7 +43,7 @@ struct BrowseHomeView: View {
     /// 排行榜的时间范围（toplist.php 的 tl）。默认全部时间。
     @State private var toplistPeriod = 15
     /// 搜索页的查询。由 GalleryListView 提交上来，数据源随之切到 .search。
-    @State private var searchQuery = ""
+    @State private var search = GalleryBrowseSearch(query: "")
 
     init(initial: BrowseSource = .home) {
         _source = State(initialValue: initial)
@@ -53,17 +53,24 @@ struct BrowseHomeView: View {
         // 切页条由 GalleryListView 渲染在自己的搜索栏下方，
         // 这样「搜索 → 切页 → 列表」的纵向顺序与设计稿一致。
         GalleryListView(
-            mode: source.listMode(toplistPeriod: toplistPeriod, searchQuery: searchQuery),
+            mode: source.listMode(toplistPeriod: toplistPeriod, searchQuery: search.query),
             browseSource: $source,
             toplistPeriod: source == .toplist ? $toplistPeriod : nil,
-            onSearchSubmit: { query in
+            initialBrowseSearch: source == .search ? search : nil,
+            onSearchSubmit: { submitted in
                 // 提交搜索就切到搜索页。空查询表示清空，退回首页。
-                searchQuery = query
-                source = query.isEmpty ? .home : .search
+                search = submitted
+                source = submitted.query.isEmpty ? .home : .search
             }
         )
         // 数据源、时间范围或查询变了就重建：每个源有各自的分页游标与筛选条件，
         // 复用同一个 ViewModel 会把上一个源的游标带到下一个源。
-        .id("\(source.rawValue)-\(source == .toplist ? toplistPeriod : 0)-\(searchQuery)")
+        .id(ListIdentity(source: source, period: source == .toplist ? toplistPeriod : 0, search: search))
+    }
+
+    private struct ListIdentity: Hashable {
+        let source: BrowseSource
+        let period: Int
+        let search: GalleryBrowseSearch
     }
 }

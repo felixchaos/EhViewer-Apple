@@ -74,7 +74,9 @@ struct GalleryListView: View {
     private var toplistPeriod: Binding<Int>?
     /// 提交搜索时交给父容器处理（切到独立的搜索页），而不是就地把
     /// 当前数据源变成搜索结果。只有浏览容器会传它。
-    private var onSearchSubmit: ((String) -> Void)?
+    private var onSearchSubmit: ((GalleryBrowseSearch) -> Void)?
+    /// Non-nil only when entering via a preset with a persisted category.
+    private var savedSearchCategory: Int?
 
     static let toplistPeriods: [(tl: Int, title: String)] = [
         (15, "全部时间"), (13, "过去一年"), (12, "过去一月"), (11, "昨天"),
@@ -101,9 +103,16 @@ struct GalleryListView: View {
 
     /// 浏览容器的根列表 — 在搜索栏下方带出顶部切页条
     init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil,
-         onSearchSubmit: ((String) -> Void)? = nil) {
+         initialBrowseSearch: GalleryBrowseSearch? = nil, onSearchSubmit: ((GalleryBrowseSearch) -> Void)? = nil) {
         self.toplistPeriod = toplistPeriod
         self.onSearchSubmit = onSearchSubmit
+        self.savedSearchCategory = initialBrowseSearch?.savedCategory
+        if let initialBrowseSearch, let category = initialBrowseSearch.savedCategory {
+            let state = AdvancedSearchState()
+            state.selectedCategories = category
+            _advancedSearch = State(initialValue: state)
+            _viewModel = State(initialValue: GalleryListViewModel(initialFilters: initialBrowseSearch.initialFilters))
+        }
         self.mode = mode
         self.externalSelection = nil
         self.browseSource = browseSource
@@ -228,7 +237,7 @@ struct GalleryListView: View {
             }
             // 搜索页刚建好时，把查询摆回输入框——否则搜索页的输入框是空的，
             // 用户看不到自己搜的是什么，也没法在此基础上增删条件
-            if case .search(let keyword) = mode, searchTokens.isEmpty, !keyword.isEmpty {
+            if case .search(let keyword) = mode, lastAppliedField == nil, !keyword.isEmpty {
                 syncField(from: keyword)
             }
 
@@ -762,9 +771,14 @@ struct GalleryListView: View {
     /// 同一个标签的文字」的重复显示。
     @State private var searchFieldText = ""
 
-    /// 正在把外部查询回填进输入框。回填期间要挡住 token 变化触发的重搜，
-    /// 否则会把快速搜索自带的分类/评分条件冲掉，还白跑一次网络。
-    @State private var isSyncingField = false
+    /// Ignore only the exact chip update written by a refill or explicit action.
+    @State private var programmaticTokens: [String]?
+    @State private var lastAppliedField: GallerySearchQuery.Field?
+
+    private static let searchQualifiers = Set(EhTagDatabase.namespaceToPrefix.keys)
+        .union(EhTagDatabase.prefixToNamespace.keys.compactMap { key in
+            key.hasSuffix(":") ? String(key.dropLast()) : nil
+        })
 
     /// 等待选择收藏夹的画廊（没有设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
@@ -781,15 +795,18 @@ struct GalleryListView: View {
             // 右侧不再放小图标：15pt 的点按目标远低于 HIG 的 44pt，手机上按不中。
             // 标签选择器、高级搜索、快速搜索都移进聚焦面板，那里有整行宽度。
             trailingButtons: [],
-            onSubmit: { submitSearch() }
+            onSubmit: { submitSearch() },
+            onClear: { clearSearchField() },
+            onCancel: { restoreAppliedSearchField() }
         )
         .onChange(of: searchFieldText) { _, text in
             viewModel.updateSuggestions(for: text)
         }
-        .onChange(of: searchTokens) { _, _ in
-            guard !isSyncingField else { return }
-            // token 变了就重搜：删掉一个标签本身就是一次条件变更
-            submitSearch()
+        .onChange(of: searchTokens) { _, tokens in
+            let isProgrammatic = programmaticTokens == tokens
+            programmaticTokens = nil
+            // A user chip deletion still submits; a presentation refill does not.
+            if !isProgrammatic { submitSearch() }
         }
         // 外部改了查询就回填到输入框。
         //
@@ -816,13 +833,35 @@ struct GalleryListView: View {
         GallerySearchQuery.fieldQuery(tokens: searchTokens, text: searchFieldText)
     }
 
-    /// 把一条查询摆进输入框，拆成 token 显示
+    private func setSearchField(_ field: GallerySearchQuery.Field) {
+        if searchTokens != field.tokens {
+            programmaticTokens = field.tokens
+            searchTokens = field.tokens
+        } else if programmaticTokens != field.tokens {
+            programmaticTokens = nil
+        }
+        searchFieldText = field.text
+    }
+
+    /// Refill controls without submitting or altering the ordered wire query.
     private func syncField(from query: String) {
-        isSyncingField = true
-        searchTokens = GallerySearchQuery.split(query)
-        searchFieldText = ""
-        // 下一个 runloop 再解锁：onChange(searchTokens) 是在本次更新之后才跑的
-        DispatchQueue.main.async { isSyncingField = false }
+        #if os(iOS)
+        let field = GallerySearchQuery.restoredField(query, knownQualifiers: Self.searchQualifiers)
+        #else
+        // The macOS editor is a text field, not a chip field.
+        let field = GallerySearchQuery.restoredField(query)
+        #endif
+        lastAppliedField = field
+        setSearchField(field)
+    }
+
+    private func restoreAppliedSearchField() {
+        setSearchField(lastAppliedField ?? .init(tokens: [], text: ""))
+    }
+
+    private func clearSearchField() {
+        setSearchField(.init(tokens: [], text: ""))
+        submitSearch()
     }
 
     /// 这一本收藏过没有。云端收藏夹或本地收藏都算。
@@ -862,22 +901,29 @@ struct GalleryListView: View {
     /// 快速搜索。在浏览容器里同样要切到搜索页，
     /// 而不是把当前这一页原地变成搜索结果。
     private func applyQuickSearch(_ search: QuickSearchRecord) {
-        if let onSearchSubmit, let keyword = search.keyword, !keyword.isEmpty {
-            onSearchSubmit(keyword)
+        guard let keyword = search.keyword, !keyword.isEmpty else { return }
+        if let onSearchSubmit {
+            onSearchSubmit(.init(query: keyword, savedCategory: search.category))
         } else {
+            syncField(from: keyword)
             viewModel.applyQuickSearch(search)
         }
     }
 
     private func searchTag(_ tag: String) {
         let quoted = Self.exactTagQuery(for: tag)
-        searchTokens = [quoted]
-        searchFieldText = ""
+        #if os(iOS)
+        let field = GallerySearchQuery.Field(tokens: [quoted], text: "")
+        #else
+        let field = GallerySearchQuery.Field(tokens: [], text: quoted)
+        #endif
+        lastAppliedField = field
+        setSearchField(field)
         isSearchFocused = false
         // 和手动提交走同一条路：在浏览容器里要切到搜索页，
         // 否则点个标签就把「热门」变成了搜索结果
         if let onSearchSubmit {
-            onSearchSubmit(quoted)
+            onSearchSubmit(browseSearch(for: quoted))
         } else {
             viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
         }
@@ -897,22 +943,19 @@ struct GalleryListView: View {
         }
     }
 
-    /// 提交搜索。
-    ///
-    /// token 与自由文本在**提交时**才合并，不写回 viewModel.searchText——
-    /// 写回去会让同一个标签既显示为 token 又显示为文字（搜索框里出现
-    /// 「bdsm」胶囊后面还跟着 f:bdsm$ 这样的重复）。
+    /// Only a saved category crosses the browse route; ordinary search keeps
+    /// its previous request behavior and the existing advanced form rules.
+    private func browseSearch(for query: String) -> GalleryBrowseSearch {
+        .init(query: query, savedCategory: savedSearchCategory == nil ? nil : advancedSearch.categoryValue)
+    }
+
     private func submitSearch() {
         isSearchFocused = false
-        // Retain the submitted text as one token, including any inner spaces.
-        let submitted = GallerySearchQuery.tokensAfterSubmitting(searchTokens, text: searchFieldText)
-        if submitted != searchTokens { searchTokens = submitted }
-        searchFieldText = ""
-
-        let query = searchTokens.joined(separator: " ")
+        let field = GallerySearchQuery.Field(tokens: searchTokens, text: searchFieldText)
+        let query = field.submittedQuery
+        syncField(from: query)
         if let onSearchSubmit {
-            // 交给浏览容器切到搜索页；这一份列表随之被重建
-            onSearchSubmit(query)
+            onSearchSubmit(browseSearch(for: query))
         } else {
             viewModel.performSearch(query: query, filters: advancedSearch.appliedListFilters)
         }
@@ -964,10 +1007,9 @@ struct GalleryListView: View {
                 },
                 onClearHistory: { viewModel.clearSearchHistory() },
                 onPickHistory: { term in
-                    // 历史条目本身就是一条完整查询，直接提交，
-                    // 不塞进输入框再拼一次
-                    searchFieldText = ""
-                    searchTokens = []
+                    // Restore the selected query for editing, but submit the
+                    // original term exactly once rather than rebuilding it.
+                    syncField(from: term)
                     isSearchFocused = false
                     viewModel.performSearch(query: term, filters: advancedSearch.appliedListFilters)
                 },
@@ -1472,9 +1514,11 @@ class GalleryListViewModel {
     @ObservationIgnored private let listRequest: ((String) async throws -> GalleryListResult)?
 
     init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil,
-         listRequest: ((String) async throws -> GalleryListResult)? = nil) {
+         listRequest: ((String) async throws -> GalleryListResult)? = nil,
+         initialFilters: GalleryListRequest.Filters = .init()) {
         self.filterGalleries = filterGalleries ?? { GalleryFilterEngine.shared.apply(to: &$0) }
         self.listRequest = listRequest
+        self.currentFilters = initialFilters
     }
 
     private func requestGalleryList(_ url: String) async throws -> GalleryListResult {

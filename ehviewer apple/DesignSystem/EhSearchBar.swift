@@ -43,6 +43,8 @@ struct EhSearchBar: View {
     /// 右侧附加按钮（标签选择器、高级搜索等）。聚焦时让位给「取消」。
     var trailingButtons: [(symbol: String, action: () -> Void)] = []
     var onSubmit: () -> Void = {}
+    var onClear: (() -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
 
     #if !os(iOS)
     @FocusState private var macFocus: Bool
@@ -75,8 +77,11 @@ struct EhSearchBar: View {
 
                 if !text.isEmpty || !tokens.isEmpty {
                     Button {
-                        text = ""
-                        tokens = []
+                        if let onClear { onClear() }
+                        else {
+                            text = ""
+                            tokens = []
+                        }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 15))
@@ -112,7 +117,8 @@ struct EhSearchBar: View {
             if showsCancelButton && isFocused {
                 Button("取消") {
                     isFocused = false
-                    text = ""
+                    if let onCancel { onCancel() }
+                    else { text = "" }
                 }
                 .font(EhFont.body)
                 .foregroundStyle(EhColor.accent)

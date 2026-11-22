@@ -15,24 +15,45 @@ nonisolated enum GallerySearchQuery {
         return tokens + [typed]
     }
 
-    /// The existing token format splits only unquoted spaces; the quoted text
-    /// and any initial namespace are retained verbatim.
-    static func split(_ query: String) -> [String] {
-        var tokens: [String] = []
-        var current = ""
-        var inQuotes = false
-        for character in query {
-            if character == "\"" {
-                inQuotes.toggle()
-                current.append(character)
-            } else if character == " " && !inQuotes {
-                if !current.isEmpty { tokens.append(current); current = "" }
-            } else {
-                current.append(character)
-            }
+    nonisolated struct Field: Equatable {
+        let tokens: [String]
+        let text: String
+
+        var submittedQuery: String {
+            GallerySearchQuery.tokensAfterSubmitting(tokens, text: text).joined(separator: " ")
         }
-        if !current.isEmpty { tokens.append(current) }
-        return tokens
+    }
+
+    /// The editor's chips always precede its text. Promote only the leading
+    /// recognized qualifiers and leave the suffix untouched. A token after
+    /// plain text, an unfinished quote, or an unusual separator stays literal.
+    static func restoredField(_ query: String, knownQualifiers: Set<String> = []) -> Field {
+        var tokens: [String] = []
+        var rest = query[...]
+        while !rest.isEmpty {
+            var inQuotes = false
+            var end = rest.startIndex
+            while end < rest.endIndex {
+                let character = rest[end]
+                if character.isWhitespace && !inQuotes { break }
+                if character == "\"" { inQuotes.toggle() }
+                rest.formIndex(after: &end)
+            }
+            let term = rest[..<end]
+            guard !inQuotes, let colon = term.firstIndex(of: ":"),
+                  knownQualifiers.contains(term[..<colon].lowercased()),
+                  term.index(after: colon) < term.endIndex else { break }
+            if end == rest.endIndex {
+                tokens.append(String(term))
+                rest = rest[end...]
+                break
+            }
+            let next = rest.index(after: end)
+            guard rest[end] == " ", next < rest.endIndex, !rest[next].isWhitespace else { break }
+            tokens.append(String(term))
+            rest = rest[next...]
+        }
+        return Field(tokens: tokens, text: String(rest))
     }
 
     static func exactTag(_ tag: String) -> String {
@@ -41,6 +62,28 @@ nonisolated enum GallerySearchQuery {
         let value = String(tag[tag.index(after: colon)...])
         guard !namespace.isEmpty, !value.isEmpty else { return "\"\(tag)$\"" }
         return "\(namespace):\"\(value)$\""
+    }
+}
+
+/// Category is the only non-default filter written by the current Quick Search
+/// editor. A missing, invalid, or all-selected mask keeps the original request.
+nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
+    let query: String
+    let savedCategory: Int?
+
+    var initialFilters: GalleryListRequest.Filters {
+        .init(category: savedCategory ?? 0)
+    }
+
+    init(query: String, savedCategory: Int? = nil) {
+        self.query = query
+        let all = EhCategory.all.rawValue
+        if !query.isEmpty, let savedCategory, savedCategory > 0,
+           savedCategory != all, (savedCategory & ~all) == 0 {
+            self.savedCategory = savedCategory
+        } else {
+            self.savedCategory = nil
+        }
     }
 }
 

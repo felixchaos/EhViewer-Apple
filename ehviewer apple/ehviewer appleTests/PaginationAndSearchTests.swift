@@ -175,7 +175,6 @@ struct GalleryListRequestTests {
         #expect(GallerySearchQuery.exactTag("plain fixture") == "\"plain fixture$\"")
         #expect(GallerySearchQuery.exactTag(":x") == "\":x$\"")
         #expect(GallerySearchQuery.exactTag("x:") == "\"x:$\"")
-        #expect(GallerySearchQuery.split("  \(tag)   translated ") == [tag, "translated"])
         #expect(GallerySearchQuery.fieldQuery(tokens: [tag], text: "  A title with spaces ") == "\(tag) A title with spaces")
         #expect(GallerySearchQuery.tokensAfterSubmitting([tag], text: "  A title with spaces ") == [tag, "A title with spaces"])
         #expect(GallerySearchQuery.tokensAfterSubmitting([tag], text: " \(tag) ") == [tag])
@@ -235,5 +234,124 @@ struct GalleryListRequestTests {
         #expect(updated.cacheKey(page: 0) == "home:1|2|3|5|-1--1:0")
         #expect(old.pageURL(0, site: .eHentai).contains("f_srdd=4"))
         #expect(updated.pageURL(0, site: .eHentai).contains("f_srdd=5"))
+    }
+}
+
+struct GallerySearchRefillTests {
+    private let qualifiers: Set<String> = ["language", "l", "artist", "a"]
+
+    @Test func multiwordAndExplicitQuotesStayInPlainText() {
+        for query in ["A title with spaces", "\"A title with spaces\"", "title:A title with spaces"] {
+            let restored = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+            #expect(restored.tokens.isEmpty)
+            #expect(restored.text == query)
+            #expect(restored.submittedQuery == query)
+        }
+    }
+
+    @Test func leadingQualifiedTagsStayChipsWithoutChangingOrderedText() {
+        let tags = ["language:\"synthetic phrase$\"", "a:fixture"]
+        let title = "A title with spaces"
+        let query = (tags + [title]).joined(separator: " ")
+        let restored = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+        #expect(restored.tokens == tags)
+        #expect(restored.text == title)
+        #expect(restored.submittedQuery == query)
+        let afterDeletion = GallerySearchQuery.Field(tokens: [tags[1]], text: restored.text)
+        #expect(afterDeletion.submittedQuery == "\(tags[1]) \(title)")
+
+        let desktop = GallerySearchQuery.restoredField(query)
+        #expect(desktop.tokens.isEmpty)
+        #expect(desktop.text == query)
+        #expect(desktop.submittedQuery == query)
+    }
+
+    @Test func interleavedUnknownAndUnfinishedTermsStayLiteral() {
+        for query in [
+            "A title language:chinese",
+            "https://example.invalid A title",
+            "language:\"unfinished quote",
+            "language:chinese  A title",
+            "language:chinese\tA title",
+        ] {
+            let restored = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+            #expect(restored.tokens.isEmpty)
+            #expect(restored.text == query)
+            #expect(restored.submittedQuery == query)
+        }
+
+        let suffix = "A title l:english"
+        let query = "language:chinese \(suffix)"
+        let restored = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+        #expect(restored.tokens == ["language:chinese"])
+        #expect(restored.text == suffix)
+        #expect(restored.submittedQuery == query)
+    }
+
+    @Test func advancedRequestRetainsDecodedQueryAndFiltersAfterRefill() throws {
+        let query = "language:chinese \"A title with spaces\""
+        let restored = GallerySearchQuery.restoredField(query, knownQualifiers: qualifiers)
+        let filters = GalleryListRequest.Filters(
+            category: EhCategory.manga.rawValue, advanceSearch: 0x003,
+            minRating: 4, pageFrom: 8, pageTo: 30
+        )
+        let baseline = GalleryListRequest(source: .search(keyword: query), filters: filters)
+        let replayed = GalleryListRequest(source: .search(keyword: restored.submittedQuery), filters: filters)
+        let original = try #require(URLComponents(string: baseline.pageURL(0, site: .eHentai)))
+        let replay = try #require(URLComponents(string: replayed.pageURL(0, site: .eHentai)))
+        let expected = try #require(original.queryItems)
+        let parts = try #require(replay.queryItems)
+        #expect(parts == expected)
+        #expect(parts.first { $0.name == "f_search" }?.value == query)
+        #expect(parts.first { $0.name == "f_srdd" }?.value == "4")
+        #expect(parts.first { $0.name == "f_spf" }?.value == "8")
+        #expect(parts.first { $0.name == "f_spt" }?.value == "30")
+    }
+
+    @Test func persistedQuickSearchCategoryChangesOnlyTheCategoryRequestItem() throws {
+        let query = "A title language:chinese"
+        let category = EhCategory.manga.rawValue
+        let saved = GalleryBrowseSearch(query: query, savedCategory: category)
+        let unfiltered = GalleryBrowseSearch(query: query)
+        #expect(saved != unfiltered)
+        #expect(saved.savedCategory == category)
+        let original = GalleryListRequest(source: .search(keyword: query), filters: unfiltered.initialFilters)
+        let selected = GalleryListRequest(source: .search(keyword: saved.query), filters: saved.initialFilters)
+        let baseline = try #require(URLComponents(string: original.pageURL(0, site: .eHentai))?.queryItems)
+        let actual = try #require(URLComponents(string: selected.pageURL(0, site: .eHentai))?.queryItems)
+        let excluded = EhCategory.all.rawValue & ~category
+        #expect(actual.first { $0.name == "f_cats" }?.value == String(excluded))
+        #expect(actual.filter { $0.name != "f_cats" } == baseline)
+        #expect(selected.cacheKey(page: 0) != original.cacheKey(page: 0))
+
+        for raw in [0, -1, EhCategory.all.rawValue, 1 << 16] {
+            let generic = GalleryBrowseSearch(query: query, savedCategory: raw)
+            #expect(generic == unfiltered)
+            let request = GalleryListRequest(source: .search(keyword: generic.query), filters: generic.initialFilters)
+            #expect(request.pageURL(0, site: .eHentai) == original.pageURL(0, site: .eHentai))
+        }
+        #expect(GalleryBrowseSearch(query: "", savedCategory: category).savedCategory == nil)
+    }
+
+    @Test @MainActor func restoredSavedCategoryReachesInjectedListRequest() async throws {
+        let category = EhCategory.manga.rawValue
+        let query = "language:chinese A title with spaces"
+        let saved = GalleryBrowseSearch(query: query, savedCategory: category)
+        var capturedURL: String?
+        let model = GalleryListViewModel(
+            filterGalleries: { _ in 0 },
+            listRequest: { url in
+                capturedURL = url
+                return GalleryListResult()
+            },
+            initialFilters: saved.initialFilters
+        )
+        await model.refreshAsync(mode: .search(keyword: saved.query))
+
+        let url = try #require(capturedURL)
+        let items = try #require(URLComponents(string: url)?.queryItems)
+        #expect(items.first { $0.name == "f_search" }?.value == query)
+        #expect(items.first { $0.name == "f_cats" }?.value == String(EhCategory.all.rawValue & ~category))
+        #expect(items.first { $0.name == "f_srdd" } == nil)
     }
 }
