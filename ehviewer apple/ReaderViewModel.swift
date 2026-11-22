@@ -131,7 +131,13 @@ class ReaderViewModel {
 
     // MARK: - Page State
 
-    var currentPage: Int = 0
+    var currentPage: Int = 0 {
+        didSet {
+            if currentPage != oldValue { pageSelectionGeneration &+= 1 }
+        }
+    }
+    @ObservationIgnored private var pageSelectionGeneration: UInt64 = 0
+    @ObservationIgnored private var pageMaintenanceGeneration: UInt64 = 0
     var totalPages: Int = 0
     var gid: Int64 = 0
     var token: String = ""
@@ -827,47 +833,91 @@ class ReaderViewModel {
 
     // MARK: - Page Loading
 
-    func loadCurrentPage() async {
-        await loadPage(currentPage)
-        await downloadImageData(currentPage)
-
-        preloadTask?.cancel()
-        preloadTask = Task { [weak self] in
-            guard let self else { return }
-            await self.preload(around: self.currentPage)
-        }
+    private struct PageMaintenanceOwner {
+        let page: Int
+        let session: UInt64
+        let selection: UInt64
+        let generation: UInt64
     }
 
-    func onPageChange(_ page: Int) async {
-        // 更新 spread 索引
-        let spreadIdx = spreadIndex(for: page)
-        if spreadIdx != currentSpreadIndex {
-            await MainActor.run { self.currentSpreadIndex = spreadIdx }
-        }
+    private func claimPageMaintenance(_ page: Int) -> PageMaintenanceOwner? {
+        // A queued callback must not reclaim work for a page that is no longer selected.
+        guard page == currentPage, !Task.isCancelled else { return nil }
+        pageMaintenanceGeneration &+= 1
+        return PageMaintenanceOwner(
+            page: page, session: readerImageSession, selection: pageSelectionGeneration,
+            generation: pageMaintenanceGeneration
+        )
+    }
 
-        await loadPage(page)
-        await downloadImageData(page)
+    private func canLoadForPageSelection(_ owner: PageMaintenanceOwner) -> Bool {
+        !Task.isCancelled && owner.page == currentPage && owner.session == readerImageSession
+            && owner.selection == pageSelectionGeneration
+    }
+
+    private func ownsPageMaintenance(_ owner: PageMaintenanceOwner) -> Bool {
+        canLoadForPageSelection(owner) && owner.generation == pageMaintenanceGeneration
+    }
+
+    private func loadPageForSelection(
+        _ page: Int, owner: PageMaintenanceOwner,
+        resolve: ((Int) async -> Void)? = nil, load: ((Int) async -> Void)? = nil
+    ) async {
+        if let resolve { await resolve(page) }
+        else if load == nil { await loadPage(page) }
+        // A duplicate callback for the same selection may skip an already
+        // in-flight URL lookup; its original caller must still start the bytes.
+        guard canLoadForPageSelection(owner) else { return }
+        if let load { await load(page) }
+        else { await downloadImageData(page) }
+    }
+
+    func loadCurrentPage() async {
+        guard let owner = claimPageMaintenance(currentPage) else { return }
+        await loadPageForSelection(owner.page, owner: owner)
+        guard ownsPageMaintenance(owner) else { return }
+        schedulePagePreload(owner)
+    }
+
+    func onPageChange(
+        _ page: Int, resolve: ((Int) async -> Void)? = nil,
+        load: ((Int) async -> Void)? = nil, prefetch: ((Int) async -> Void)? = nil
+    ) async {
+        guard let owner = claimPageMaintenance(page) else { return }
+        let spreadIdx = spreadIndex(for: page)
+        if spreadIdx != currentSpreadIndex { currentSpreadIndex = spreadIdx }
+
+        await loadPageForSelection(page, owner: owner, resolve: resolve, load: load)
+        guard canLoadForPageSelection(owner) else { return }
 
         // 双页模式下同时加载副页
         if isDoublePageEnabled, spreadIdx < spreads.count {
             let spread = spreads[spreadIdx]
             for p in spread.pages where p != page {
-                await loadPage(p)
-                await downloadImageData(p)
+                await loadPageForSelection(p, owner: owner, resolve: resolve, load: load)
+                guard canLoadForPageSelection(owner) else { return }
             }
         }
 
-        // 释放远处页面
+        guard ownsPageMaintenance(owner) else { return }
         evictDistantPages(from: page)
+        schedulePagePreload(owner, prefetch: prefetch)
+    }
 
-        // 预加载不阻塞翻页: 原先 await preload 会把整个 TaskGroup 等完
-        // (默认 5 页 = 6 次网络往返)，翻页手势要等它结束才算完成，大画廊尤其明显。
-        // 改为后台推进，并在下次翻页时取消上一次未完成的预加载。
+    private func schedulePagePreload(_ owner: PageMaintenanceOwner, prefetch: ((Int) async -> Void)? = nil) {
         preloadTask?.cancel()
         preloadTask = Task { [weak self] in
-            await self?.preload(around: page)
+            guard let self, self.ownsPageMaintenance(owner) else { return }
+            if let prefetch { await prefetch(owner.page) }
+            else { await self.preload(around: owner.page) }
         }
     }
+
+    #if DEBUG
+    func waitForScheduledPrefetchInTests() async {
+        await preloadTask?.value
+    }
+    #endif
 
     /// 下载图片数据到 NSCache，带进度追踪
     /// 下载某一页。**同一页同时只会有一个真正的下载在跑**，重复调用是等它。

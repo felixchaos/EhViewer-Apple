@@ -911,3 +911,115 @@ struct ReaderPageResolverOwnershipTests {
         #expect(vm.imageURLs[2]?.hasSuffix("/s/cccc/\(gid)-3") == true)
     }
 }
+
+#if DEBUG
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReaderNavigationMaintenanceTests {
+    @Test func suspendedSpreadCannotEvictCurrentPairOrCancelItsPreload() async {
+        let vm = ReaderViewModel()
+        vm.totalPages = 120
+        vm.updateLayout(screenWidth: 1024, screenHeight: 768)
+        vm.currentPage = 3
+        let oldLoad = HeldReaderCacheLookup()
+        let newestPrefetch = HeldReaderCacheLookup()
+        var preloadAnchors: [Int] = []
+        var newestCancelled: Bool?
+
+        let first = Task {
+            await vm.onPageChange(3, load: { page in
+                if page == 3 { _ = await oldLoad.read() }
+            }, prefetch: { preloadAnchors.append($0) })
+        }
+        await oldLoad.waitUntilStarted()
+        vm.currentPage = 83
+        await vm.onPageChange(83, load: { page in
+            vm.cachedImages[page] = PlatformImage()
+        }, prefetch: { page in
+            preloadAnchors.append(page)
+            _ = await newestPrefetch.read()
+            newestCancelled = Task.isCancelled
+        })
+        await newestPrefetch.waitUntilStarted()
+        #expect(vm.cachedImages[83] != nil && vm.cachedImages[84] != nil)
+
+        await oldLoad.finish()
+        await first.value
+        #expect(vm.currentPage == 83)
+        #expect(vm.cachedImages[83] != nil && vm.cachedImages[84] != nil)
+        #expect(preloadAnchors == [83])
+        await newestPrefetch.finish()
+        // The prefetch task records cancellation only after leaving the fixture.
+        // Give it a deterministic completion handshake before asserting.
+        await vm.waitForScheduledPrefetchInTests()
+        #expect(newestCancelled == false)
+    }
+
+    @Test func duplicateCurrentSelectionDoesNotStrandItsResolvingSecondary() async {
+        let vm = ReaderViewModel()
+        vm.totalPages = 120
+        vm.updateLayout(screenWidth: 1024, screenHeight: 768)
+        vm.currentPage = 83
+        let secondaryHTML = HeldReaderCacheLookup()
+        var resolvingSecondary = false
+        var secondaryURLReady = false
+        var loadedSecondary = 0
+        var prefetchOwners: [String] = []
+        let resolve: (Int) async -> Void = { page in
+            guard page == 84, !resolvingSecondary else { return }
+            resolvingSecondary = true
+            _ = await secondaryHTML.read()
+            secondaryURLReady = true
+        }
+        let load: (Int) async -> Void = { page in
+            if page == 84 {
+                guard secondaryURLReady else { return }
+                loadedSecondary += 1
+            }
+            vm.cachedImages[page] = PlatformImage()
+        }
+
+        let first = Task {
+            await vm.onPageChange(83, resolve: resolve, load: load,
+                                  prefetch: { _ in prefetchOwners.append("first") })
+        }
+        await secondaryHTML.waitUntilStarted()
+        await vm.onPageChange(83, resolve: resolve, load: load,
+                              prefetch: { _ in prefetchOwners.append("duplicate") })
+        await vm.waitForScheduledPrefetchInTests()
+        #expect(vm.cachedImages[83] != nil && vm.cachedImages[84] == nil)
+        #expect(prefetchOwners == ["duplicate"])
+
+        await secondaryHTML.finish()
+        await first.value
+        await vm.waitForScheduledPrefetchInTests()
+        #expect(vm.cachedImages[84] != nil)
+        #expect(loadedSecondary == 1)
+        #expect(prefetchOwners == ["duplicate"])
+    }
+
+    @Test func returningToSamePageDoesNotReviveOlderMaintenance() async {
+        let vm = ReaderViewModel()
+        vm.totalPages = 120
+        vm.currentPage = 3
+        let oldLoad = HeldReaderCacheLookup()
+        var preloadAnchors: [Int] = []
+        let old = Task {
+            await vm.onPageChange(3, load: { _ in _ = await oldLoad.read() },
+                                  prefetch: { preloadAnchors.append($0) })
+        }
+        await oldLoad.waitUntilStarted()
+        vm.currentPage = 83
+        vm.currentPage = 3
+        // Re-selecting the same page already supersedes old work, even before the
+        // new callback is scheduled on the actor.
+        await oldLoad.finish()
+        await old.value
+        await vm.waitForScheduledPrefetchInTests()
+        #expect(preloadAnchors.isEmpty)
+        await vm.onPageChange(3, load: { _ in }, prefetch: { preloadAnchors.append($0) })
+        await vm.waitForScheduledPrefetchInTests()
+        #expect(preloadAnchors == [3])
+    }
+}
+#endif
