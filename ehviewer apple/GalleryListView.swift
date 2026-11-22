@@ -75,8 +75,8 @@ struct GalleryListView: View {
     /// 提交搜索时交给父容器处理（切到独立的搜索页），而不是就地把
     /// 当前数据源变成搜索结果。只有浏览容器会传它。
     private var onSearchSubmit: ((GalleryBrowseSearch) -> Void)?
-    /// Non-nil only when entering via a preset with a persisted category.
-    private var savedSearchCategory: Int?
+    /// Retain the independently applied saved options when editing its query.
+    private var initialSavedSearch: GalleryBrowseSearch?
 
     static let toplistPeriods: [(tl: Int, title: String)] = [
         (15, "全部时间"), (13, "过去一年"), (12, "过去一月"), (11, "昨天"),
@@ -106,10 +106,10 @@ struct GalleryListView: View {
          initialBrowseSearch: GalleryBrowseSearch? = nil, onSearchSubmit: ((GalleryBrowseSearch) -> Void)? = nil) {
         self.toplistPeriod = toplistPeriod
         self.onSearchSubmit = onSearchSubmit
-        self.savedSearchCategory = initialBrowseSearch?.savedCategory
-        if let initialBrowseSearch, let category = initialBrowseSearch.savedCategory {
+        self.initialSavedSearch = initialBrowseSearch
+        if let initialBrowseSearch, initialBrowseSearch.hasSavedFilters {
             let state = AdvancedSearchState()
-            state.selectedCategories = category
+            state.restoreQuickSearch(initialBrowseSearch)
             _advancedSearch = State(initialValue: state)
             _viewModel = State(initialValue: GalleryListViewModel(initialFilters: initialBrowseSearch.initialFilters))
         }
@@ -888,11 +888,14 @@ struct GalleryListView: View {
     /// 而不是把当前这一页原地变成搜索结果。
     private func applyQuickSearch(_ search: QuickSearchRecord) {
         guard let keyword = search.keyword, !keyword.isEmpty else { return }
+        let preset = GalleryBrowseSearch(query: keyword, savedCategory: search.category,
+                                         savedMinimumRating: search.minRating)
         if let onSearchSubmit {
-            onSearchSubmit(.init(query: keyword, savedCategory: search.category))
+            onSearchSubmit(preset)
         } else {
             syncField(from: keyword)
-            viewModel.applyQuickSearch(search)
+            advancedSearch.restoreQuickSearch(preset)
+            viewModel.applyQuickSearch(preset, storedCategory: search.category, legacyAdvanced: search.advanceSearch > 0)
         }
     }
 
@@ -929,10 +932,12 @@ struct GalleryListView: View {
         }
     }
 
-    /// Only a saved category crosses the browse route; ordinary search keeps
-    /// its previous request behavior and the existing advanced form rules.
+    /// Only already-applied saved options cross the browse route. Ordinary
+    /// searches keep their previous behavior and advanced-form rules.
     private func browseSearch(for query: String) -> GalleryBrowseSearch {
-        .init(query: query, savedCategory: savedSearchCategory == nil ? nil : advancedSearch.categoryValue)
+        .init(query: query,
+              savedCategory: initialSavedSearch?.savedCategory == nil ? nil : advancedSearch.categoryValue,
+              savedMinimumRating: initialSavedSearch?.savedMinimumRating == nil ? nil : advancedSearch.minRatingValue)
     }
 
     private var searchField: GallerySearchQuery.Field {
@@ -1467,6 +1472,13 @@ struct GalleryRow: View {
 }
 
 private extension AdvancedSearchState {
+    func restoreQuickSearch(_ preset: GalleryBrowseSearch) {
+        let filters = preset.initialFilters
+        selectedCategories = preset.savedCategory ?? EhCategory.all.rawValue
+        restore(advanceSearch: filters.advanceSearch, minRating: filters.minRating,
+                pageFrom: filters.pageFrom, pageTo: filters.pageTo)
+    }
+
     /// Convert the form draft at the view boundary; the session receives only
     /// the applied value and never needs to read SwiftUI form state.
     var appliedListFilters: GalleryListRequest.Filters {
@@ -1839,9 +1851,9 @@ class GalleryListViewModel {
         currentFilters = filters
     }
 
-    func applyQuickSearch(_ search: QuickSearchRecord) {
-        guard let keyword = search.keyword, !keyword.isEmpty else { return }
-        searchText = keyword
+    func applyQuickSearch(_ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool) {
+        searchText = preset.query
+        currentFilters = preset.initialFilters
         galleries = []
         isLoading = true
         errorMessage = nil
@@ -1849,47 +1861,16 @@ class GalleryListViewModel {
         prevHref = nil
         nextHref = nil
 
-        // 构建带有分类和评分过滤的搜索
         Task {
-            await fetchQuickSearch(search)
+            await fetchQuickSearch(preset, storedCategory: storedCategory, legacyAdvanced: legacyAdvanced)
         }
     }
 
-    private func fetchQuickSearch(_ search: QuickSearchRecord) async {
+    private func fetchQuickSearch(_ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool) async {
         do {
-            let site = AppSettings.shared.gallerySite
-            let host = EhURL.host(for: site)
-
-            var urlComponents = URLComponents(string: host)!
-            var queryItems: [URLQueryItem] = []
-
-            // 关键词
-            if let keyword = search.keyword {
-                queryItems.append(URLQueryItem(name: "f_search", value: keyword))
-            }
-
-            // 分类过滤 (E-Hentai 使用 f_cats 参数，是要排除的分类的位掩码)
-            if search.category > 0 {
-                // category 是要包含的分类，需要计算排除的分类
-                let allCategories = 0x3FF  // 全部分类
-                let excludeCategories = allCategories ^ search.category
-                queryItems.append(URLQueryItem(name: "f_cats", value: String(excludeCategories)))
-            }
-
-            // 最低评分
-            if search.minRating > 0 {
-                queryItems.append(URLQueryItem(name: "f_srdd", value: String(search.minRating)))
-                queryItems.append(URLQueryItem(name: "f_sr", value: "on"))
-            }
-
-            // 高级搜索标记
-            if search.advanceSearch > 0 || search.minRating > 0 {
-                queryItems.append(URLQueryItem(name: "advsearch", value: "1"))
-            }
-
-            urlComponents.queryItems = queryItems.isEmpty ? nil : queryItems
-
-            let result = try await requestGalleryList(urlComponents.url!.absoluteString)
+            let url = preset.standaloneURL(site: AppSettings.shared.gallerySite,
+                                           storedCategory: storedCategory, legacyAdvanced: legacyAdvanced)
+            let result = try await requestGalleryList(url)
 
             self.galleries = result.galleries
             // ★ 记录分页游标: 快速搜索的 URL 是这里现拼的，

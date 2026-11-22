@@ -378,12 +378,13 @@ struct AddQuickSearchSheet: View {
 
     private func save() {
         let categoryMask = selectedCategories.reduce(0) { $0 | $1.rawValue }
-        let record = QuickSearchRecord(
+        var record = QuickSearchRecord(
             name: name.isEmpty ? nil : name,
             mode: 0,
             category: categoryMask,
             keyword: keyword
         )
+        record.minRating = GalleryBrowseSearch.validMinimumRating(minRating) ?? 0
         vm.addSearch(record)
     }
 }

@@ -412,3 +412,62 @@ struct GallerySearchEditingTests {
         #expect(GallerySearchQuery.Field.restoredOnCancel(nil).submittedQuery.isEmpty)
     }
 }
+
+struct GalleryQuickSearchRatingTests {
+    private let query = "language:chinese \"A fixture title\""
+
+    private func parameters(_ url: String) throws -> [String: String] {
+        let items = try #require(URLComponents(string: url)?.queryItems)
+        return Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+    }
+
+    @Test func bothPresetRoutesShareTheSameScoreOnlyFilterSemantics() throws {
+        let category = EhCategory.manga.rawValue
+        let unrated = GalleryBrowseSearch(query: query, savedCategory: category)
+        let browseBaseline = try parameters(GalleryListRequest(
+            source: .search(keyword: query), filters: unrated.initialFilters
+        ).pageURL(0, site: .eHentai))
+        let standaloneBaseline = try parameters(unrated.standaloneURL(
+            site: .eHentai, storedCategory: category, legacyAdvanced: false
+        ))
+        #expect(browseBaseline == standaloneBaseline)
+        #expect(browseBaseline["f_search"] == query)
+
+        for rating in 2...5 {
+            let rated = GalleryBrowseSearch(query: query, savedCategory: category, savedMinimumRating: rating)
+            let browse = try parameters(GalleryListRequest(
+                source: .search(keyword: rated.query), filters: rated.initialFilters
+            ).pageURL(0, site: .eHentai))
+            let standalone = try parameters(rated.standaloneURL(
+                site: .eHentai, storedCategory: category, legacyAdvanced: false
+            ))
+            let scoreOnly = ["advsearch": "1", "f_sr": "on", "f_srdd": String(rating)]
+            let expected = browseBaseline.merging(scoreOnly) { _, score in score }
+            #expect(browse == expected)
+            #expect(standalone == expected)
+            #expect(rated.initialFilters.advanceSearch == 0)
+            #expect(rated != unrated)
+        }
+    }
+
+    @Test func legacyUnratedAndInvalidRecordsDoNotAddScoreParameters() throws {
+        let defaultPreset = GalleryBrowseSearch(query: query)
+        let baseline = GalleryListRequest(source: .search(keyword: query), filters: defaultPreset.initialFilters)
+            .pageURL(0, site: .eHentai)
+        let historical = defaultPreset.standaloneURL(site: .eHentai, storedCategory: 0, legacyAdvanced: false)
+        for value: Int? in [nil, 0, -1, 1, 6, Int.max] {
+            let legacy = GalleryBrowseSearch(query: query, savedMinimumRating: value)
+            #expect(legacy == defaultPreset)
+            #expect(!legacy.hasSavedFilters)
+            let url = GalleryListRequest(source: .search(keyword: query), filters: legacy.initialFilters)
+                .pageURL(0, site: .eHentai)
+            #expect(url == baseline)
+            let standalone = legacy.standaloneURL(site: .eHentai, storedCategory: 0, legacyAdvanced: false)
+            #expect(standalone == historical)
+        }
+        let standalone = try parameters(defaultPreset.standaloneURL(
+            site: .eHentai, storedCategory: 0, legacyAdvanced: true
+        ))
+        #expect(standalone == ["f_search": query, "advsearch": "1"])
+    }
+}

@@ -127,17 +127,26 @@ nonisolated enum GallerySearchQuery {
     }
 }
 
-/// Category is the only non-default filter written by the current Quick Search
-/// editor. A missing, invalid, or all-selected mask keeps the original request.
+/// Supported Quick Search options. A rating alone opens the advanced request
+/// gate with a zero option mask: it must not turn on name, tag or page filters.
 nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
     let query: String
     let savedCategory: Int?
+    let savedMinimumRating: Int?
 
-    var initialFilters: GalleryListRequest.Filters {
-        .init(category: savedCategory ?? 0)
+    static func validMinimumRating(_ value: Int?) -> Int? {
+        guard let value, (2...5).contains(value) else { return nil }
+        return value
     }
 
-    init(query: String, savedCategory: Int? = nil) {
+    var hasSavedFilters: Bool { savedCategory != nil || savedMinimumRating != nil }
+
+    var initialFilters: GalleryListRequest.Filters {
+        .init(category: savedCategory ?? 0, advanceSearch: savedMinimumRating == nil ? -1 : 0,
+              minRating: savedMinimumRating ?? -1)
+    }
+
+    init(query: String, savedCategory: Int? = nil, savedMinimumRating: Int? = nil) {
         self.query = query
         let all = EhCategory.all.rawValue
         if !query.isEmpty, let savedCategory, savedCategory > 0,
@@ -146,6 +155,29 @@ nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
         } else {
             self.savedCategory = nil
         }
+        self.savedMinimumRating = query.isEmpty ? nil : Self.validMinimumRating(savedMinimumRating)
+    }
+
+    /// Standalone list screens use the historical Quick Search URL encoding
+    /// and category/legacy advanced gates. Only score validation is shared
+    /// with the browse route; dormant bounds and flag bits are not activated.
+    func standaloneURL(site: EhSite, storedCategory: Int, legacyAdvanced: Bool) -> String {
+        let host = EhURL.host(for: site)
+        guard var components = URLComponents(string: host) else { return host }
+        var items = [URLQueryItem(name: "f_search", value: query)]
+        if storedCategory > 0 {
+            let excluded = EhCategory.all.rawValue ^ storedCategory
+            items.append(URLQueryItem(name: "f_cats", value: String(excluded)))
+        }
+        if let savedMinimumRating {
+            items.append(URLQueryItem(name: "f_srdd", value: String(savedMinimumRating)))
+            items.append(URLQueryItem(name: "f_sr", value: "on"))
+        }
+        if legacyAdvanced || savedMinimumRating != nil {
+            items.append(URLQueryItem(name: "advsearch", value: "1"))
+        }
+        components.queryItems = items
+        return components.url?.absoluteString ?? host
     }
 }
 
