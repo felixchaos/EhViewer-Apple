@@ -913,6 +913,7 @@ struct GalleryListView: View {
         let preset = GalleryBrowseSearch(query: keyword, savedCategory: search.category,
                                          savedMinimumRating: search.minRating)
         if let onSearchSubmit {
+            restoreAppliedSearchField()
             onSearchSubmit(preset)
         } else {
             syncField(from: keyword)
@@ -923,6 +924,12 @@ struct GalleryListView: View {
 
     private func searchTag(_ tag: String) {
         let quoted = Self.exactTagQuery(for: tag)
+        isSearchFocused = false
+        if let onSearchSubmit {
+            restoreAppliedSearchField()
+            onSearchSubmit(browseSearch(for: quoted))
+            return
+        }
         #if os(iOS)
         let field = GallerySearchQuery.Field(tokens: [quoted], text: "")
         #else
@@ -930,14 +937,7 @@ struct GalleryListView: View {
         #endif
         lastAppliedField = field
         setSearchField(field)
-        isSearchFocused = false
-        // 和手动提交走同一条路：在浏览容器里要切到搜索页，
-        // 否则点个标签就把「热门」变成了搜索结果
-        if let onSearchSubmit {
-            onSearchSubmit(browseSearch(for: quoted))
-        } else {
-            viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
-        }
+        viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
     }
 
     static func exactTagQuery(for tag: String) -> String {
@@ -986,10 +986,13 @@ struct GalleryListView: View {
 
     private func submitSearch(_ query: String) {
         isSearchFocused = false
-        syncField(from: query)
         if let onSearchSubmit {
+            // The retained source belongs to its prior editing state. The
+            // results list will fill its field from the submitted snapshot.
+            restoreAppliedSearchField()
             onSearchSubmit(browseSearch(for: query))
         } else {
+            syncField(from: query)
             viewModel.performSearch(query: query, filters: advancedSearch.appliedListFilters)
         }
     }
