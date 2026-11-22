@@ -207,4 +207,83 @@ import Testing
             }
         }
     }
+
+    @Test func missingAndOversizeFilesAreDifferentFromAnEmptyExport() throws {
+        try withFiles { sourcePath, targetPath in
+            let target = try EhDatabase(storageURL: targetPath)
+            #expect(throws: AndroidLibraryImportError.cannotRead) {
+                try AndroidLibraryImport(exportAt: sourcePath)
+            }
+            try Data().write(to: sourcePath)
+            let handle = try FileHandle(forWritingTo: sourcePath)
+            try handle.truncate(atOffset: 64 * 1024 * 1024 + 1)
+            try handle.close()
+            #expect(throws: AndroidLibraryImportError.tooLarge) {
+                try AndroidLibraryImport(exportAt: sourcePath)
+            }
+            #expect(try target.getAllHistory().isEmpty)
+            #expect(try target.getAllLocalFavorites().isEmpty)
+        }
+    }
+
+    @Test func missingColumnsAndInvalidPrimaryKeyRejectTheWholeSource() throws {
+        try withFiles { sourcePath, targetPath in
+            try makeSource(sourcePath)
+            let target = try EhDatabase(storageURL: targetPath)
+            let sourceQueue = try DatabaseQueue(path: sourcePath.path)
+            try sourceQueue.write { db in
+                try db.execute(sql: "ALTER TABLE HISTORY RENAME COLUMN MODE TO legacy_mode")
+            }
+            #expect(throws: AndroidLibraryImportError.unsupportedExport) {
+                try AndroidLibraryImport(exportAt: sourcePath)
+            }
+            try sourceQueue.write { db in
+                // CTAS preserves column names, but not the INTEGER PRIMARY KEY constraint.
+                try db.execute(sql: "ALTER TABLE HISTORY RENAME COLUMN legacy_mode TO MODE")
+                try db.execute(sql: "ALTER TABLE HISTORY RENAME TO original_history")
+                try db.execute(sql: "CREATE TABLE HISTORY AS SELECT * FROM original_history")
+            }
+            #expect(throws: AndroidLibraryImportError.unsupportedExport) {
+                try AndroidLibraryImport(exportAt: sourcePath)
+            }
+            #expect(try target.getAllHistory().isEmpty)
+            #expect(try target.getAllLocalFavorites().isEmpty)
+        }
+    }
+
+    @Test func recordBudgetIsInclusiveAndOversizedTitlesCountAsInvalid() throws {
+        try withFiles { sourcePath, targetPath in
+            try makeSource(sourcePath, populate: false)
+            let sourceQueue = try DatabaseQueue(path: sourcePath.path)
+            try sourceQueue.write { db in
+                try db.execute(sql: """
+                    WITH RECURSIVE ids(gid) AS (
+                        VALUES (1) UNION ALL SELECT gid + 1 FROM ids WHERE gid < 25000
+                    )
+                    INSERT INTO HISTORY (GID,TOKEN,TITLE,CATEGORY,RATING,TIME,MODE)
+                    SELECT gid, 'neutral', 'permitted row', 1, 0, ?, 0 FROM ids
+                    """, arguments: [millisecond])
+                // TEXT length is limited by bytes, not by Unicode character count.
+                try db.execute(sql: "UPDATE HISTORY SET TITLE = ? WHERE GID = 1",
+                               arguments: [String(repeating: "測", count: 1_366)])
+            }
+            let target = try EhDatabase(storageURL: targetPath)
+            let source = try AndroidLibraryImport(exportAt: sourcePath)
+            let preview = try target.previewAndroidLibrary(source, historyLimit: 1)
+            #expect(preview.history == AndroidLibraryImportCounts(new: 1, existing: 0, invalid: 1,
+                                                                  overHistoryLimit: 24_998))
+            #expect(try target.getAllHistory().isEmpty)
+            try sourceQueue.write { db in
+                try db.execute(sql: """
+                    INSERT INTO HISTORY (GID,TOKEN,TITLE,CATEGORY,RATING,TIME,MODE)
+                    VALUES (25001, 'neutral', 'too many rows', 1, 0, ?, 0)
+                    """, arguments: [millisecond])
+            }
+            #expect(throws: AndroidLibraryImportError.tooLarge) {
+                try AndroidLibraryImport(exportAt: sourcePath)
+            }
+            #expect(try target.getAllHistory().isEmpty)
+        }
+    }
+
 }
