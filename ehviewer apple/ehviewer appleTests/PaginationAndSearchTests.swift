@@ -10,9 +10,11 @@
 //  (app/src/test/resources/.../GalleryListParserNew.html)，保证与安卓版行为一致。
 //
 
+import Foundation
 import Testing
 import EhModels
 import EhParser
+@testable import ehviewer_apple
 
 struct PaginationAndSearchTests {
 
@@ -156,5 +158,82 @@ struct PaginationAndSearchTests {
 
         #expect(url.contains("watched"))
         #expect(url.contains("f_srdd=3"))
+    }
+}
+
+// MARK: - Browse request seam
+
+struct GalleryListRequestTests {
+    private func parameters(_ url: String) throws -> [String: String] {
+        let components = try #require(URLComponents(string: url))
+        return Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    }
+
+    @Test func queryCompositionDoesNotSplitTitlesOrQuotedTags() {
+        let tag = GallerySearchQuery.exactTag("language:synthetic phrase")
+        #expect(tag == "language:\"synthetic phrase$\"")
+        #expect(GallerySearchQuery.exactTag("plain fixture") == "\"plain fixture$\"")
+        #expect(GallerySearchQuery.exactTag(":x") == "\":x$\"")
+        #expect(GallerySearchQuery.exactTag("x:") == "\"x:$\"")
+        #expect(GallerySearchQuery.split("  \(tag)   translated ") == [tag, "translated"])
+        #expect(GallerySearchQuery.fieldQuery(tokens: [tag], text: "  A title with spaces ") == "\(tag) A title with spaces")
+        #expect(GallerySearchQuery.tokensAfterSubmitting([tag], text: "  A title with spaces ") == [tag, "A title with spaces"])
+        #expect(GallerySearchQuery.tokensAfterSubmitting([tag], text: " \(tag) ") == [tag])
+        #expect(GallerySearchQuery.tokensAfterSubmitting([tag], text: "  ") == [tag])
+    }
+
+    @Test func keywordAndBlankHomeKeepTheirAppliedFilters() throws {
+        let filters = GalleryListRequest.Filters(category: 1, advanceSearch: 3, minRating: 4, pageFrom: 7, pageTo: 20)
+        let query = "language:\"synthetic phrase$\" translated"
+        let search = GalleryListRequest(source: .search(keyword: query), filters: filters)
+        let page = try parameters(search.pageURL(2, site: .eHentai))
+        #expect(page["f_search"] == query)
+        #expect(page["page"] == "2")
+        #expect(page["f_cats"] == "1022")
+        #expect(page["f_sname"] == "on")
+        #expect(page["f_stags"] == "on")
+        #expect(page["f_srdd"] == "4")
+        #expect(page["f_spf"] == "7")
+        #expect(page["f_spt"] == "20")
+        let home = GalleryListRequest(source: .home, filters: filters)
+        let homeParameters = try parameters(home.pageURL(0, site: .eHentai))
+        #expect(homeParameters["f_search"] == nil)
+        #expect(homeParameters["f_srdd"] == "4")
+        #expect(search.jumpBaseURL(site: .eHentai) == search.pageURL(0, site: .eHentai))
+        #expect(search.dateSeekBaseURL(site: .eHentai) == search.jumpBaseURL(site: .eHentai))
+    }
+
+    @Test func browseSourcesKeepLegacyEndpointsAndCursorFallbacks() throws {
+        let watched = GalleryListRequest(source: .subscription, filters: .init(mode: .uploader, cacheMode: 2))
+        #expect(watched.pageURL(0, site: .exHentai) == "https://exhentai.org/watched")
+        #expect(watched.dateSeekBaseURL(site: .exHentai) == nil)
+        let popular = GalleryListRequest(source: .popular)
+        #expect(popular.pageURL(9, site: .exHentai) == "https://exhentai.org/popular")
+        let top = GalleryListRequest(source: .toplist(period: 12))
+        #expect(top.pageURL(2, site: .exHentai) == "https://e-hentai.org/toplist.php?tl=12&p=2")
+        let tag = GalleryListRequest(source: .tag(keyword: "language:synthetic phrase"))
+        let tagURL = tag.pageURL(2, site: .eHentai)
+        #expect(URLComponents(string: tagURL)?.path == "/tag/language:synthetic phrase/2")
+        #expect(tagURL.contains("synthetic%20phrase"))
+        let all = GalleryListRequest(source: .favorites(slot: -1))
+        #expect(all.pageURL(0, site: .eHentai) == "https://e-hentai.org/favorites.php?page=0")
+        let favorite = GalleryListRequest(source: .favorites(slot: 4), favoriteKeyword: "synthetic title")
+        let page = try parameters(favorite.pageURL(1, site: .eHentai))
+        #expect(page == ["favcat": "4", "page": "1", "f_search": "synthetic title"])
+        let seekURL = try #require(favorite.favoritesDateURL(day: "2026-01-15", site: .eHentai))
+        let seek = try parameters(seekURL)
+        #expect(seek == ["favcat": "4", "seek": "2026-01-15", "f_search": "synthetic title"])
+        #expect(favorite.jumpBaseURL(site: .eHentai) == "https://e-hentai.org/favorites.php?favcat=4")
+    }
+
+    @Test func requestSnapshotKeepsItsCacheIdentityWhenNewFiltersAreApplied() {
+        var filters = GalleryListRequest.Filters(mode: .subscription, cacheMode: 1, category: 2, advanceSearch: 3, minRating: 4)
+        let old = GalleryListRequest(source: .home, filters: filters)
+        filters.minRating = 5
+        let updated = GalleryListRequest(source: .home, filters: filters)
+        #expect(old.cacheKey(page: 0) == "home:1|2|3|4|-1--1:0")
+        #expect(updated.cacheKey(page: 0) == "home:1|2|3|5|-1--1:0")
+        #expect(old.pageURL(0, site: .eHentai).contains("f_srdd=4"))
+        #expect(updated.pageURL(0, site: .eHentai).contains("f_srdd=5"))
     }
 }

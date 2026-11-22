@@ -19,23 +19,7 @@ import UIKit
 struct GalleryListView: View {
     let mode: ListMode
 
-    enum ListMode {
-        case home
-        /// 订阅标签列表 (/watched) —— 对齐 Android SubscriptionsScene
-        case subscription
-        case popular
-        /// 排行榜。period 就是 toplist.php 的 tl 参数：
-        /// 15 全部时间 / 13 过去一年 / 12 过去一个月 / 11 昨天
-        case toplist(period: Int)
-        case search(keyword: String)
-        case tag(keyword: String)
-        case favorites(slot: Int)
-
-        var isSubscription: Bool {
-            if case .subscription = self { return true }
-            return false
-        }
-    }
+    typealias ListMode = GalleryListRequest.Source
 
     @State private var viewModel = GalleryListViewModel()
     @State private var showQuickSearch = false
@@ -262,7 +246,7 @@ struct GalleryListView: View {
             if !isShowing {
                 // 高级搜索面板关闭时，静默保存参数到 ViewModel (不自动触发搜索)
                 // 用户提交搜索或点击搜索按钮时才会使用这些参数
-                viewModel.syncAdvancedSettings(advancedSearch)
+                viewModel.syncAdvancedSettings(advancedSearch.appliedListFilters)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { notification in
@@ -829,37 +813,16 @@ struct GalleryListView: View {
 
     /// 输入框当前表达的查询（token + 正在打的字）
     private var fieldQuery: String {
-        let typed = searchFieldText.trimmingCharacters(in: .whitespaces)
-        return (searchTokens + (typed.isEmpty ? [] : [typed])).joined(separator: " ")
+        GallerySearchQuery.fieldQuery(tokens: searchTokens, text: searchFieldText)
     }
 
     /// 把一条查询摆进输入框，拆成 token 显示
     private func syncField(from query: String) {
         isSyncingField = true
-        searchTokens = Self.splitQuery(query)
+        searchTokens = GallerySearchQuery.split(query)
         searchFieldText = ""
         // 下一个 runloop 再解锁：onChange(searchTokens) 是在本次更新之后才跑的
         DispatchQueue.main.async { isSyncingField = false }
-    }
-
-    /// 按空格拆查询，但引号内的空格不拆。
-    /// `female:"big ass$" translated` → [`female:"big ass$"`, `translated`]
-    static func splitQuery(_ query: String) -> [String] {
-        var tokens: [String] = []
-        var current = ""
-        var inQuotes = false
-        for ch in query {
-            if ch == "\"" {
-                inQuotes.toggle()
-                current.append(ch)
-            } else if ch == " " && !inQuotes {
-                if !current.isEmpty { tokens.append(current); current = "" }
-            } else {
-                current.append(ch)
-            }
-        }
-        if !current.isEmpty { tokens.append(current) }
-        return tokens
     }
 
     /// 这一本收藏过没有。云端收藏夹或本地收藏都算。
@@ -916,25 +879,12 @@ struct GalleryListView: View {
         if let onSearchSubmit {
             onSearchSubmit(quoted)
         } else {
-            viewModel.performSearch(query: quoted, advanced: advancedSearch)
+            viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
         }
     }
 
-    /// 把一个标签变成精确匹配的搜索式。
-    ///
-    /// 值那一半必须带引号，命名空间不能进引号里：
-    ///   `big ass`         → `"big ass$"`
-    ///   `female:big ass`  → `female:"big ass$"`
-    ///
-    /// 此前带命名空间的标签是原样透传的，于是 `female:big ass` 里的空格
-    /// 把它拆成了 `female:big` 和 `ass` 两个词——点这类标签永远搜不到东西，
-    /// 而不含空格的标签（`parody:haikyuu!!`）恰好又是好的，所以很容易漏掉。
     static func exactTagQuery(for tag: String) -> String {
-        guard let colon = tag.firstIndex(of: ":") else { return "\"\(tag)$\"" }
-        let namespace = String(tag[tag.startIndex..<colon])
-        let value = String(tag[tag.index(after: colon)...])
-        guard !namespace.isEmpty, !value.isEmpty else { return "\"\(tag)$\"" }
-        return "\(namespace):\"\(value)$\""
+        GallerySearchQuery.exactTag(tag)
     }
 
     /// 下载。建过下载标签且没设默认时先问放哪个标签——
@@ -954,14 +904,9 @@ struct GalleryListView: View {
     /// 「bdsm」胶囊后面还跟着 f:bdsm$ 这样的重复）。
     private func submitSearch() {
         isSearchFocused = false
-        let typed = searchFieldText.trimmingCharacters(in: .whitespaces)
-
-        // 打出来的自由文本若本身就是一个标签，收成 token；
-        // 提交后 token 留在输入框里，这样从列表回来仍能看到当前搜索条件，
-        // 也能逐个删掉某一条重搜，而不必整串清空重打。
-        if !typed.isEmpty, !searchTokens.contains(typed) {
-            searchTokens.append(typed)
-        }
+        // Retain the submitted text as one token, including any inner spaces.
+        let submitted = GallerySearchQuery.tokensAfterSubmitting(searchTokens, text: searchFieldText)
+        if submitted != searchTokens { searchTokens = submitted }
         searchFieldText = ""
 
         let query = searchTokens.joined(separator: " ")
@@ -969,7 +914,7 @@ struct GalleryListView: View {
             // 交给浏览容器切到搜索页；这一份列表随之被重建
             onSearchSubmit(query)
         } else {
-            viewModel.performSearch(query: query, advanced: advancedSearch)
+            viewModel.performSearch(query: query, filters: advancedSearch.appliedListFilters)
         }
     }
 
@@ -1024,7 +969,7 @@ struct GalleryListView: View {
                     searchFieldText = ""
                     searchTokens = []
                     isSearchFocused = false
-                    viewModel.performSearch(query: term, advanced: advancedSearch)
+                    viewModel.performSearch(query: term, filters: advancedSearch.appliedListFilters)
                 },
                 onOpenTagSelector: { showTagSelector = true },
                 onOpenAdvancedSearch: { showAdvancedSearch = true },
@@ -1045,7 +990,7 @@ struct GalleryListView: View {
                 ForEach(viewModel.searchHistory, id: \.self) { term in
                     Button {
                         viewModel.searchText = term
-                        viewModel.searchWithAdvanced(advancedSearch)
+                        viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
                     } label: {
                         Label(term, systemImage: "clock")
                     }
@@ -1306,7 +1251,7 @@ struct GalleryListView: View {
                 primaryAction: advancedSearch.isEnabled
                     ? ("清除筛选条件", {
                         advancedSearch = AdvancedSearchState()
-                        viewModel.searchWithAdvanced(advancedSearch)
+                        viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
                     })
                     : nil
             )
@@ -1478,6 +1423,22 @@ struct GalleryRow: View {
     }
 }
 
+private extension AdvancedSearchState {
+    /// Convert the form draft at the view boundary; the session receives only
+    /// the applied value and never needs to read SwiftUI form state.
+    var appliedListFilters: GalleryListRequest.Filters {
+        .init(
+            mode: ListUrlBuilder.Mode(rawValue: searchMode.listMode) ?? .normal,
+            cacheMode: searchMode.rawValue,
+            category: categoryValue,
+            advanceSearch: advanceSearchValue,
+            minRating: minRatingValue,
+            pageFrom: pageFromValue,
+            pageTo: pageToValue
+        )
+    }
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -1497,7 +1458,7 @@ class GalleryListViewModel {
     }
 
     private var visibleGalleries: [GalleryInfo] = []
-    func applyCloudFavoriteChange(gid: Int64, slot: Int, mode: GalleryListView.ListMode) {
+    func applyCloudFavoriteChange(gid: Int64, slot: Int, mode: GalleryListRequest.Source) {
         guard let index = visibleGalleries.firstIndex(where: { $0.gid == gid }) else { return }
         if case let .favorites(category) = mode, slot < 0 || (category >= 0 && category != slot) {
             visibleGalleries.remove(at: index)
@@ -1631,25 +1592,20 @@ class GalleryListViewModel {
 
     private var currentPage = 0
     private var currentCacheKey: String?
-    private var currentMode: GalleryListView.ListMode?
-    /// 高级搜索参数 (对齐 Android AdvanceSearchTable 状态持久化)
-    private var currentAdvanceSearch: Int = -1
-    private var currentMinRating: Int = -1
-    private var currentPageFrom: Int = -1
-    private var currentPageTo: Int = -1
-    private var currentCategory: Int = 0
-    private var currentSearchMode: SearchMode = .normal
+    private var currentMode: GalleryListRequest.Source?
+    /// Applied search options, independent of the visual form's draft state.
+    private var currentFilters = GalleryListRequest.Filters()
 
     /// 云收藏夹拉取成功时记下时刻，供收藏页显示「云端同步 · N 分钟前」。
     ///
     /// 只记 slot >= 0 的云收藏夹：本地收藏与「全部」不经网络同步，
     /// 给它们盖一个同步时间是误导。
-    func recordFavoriteSyncIfNeeded(mode: GalleryListView.ListMode) {
+    func recordFavoriteSyncIfNeeded(mode: GalleryListRequest.Source) {
         guard case .favorites(let slot) = mode, slot >= 0 else { return }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "fav_last_sync")
     }
 
-    func loadGalleries(mode: GalleryListView.ListMode) {
+    func loadGalleries(mode: GalleryListRequest.Source) {
         guard !isLoading else {
             print("[EhVM] loadGalleries: SKIPPED (already loading)")
             return
@@ -1667,7 +1623,8 @@ class GalleryListViewModel {
         currentPage = 0
 
         // 先查缓存 (空结果不视为有效缓存 — 可能是之前网络失败)
-        let cacheKey = self.cacheKey(for: mode, page: 0)
+        let descriptor = listRequestDescriptor(for: mode)
+        let cacheKey = descriptor.cacheKey(page: 0)
         if let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
            !cached.galleries.isEmpty {
             print("[EhVM] loadGalleries: CACHE HIT \(cached.galleries.count) galleries")
@@ -1688,7 +1645,7 @@ class GalleryListViewModel {
         Task {
             // 超时保护: 如果网络请求超过 20 秒仍未完成，显示错误让用户可以重试
             let fetchTask = Task {
-                await fetchPage(mode: mode, page: 0, replacementEpoch: requestEpoch)
+                await fetchPage(descriptor, page: 0, replacementEpoch: requestEpoch)
             }
             let timeoutTask = Task {
                 do { try await Task.sleep(for: .seconds(20)) }
@@ -1706,7 +1663,7 @@ class GalleryListViewModel {
         }
     }
 
-    func refresh(mode: GalleryListView.ListMode) {
+    func refresh(mode: GalleryListRequest.Source) {
         // 刷新时清除当前 mode 的缓存
         if let key = currentCacheKey {
             GalleryCache.shared.removeListResult(forKey: key)
@@ -1718,7 +1675,7 @@ class GalleryListViewModel {
     }
 
     /// 异步刷新 — 用于 .refreshable ，等待网络请求完成后才结束下拉动画
-    func refreshAsync(mode: GalleryListView.ListMode) async {
+    func refreshAsync(mode: GalleryListRequest.Source) async {
         if let key = currentCacheKey {
             GalleryCache.shared.removeListResult(forKey: key)
         }
@@ -1729,9 +1686,10 @@ class GalleryListViewModel {
         currentPage = 0
         prevHref = nil
         nextHref = nil
-        let cacheKey = self.cacheKey(for: mode, page: 0)
+        let descriptor = listRequestDescriptor(for: mode)
+        let cacheKey = descriptor.cacheKey(page: 0)
         currentCacheKey = cacheKey
-        await fetchPage(mode: mode, page: 0)
+        await fetchPage(descriptor, page: 0)
     }
 
     func search() {
@@ -1747,15 +1705,10 @@ class GalleryListViewModel {
         prevHref = nil
         nextHref = nil
         // 清除高级搜索参数
-        currentAdvanceSearch = -1
-        currentMinRating = -1
-        currentPageFrom = -1
-        currentPageTo = -1
-        currentCategory = 0
-        currentSearchMode = .normal
+        currentFilters = .init()
 
         Task {
-            await fetchPage(mode: .search(keyword: searchText), page: 0)
+            await fetchPage(listRequestDescriptor(for: .search(keyword: searchText)), page: 0)
         }
     }
 
@@ -1764,20 +1717,15 @@ class GalleryListViewModel {
     ///
     /// token 与自由文本在提交时才合并成一串传进来，`searchText` 只保存用户
     /// 正在打的那部分——这样搜索框里不会出现「token + 同一内容的文字」的重复。
-    func performSearch(query: String, advanced: AdvancedSearchState) {
+    func performSearch(query: String, filters: GalleryListRequest.Filters) {
         searchText = query
-        searchWithAdvanced(advanced)
+        searchWithAdvanced(filters)
     }
 
-    func searchWithAdvanced(_ state: AdvancedSearchState) {
+    func searchWithAdvanced(_ filters: GalleryListRequest.Filters) {
         searchText = ListUrlBuilder.sanitizeKeyword(searchText)
         if !searchText.isEmpty { addSearchToHistory(searchText) }
-        currentAdvanceSearch = state.advanceSearchValue
-        currentMinRating = state.minRatingValue
-        currentPageFrom = state.pageFromValue
-        currentPageTo = state.pageToValue
-        currentCategory = state.categoryValue
-        currentSearchMode = state.searchMode
+        syncAdvancedSettings(filters)
 
         // 没有关键字时，按分类过滤首页 (对齐 Android: 无关键字也能按分类搜索)
         if searchText.isEmpty {
@@ -1788,7 +1736,7 @@ class GalleryListViewModel {
             prevHref = nil
             nextHref = nil
             Task {
-                await fetchPage(mode: .home, page: 0)
+                await fetchPage(listRequestDescriptor(for: .home), page: 0)
             }
             return
         }
@@ -1800,13 +1748,13 @@ class GalleryListViewModel {
         prevHref = nil
         nextHref = nil
         Task {
-            await fetchPage(mode: .search(keyword: searchText), page: 0)
+            await fetchPage(listRequestDescriptor(for: .search(keyword: searchText)), page: 0)
         }
     }
 
     /// 高级搜索面板关闭后自动应用设置 (对齐 Android GalleryListScene.onApplySearch)
-    func applyAdvancedSettings(_ state: AdvancedSearchState, initialMode: GalleryListView.ListMode) {
-        syncAdvancedSettings(state)
+    func applyAdvancedSettings(_ filters: GalleryListRequest.Filters, initialMode: GalleryListRequest.Source) {
+        syncAdvancedSettings(filters)
 
         // 清除缓存，强制使用新参数重新加载
         if let key = currentCacheKey {
@@ -1822,7 +1770,7 @@ class GalleryListViewModel {
             prevHref = nil
             nextHref = nil
             Task {
-                await fetchPage(mode: .search(keyword: searchText), page: 0)
+                await fetchPage(listRequestDescriptor(for: .search(keyword: searchText)), page: 0)
             }
             return
         }
@@ -1836,19 +1784,14 @@ class GalleryListViewModel {
             prevHref = nil
             nextHref = nil
             Task {
-                await fetchPage(mode: .home, page: 0)
+                await fetchPage(listRequestDescriptor(for: .home), page: 0)
             }
         }
     }
 
     /// 静默同步高级搜索参数到 ViewModel (不触发搜索)
-    func syncAdvancedSettings(_ state: AdvancedSearchState) {
-        currentCategory = state.categoryValue
-        currentSearchMode = state.searchMode
-        currentAdvanceSearch = state.advanceSearchValue
-        currentMinRating = state.minRatingValue
-        currentPageFrom = state.pageFromValue
-        currentPageTo = state.pageToValue
+    func syncAdvancedSettings(_ filters: GalleryListRequest.Filters) {
+        currentFilters = filters
     }
 
     func applyQuickSearch(_ search: QuickSearchRecord) {
@@ -1927,7 +1870,7 @@ class GalleryListViewModel {
         }
     }
 
-    func loadMore(mode: GalleryListView.ListMode) async {
+    func loadMore(mode: GalleryListRequest.Source) async {
         guard !isLoading, hasMore else { return }
         let requestEpoch = listEpoch
 
@@ -1984,11 +1927,11 @@ class GalleryListViewModel {
         // Page-based 翻页 fallback (仅在无 href 时使用)
         isLoading = true
         currentPage += 1
-        await fetchPage(mode: mode, page: currentPage)
+        await fetchPage(listRequestDescriptor(for: mode), page: currentPage)
     }
     
     /// 跳转到指定页 (对齐 Android ContentHelper.goTo(page), 仅 TopList 使用)
-    func goToPage(_ page: Int, mode: GalleryListView.ListMode) {
+    func goToPage(_ page: Int, mode: GalleryListRequest.Source) {
         guard page >= 0 && page < totalPages else { return }
         
         galleries = []
@@ -1998,12 +1941,12 @@ class GalleryListViewModel {
         currentMode = mode
         
         Task {
-            await fetchPage(mode: mode, page: page)
+            await fetchPage(listRequestDescriptor(for: mode), page: page)
         }
     }
 
     /// 通用日期跳转 (对齐 Android GoToDialog: 所有模式统一使用日期选择器)
-    func goToDate(_ date: Date, mode: GalleryListView.ListMode) {
+    func goToDate(_ date: Date, mode: GalleryListRequest.Source) {
         if case .favorites = mode {
             // 收藏模式: ?seek=YYYY-MM-DD
             goToFavoritesDate(date, mode: mode)
@@ -2014,7 +1957,7 @@ class GalleryListViewModel {
     }
 
     /// 普通画廊按日期跳转 (对齐 Android GoToDialog 普通模式: ?next=TIMESTAMP)
-    private func goToNormalDate(_ date: Date, mode: GalleryListView.ListMode) {
+    private func goToNormalDate(_ date: Date, mode: GalleryListRequest.Source) {
         galleries = []
         isLoading = true
         errorMessage = nil
@@ -2029,7 +1972,7 @@ class GalleryListViewModel {
     }
 
     /// 收藏跳转到指定日期 (对齐 Android FavoritesScene: ?seek=YYYY-MM-DD)
-    func goToFavoritesDate(_ date: Date, mode: GalleryListView.ListMode) {
+    func goToFavoritesDate(_ date: Date, mode: GalleryListRequest.Source) {
         guard case .favorites(let slot) = mode else { return }
         
         galleries = []
@@ -2046,7 +1989,7 @@ class GalleryListViewModel {
     }
 
     /// 收藏通过 URL 导航 (prev/next 链接)
-    func goToFavoritesHref(_ href: String, mode: GalleryListView.ListMode) {
+    func goToFavoritesHref(_ href: String, mode: GalleryListRequest.Source) {
         galleries = []
         isLoading = true
         errorMessage = nil
@@ -2075,7 +2018,7 @@ class GalleryListViewModel {
 
     /// 快捷跳转 (对齐 Android jumpHrefBuild + onTimeSelected)
     /// appendParam 为 "jump=1d" / "seek=2024-01-15" 之类的 URL 追加参数
-    func goToJump(_ appendParam: String, mode: GalleryListView.ListMode) {
+    func goToJump(_ appendParam: String, mode: GalleryListRequest.Source) {
         galleries = []
         isLoading = true
         errorMessage = nil
@@ -2110,7 +2053,7 @@ class GalleryListViewModel {
 
     /// 构建跳转 URL (对齐 Android ListUrlBuilder.jumpHrefBuild)
     /// 如果有 nextHref，修改它；否则从当前模式构建基础 URL
-    private func buildJumpUrl(_ appendParam: String, mode: GalleryListView.ListMode) -> String {
+    private func buildJumpUrl(_ appendParam: String, mode: GalleryListRequest.Source) -> String {
         var baseUrl: String
 
         if case .toplist(let period) = mode {
@@ -2118,43 +2061,7 @@ class GalleryListViewModel {
         } else if let href = nextHref, !href.isEmpty {
             baseUrl = href
         } else {
-            let site = AppSettings.shared.gallerySite
-            switch mode {
-            case .home, .subscription:
-                var builder = ListUrlBuilder()
-                builder.mode = mode.isSubscription
-                    ? .subscription
-                    : (ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal)
-                builder.category = currentCategory
-                builder.advanceSearch = currentAdvanceSearch
-                builder.minRating = currentMinRating
-                builder.pageFrom = currentPageFrom
-                builder.pageTo = currentPageTo
-                baseUrl = builder.build(site: site)
-            case .search(let keyword):
-                var builder = ListUrlBuilder()
-                builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
-                builder.keyword = keyword
-                builder.advanceSearch = currentAdvanceSearch
-                builder.minRating = currentMinRating
-                builder.pageFrom = currentPageFrom
-                builder.pageTo = currentPageTo
-                builder.category = currentCategory
-                baseUrl = builder.build(site: site)
-            case .tag(let keyword):
-                let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? keyword
-                baseUrl = "\(EhURL.host(for: site))tag/\(encoded)"
-            case .favorites(let slot):
-                if slot < 0 {
-                    baseUrl = EhURL.favoritesUrl(for: site)
-                } else {
-                    baseUrl = "\(EhURL.favoritesUrl(for: site))?favcat=\(slot)"
-                }
-            case .popular:
-                baseUrl = EhURL.popularUrl(for: site)
-            case .toplist(let period):
-                baseUrl = EhURL.topListUrl(period: period)
-            }
+            baseUrl = listRequestDescriptor(for: mode).jumpBaseURL(site: AppSettings.shared.gallerySite)
         }
 
         // 移除已有的 seek/jump 参数 (对齐 Android jumpHrefBuild 正则替换逻辑)
@@ -2181,39 +2088,11 @@ class GalleryListViewModel {
     }
 
     /// 普通画廊按日期跳转 (对齐 Android: ?next=UNIX_TIMESTAMP)
-    private func fetchNormalSeek(date: Date, mode: GalleryListView.ListMode) async {
+    private func fetchNormalSeek(date: Date, mode: GalleryListRequest.Source) async {
         let site = AppSettings.shared.gallerySite
         let timestamp = Int(date.timeIntervalSince1970)
 
-        // 基于当前模式构建 URL，附加 &next=TIMESTAMP
-        var baseUrl: String
-        switch mode {
-        case .home:
-            var builder = ListUrlBuilder()
-            builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
-            builder.category = currentCategory
-            builder.advanceSearch = currentAdvanceSearch
-            builder.minRating = currentMinRating
-            builder.pageFrom = currentPageFrom
-            builder.pageTo = currentPageTo
-            baseUrl = builder.build(site: site)
-        case .search(let keyword):
-            var builder = ListUrlBuilder()
-            builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
-            builder.keyword = keyword
-            builder.advanceSearch = currentAdvanceSearch
-            builder.minRating = currentMinRating
-            builder.pageFrom = currentPageFrom
-            builder.pageTo = currentPageTo
-            builder.category = currentCategory
-            baseUrl = builder.build(site: site)
-        case .tag(let keyword):
-            let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? keyword
-            baseUrl = "\(EhURL.host(for: site))tag/\(encoded)"
-        default:
-            // popular 等模式不支持日期跳转
-            return
-        }
+        guard let baseUrl = listRequestDescriptor(for: mode).dateSeekBaseURL(site: site) else { return }
 
         // 附加 next=TIMESTAMP 参数
         let separator = baseUrl.contains("?") ? "&" : "?"
@@ -2250,18 +2129,9 @@ class GalleryListViewModel {
         formatter.dateFormat = "yyyy-MM-dd"
         let dateStr = formatter.string(from: date)
         
-        var favUrl: String
-        if slot < 0 {
-            favUrl = "\(EhURL.favoritesUrl(for: site))?seek=\(dateStr)"
-        } else {
-            favUrl = "\(EhURL.favoritesUrl(for: site))?favcat=\(slot)&seek=\(dateStr)"
-        }
-        
-        if let keyword = favSearchKeyword, !keyword.isEmpty {
-            let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
-            favUrl += "&f_search=\(encoded)"
-        }
-        
+        guard let favUrl = listRequestDescriptor(for: .favorites(slot: slot))
+            .favoritesDateURL(day: dateStr, site: site) else { return }
+
         do {
             let result = try await requestGalleryList(favUrl)
             self.galleries = result.galleries
@@ -2280,7 +2150,10 @@ class GalleryListViewModel {
         }
     }
 
-    private func fetchPage(mode: GalleryListView.ListMode, page: Int, replacementEpoch: UInt64? = nil) async {
+    private func fetchPage(
+        _ descriptor: GalleryListRequest, page: Int, replacementEpoch: UInt64? = nil
+    ) async {
+        let mode = descriptor.source
         if let replacementEpoch {
             guard replacementEpoch == listEpoch else { return }
         } else if page == 0 {
@@ -2289,73 +2162,7 @@ class GalleryListViewModel {
         let requestEpoch = listEpoch
         print("[EhVM] fetchPage: mode=\(mode) page=\(page)")
         do {
-            let site = AppSettings.shared.gallerySite
-            let host = EhURL.host(for: site)
-            let urlString: String
-
-            switch mode {
-            case .subscription:
-                // 订阅列表: /watched，只出带订阅标签的新画廊
-                var builder = ListUrlBuilder()
-                builder.mode = .subscription
-                builder.pageIndex = page
-                builder.category = currentCategory
-                builder.advanceSearch = currentAdvanceSearch
-                builder.minRating = currentMinRating
-                builder.pageFrom = currentPageFrom
-                builder.pageTo = currentPageTo
-                urlString = builder.build(site: site)
-            case .home:
-                // ★ 首页同样要带上高级搜索参数 (对齐 Android GalleryListScene:
-                //   无关键字时也用同一个 ListUrlBuilder，f_sr/f_srdd 等不会被丢弃)
-                //   之前这里只传 category，导致"最低评分 / 页数范围 / 订阅搜索"在无关键字时全部失效
-                var builder = ListUrlBuilder()
-                builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
-                builder.pageIndex = page
-                builder.category = currentCategory
-                builder.advanceSearch = currentAdvanceSearch
-                builder.minRating = currentMinRating
-                builder.pageFrom = currentPageFrom
-                builder.pageTo = currentPageTo
-                urlString = builder.build(site: site)
-            case .popular:
-                urlString = EhURL.popularUrl(for: site)
-            case .toplist(let period):
-                urlString = EhURL.topListUrl(period: period, page: page)
-            case .search(let keyword):
-                var builder = ListUrlBuilder()
-                builder.mode = ListUrlBuilder.Mode(rawValue: currentSearchMode.listMode) ?? .normal
-                builder.keyword = keyword
-                builder.pageIndex = page
-                builder.advanceSearch = currentAdvanceSearch
-                builder.minRating = currentMinRating
-                builder.pageFrom = currentPageFrom
-                builder.pageTo = currentPageTo
-                builder.category = currentCategory
-                urlString = builder.build(site: site)
-            case .tag(let keyword):
-                let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? keyword
-                if page > 0 {
-                    urlString = "\(host)tag/\(encoded)/\(page)"
-                } else {
-                    urlString = "\(host)tag/\(encoded)"
-                }
-            case .favorites(let slot):
-                // slot -1 = 全部收藏, 0-9 = 指定收藏夹 (对齐 Android FavoritesScene)
-                var favUrl: String
-                if slot < 0 {
-                    favUrl = "\(EhURL.favoritesUrl(for: site))?page=\(page)"
-                } else {
-                    favUrl = "\(EhURL.favoritesUrl(for: site))?favcat=\(slot)&page=\(page)"
-                }
-                // 收藏搜索 (对齐 Android FavoritesScene.onGetFavoritesSuccess)
-                if let keyword = favSearchKeyword, !keyword.isEmpty {
-                    let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
-                    favUrl += "&f_search=\(encoded)"
-                }
-                urlString = favUrl
-            }
-
+            let urlString = descriptor.pageURL(page, site: AppSettings.shared.gallerySite)
             let result = try await requestGalleryList(urlString)
             guard requestEpoch == listEpoch else { return }
 
@@ -2394,7 +2201,7 @@ class GalleryListViewModel {
 
             // 缓存第一页结果
             if page == 0 && listRequest == nil {
-                let cacheKey = self.cacheKey(for: mode, page: 0)
+                let cacheKey = descriptor.cacheKey(page: 0)
                 GalleryCache.shared.putListResult(
                     CachedGalleryListResult(
                         galleries: self.galleries,
@@ -2420,23 +2227,8 @@ class GalleryListViewModel {
         }
     }
 
-    /// 当前生效的筛选条件签名 — 参与缓存 key，
-    /// 否则改了分类/最低评分后仍会命中旧的未过滤缓存
-    private var filterSignature: String {
-        "\(currentSearchMode.rawValue)|\(currentCategory)|\(currentAdvanceSearch)|\(currentMinRating)|\(currentPageFrom)-\(currentPageTo)"
-    }
-
-    /// 生成缓存 key
-    private func cacheKey(for mode: GalleryListView.ListMode, page: Int) -> String {
-        switch mode {
-        case .home: return "home:\(filterSignature):\(page)"
-        case .subscription: return "watched:\(filterSignature):\(page)"
-        case .popular: return "popular:\(page)"
-        case .toplist(let period): return "toplist:\(period):\(page)"
-        case .search(let kw): return "search:\(kw):\(filterSignature):\(page)"
-        case .tag(let kw): return "tag:\(kw):\(page)"
-        case .favorites(let slot): return "fav:\(slot):\(favSearchKeyword ?? ""):\(page)"
-        }
+    private func listRequestDescriptor(for mode: GalleryListRequest.Source) -> GalleryListRequest {
+        .init(source: mode, filters: currentFilters, favoriteKeyword: favSearchKeyword)
     }
 }
 
