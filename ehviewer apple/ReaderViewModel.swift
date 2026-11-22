@@ -175,7 +175,8 @@ class ReaderViewModel {
     @ObservationIgnored private var skipHathKeys: [Int: String] = [:]
     /// 已经用过的 nl key — 服务器重复返回同一个 key 说明没有别的节点了，不再重试
     @ObservationIgnored private var usedSkipHathKeys: [Int: Set<String>] = [:]
-    @ObservationIgnored private var loadingPages: Set<Int> = []
+    @ObservationIgnored private var loadingPages: [Int: UUID] = [:]
+    @ObservationIgnored private var pageRetryOwners: [Int: UUID] = [:]
     @ObservationIgnored private var downloadingImages: Set<Int> = []
     /// 正在进行的单页下载。由 ViewModel 持有，不随视图或预加载任务被取消。
     @ObservationIgnored private var downloadTasks: [Int: (id: UUID, task: Task<Void, Never>)] = [:]
@@ -679,6 +680,7 @@ class ReaderViewModel {
         preloadTask = nil
         lastPreloadAnchor = nil
         loadingPages.removeAll()
+        pageRetryOwners.removeAll()
         downloadingImages.removeAll()
         downloadDir = nil
     }
@@ -1240,101 +1242,135 @@ class ReaderViewModel {
         }
     }
 
-    /// 带重试的页面 URL 获取 (最多 5 次)
-    func loadPageWithRetry(_ index: Int) async {
-        let maxRetries = 5
-        for attempt in 0..<maxRetries {
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self.retryingPages[index] = attempt }
-            await loadPage(index)
-            if imageURLs[index] != nil {
-                await MainActor.run { _ = self.retryingPages.removeValue(forKey: index) }
-                return
-            }
-            if errorPages.contains(index) { return }
-            guard !Task.isCancelled else { return }
-            let delay = UInt64(pow(2.0, Double(attempt))) * 1_000_000_000
-            do { try await Task.sleep(nanoseconds: delay) } catch { return }
-        }
-        guard !Task.isCancelled else { return }
-        await MainActor.run {
-            self.errorPages.insert(index)
-            self.errorMessages[index] = "加载超时，请点击重试"
-            self.retryingPages.removeValue(forKey: index)
-        }
+    /// Per-call inputs for exercising the real resolver without online access.
+    struct PageResolver {
+        let html: (String) async throws -> String
+        let page: (String) async throws -> GalleryPageResult
+        let sleep: (UInt64) async throws -> Void
     }
 
-    func loadPage(_ index: Int) async {
-        guard index >= 0, index < totalPages else { return }
-        guard imageURLs[index] == nil else { return }
-        guard !loadingPages.contains(index) else { return }
+    private struct PageResolutionContext {
+        let gid: Int64
+        let session: UInt64
+        let retry: Int
+    }
 
-        // 优先本地 (Fix D-1: 通过 DownloadManager 统一路径，本地找不到时回退网络)
-        if isDownloaded, let dir = downloadDir {
-            if let localURL = SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: index) {
-                await MainActor.run {
-                    self.imageURLs[index] = localURL.absoluteString
-                    self.errorPages.remove(index)
-                }
-                return
+    private func resolutionContext(_ index: Int) -> PageResolutionContext {
+        PageResolutionContext(gid: gid, session: readerImageSession, retry: retryGeneration[index, default: 0])
+    }
+
+    private func ownsResolution(_ index: Int, _ context: PageResolutionContext) -> Bool {
+        ownsImageRead(index, gallery: context.gid, session: context.session, retry: context.retry)
+    }
+
+    /// 带重试的页面 URL 获取 (最多 5 次)
+    func loadPageWithRetry(_ index: Int, resolver: PageResolver? = nil) async {
+        guard !Task.isCancelled, pageRetryOwners[index] == nil else { return }
+        let context = resolutionContext(index)
+        let owner = UUID()
+        pageRetryOwners[index] = owner
+        defer {
+            if pageRetryOwners[index] == owner {
+                pageRetryOwners[index] = nil
+                retryingPages.removeValue(forKey: index)
             }
-            // 本地文件缺失 — 不 return，继续尝试网络加载
         }
 
-        // URL 缓存
-        if let cached = GalleryCache.shared.getImageURL(gid: gid, page: index) {
-            await MainActor.run {
-                self.imageURLs[index] = cached
-                self.errorPages.remove(index)
-            }
+        for attempt in 0..<5 {
+            guard ownsResolution(index, context), pageRetryOwners[index] == owner else { return }
+            retryingPages[index] = attempt
+            await loadPage(index, resolver: resolver)
+            guard ownsResolution(index, context), pageRetryOwners[index] == owner else { return }
+            if imageURLs[index] != nil || errorPages.contains(index) { return }
+
+            let delay: UInt64 = (1 << attempt) * 1_000_000_000
+            do {
+                if let resolver { try await resolver.sleep(delay) }
+                else { try await Task.sleep(nanoseconds: delay) }
+            } catch { return }
+        }
+        guard ownsResolution(index, context), pageRetryOwners[index] == owner else { return }
+        errorPages.insert(index)
+        errorMessages[index] = "加载超时，请点击重试"
+    }
+
+    func loadPage(_ index: Int, resolver: PageResolver? = nil) async {
+        guard !Task.isCancelled, index >= 0, index < totalPages else { return }
+        guard imageURLs[index] == nil, loadingPages[index] == nil else { return }
+
+        let context = resolutionContext(index)
+        // 优先本地 (Fix D-1: 通过 DownloadManager 统一路径，本地找不到时回退网络)
+        if isDownloaded, let dir = downloadDir,
+           let localURL = SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: index) {
+            imageURLs[index] = localURL.absoluteString
+            errorPages.remove(index)
             return
         }
 
-        loadingPages.insert(index)
-        defer { loadingPages.remove(index) }
+        if let cached = GalleryCache.shared.getImageURL(gid: context.gid, page: index) {
+            imageURLs[index] = cached
+            errorPages.remove(index)
+            return
+        }
+
+        let owner = UUID()
+        loadingPages[index] = owner
+        defer {
+            if loadingPages[index] == owner { loadingPages[index] = nil }
+        }
 
         do {
             let site = GalleryActionService.siteBaseURL
-            let pageUrl: String
+            let pageToken: String
 
-            if let pToken = pTokens[index] {
-                pageUrl = "\(site)s/\(pToken)/\(gid)-\(index + 1)"
+            if let ready = pTokens[index] {
+                pageToken = ready
             } else {
-                let pToken = try await fetchPToken(page: index)
-                pTokens[index] = pToken
-                pageUrl = "\(site)s/\(pToken)/\(gid)-\(index + 1)"
+                let siblingRevisions = retryGeneration
+                let tokens = try await fetchPTokens(page: index, gid: context.gid, token: token, resolver: resolver)
+                guard ownsResolution(index, context), loadingPages[index] == owner else { return }
+                for (page, value) in tokens where siblingRevisions[page, default: 0] == retryGeneration[page, default: 0] {
+                    pTokens[page] = value
+                }
+                guard let ready = pTokens[index] else {
+                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "pToken not found"])
+                }
+                pageToken = ready
             }
 
-            // ★ 统一走 EhAPI (对齐 Android EhEngine.getGalleryPage):
-            //   Cookie 清洁 + 速率限制 + 自动重试 + 域名前置直连回退,
-            //   不再用裸 URLSession 直连 —— 那会在 DNS 污染/SNI 拦截时直接 TLS 失败 (issue #6)
-            //   同时用 GalleryPageParser 解析, 图片 URL 中的 &amp; 等实体会被正确反转义
-            let result = try await EhAPI.shared.getGalleryPage(url: pageUrl)
-            let imgUrl = result.imageUrl
-            guard !imgUrl.isEmpty else {
+            let pageURL = "\(site)s/\(pageToken)/\(context.gid)-\(index + 1)"
+            // EhAPI still handles cookies, rate limit, retries and direct fallback.
+            let result: GalleryPageResult
+            if let resolver {
+                result = try await resolver.page(pageURL)
+            } else {
+                result = try await EhAPI.shared.getGalleryPage(url: pageURL)
+            }
+            guard ownsResolution(index, context), loadingPages[index] == owner else { return }
+            let imageURL = result.imageUrl
+            guard !imageURL.isEmpty else {
                 debugLog("[Reader] Failed to extract image URL from page HTML for page \(index)")
-                // 抓不到图片 URL 通常意味着 EH 改了页面结构，留个现场
-                if let html = try? await EhAPI.shared.fetchHTML(url: pageUrl) {
-                    LogManager.shared.saveParseErrorBody(html, context: "gallery-page-\(gid)-\(index + 1)")
+                let html: String?
+                if let resolver { html = try? await resolver.html(pageURL) }
+                else { html = try? await EhAPI.shared.fetchHTML(url: pageURL) }
+                guard ownsResolution(index, context), loadingPages[index] == owner else { return }
+                if resolver == nil, let html {
+                    LogManager.shared.saveParseErrorBody(html, context: "gallery-page-\(context.gid)-\(index + 1)")
                 }
-                await MainActor.run { _ = self.errorPages.insert(index) }
+                errorPages.insert(index)
                 return
             }
-            GalleryCache.shared.putImageURL(imgUrl, gid: gid, page: index)
-            await MainActor.run {
-                self.imageURLs[index] = imgUrl
-                self.errorPages.remove(index)
-            }
-            if let key = result.showKey {
-                showKeys[index] = key
-            }
+            GalleryCache.shared.putImageURL(imageURL, gid: context.gid, page: index)
+            imageURLs[index] = imageURL
+            errorPages.remove(index)
+            if let key = result.showKey { showKeys[index] = key }
             skipHathKeys[index] = result.skipHathKey
         } catch is CancellationError {
             return
         } catch let urlError as URLError where urlError.code == .cancelled {
             return
         } catch {
-            if !Task.isCancelled {
+            if ownsResolution(index, context), loadingPages[index] == owner {
                 debugLog("[Reader] Page \(index) load error: \(error.localizedDescription)")
             }
         }
@@ -1347,13 +1383,15 @@ class ReaderViewModel {
         errorPages.remove(index)
         errorMessages.removeValue(forKey: index)
         retryingPages.removeValue(forKey: index)
+        pageRetryOwners[index] = nil
         downloadProgress.removeValue(forKey: index)
         retryGeneration[index, default: 0] += 1
         Self.imageCache.removeObject(forKey: cacheKey(for: index))
         pTokens.removeValue(forKey: index)
         usedSkipHathKeys.removeValue(forKey: index)
         GalleryCache.shared.removeImageURL(gid: gid, page: index)
-        loadingPages.remove(index)
+        loadingPages[index] = nil
+        let context = resolutionContext(index)
         #if DEBUG
         if let fixture = directResponseFixture {
             imageURLs[index] = fixture.retryURL.absoluteString
@@ -1363,6 +1401,7 @@ class ReaderViewModel {
         #else
         await loadPageWithRetry(index)
         #endif
+        guard ownsResolution(index, context) else { return }
         await downloadImageData(index)
     }
 
@@ -1415,7 +1454,7 @@ class ReaderViewModel {
         !isImageReady(index)
             && !errorPages.contains(index)
             && !downloadingImages.contains(index)
-            && !loadingPages.contains(index)
+            && loadingPages[index] == nil
     }
 
     /// 盯着某一页，直到它出图或出错。
@@ -1475,7 +1514,7 @@ class ReaderViewModel {
             .filter { p in
                 p != page
                     && !isImageReady(p)
-                    && !loadingPages.contains(p)
+                    && loadingPages[p] == nil
                     && !downloadingImages.contains(p)
             }
             // 距离近的先来；同距离时优先阅读方向那一侧
@@ -1505,7 +1544,9 @@ class ReaderViewModel {
         }
     }
 
-    private func fetchPToken(page: Int) async throws -> String {
+    private func fetchPTokens(
+        page: Int, gid: Int64, token: String, resolver: PageResolver?
+    ) async throws -> [Int: String] {
         let site = GalleryActionService.siteBaseURL
         let detailPage = page / 20
         let urlStr = "\(site)g/\(gid)/\(token)/\(detailPage > 0 ? "?p=\(detailPage)" : "")"
@@ -1513,21 +1554,18 @@ class ReaderViewModel {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"])
         }
 
-        // 同样走 EhAPI 的回退链路, 不再裸连 (issue #6)
-        let html = try await EhAPI.shared.fetchHTML(url: url.absoluteString)
-
+        // Build a detached value; only a still-owned load may publish any token.
+        let html: String
+        if let resolver { html = try await resolver.html(url.absoluteString) }
+        else { html = try await EhAPI.shared.fetchHTML(url: url.absoluteString) }
         let range = NSRange(html.startIndex..., in: html)
-        let matches = Self.pTokenUrlPattern.matches(in: html, range: range)
-
-        for m in matches {
-            guard let ptRange = Range(m.range(at: 1), in: html),
-                  let pnRange = Range(m.range(at: 3), in: html) else { continue }
-            let pt = String(html[ptRange])
-            let pn = Int(html[pnRange]) ?? 0
-            pTokens[pn - 1] = pt
+        var tokens: [Int: String] = [:]
+        for match in Self.pTokenUrlPattern.matches(in: html, range: range) {
+            guard let ptRange = Range(match.range(at: 1), in: html),
+                  let pnRange = Range(match.range(at: 3), in: html) else { continue }
+            let page = (Int(html[pnRange]) ?? 0) - 1
+            tokens[page] = String(html[ptRange])
         }
-
-        if let pt = pTokens[page] { return pt }
-        throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "pToken not found"])
+        return tokens
     }
 }

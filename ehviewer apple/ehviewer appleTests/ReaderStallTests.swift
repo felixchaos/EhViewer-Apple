@@ -16,6 +16,7 @@
 //
 
 import Testing
+import EhModels
 import Foundation
 #if canImport(UIKit)
 import UIKit
@@ -720,3 +721,141 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
     }
 }
 #endif
+
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReaderPageResolverOwnershipTests {
+    @Test(arguments: [false, true])
+    func oldHTMLCannotPublishOrDropReplacementMarkers(returnToOriginal: Bool) async {
+        let vm = ReaderViewModel()
+        let original: Int64 = returnToOriginal ? 900010001031 : 900010001032
+        let other = original + 100
+        vm.gid = original
+        vm.totalPages = 1
+        defer {
+            GalleryCache.shared.removeImageURL(gid: original, page: 0)
+            GalleryCache.shared.removeImageURL(gid: other, page: 0)
+        }
+        let oldPage = HeldReaderCacheLookup()
+        let old = ReaderViewModel.PageResolver(
+            html: { _ in "/s/aaaa/\(original)-1" },
+            page: { _ in _ = await oldPage.read(); return .init(imageUrl: "https://image.invalid/old.png") },
+            sleep: { _ in Issue.record("Old retry must stop at its ownership boundary"); throw CancellationError() }
+        )
+        let first = Task { await vm.loadPageWithRetry(0, resolver: old) }
+        await oldPage.waitUntilStarted()
+        _ = vm.prepareForGallery(targetGid: other, targetToken: "fixture")
+        if returnToOriginal { _ = vm.prepareForGallery(targetGid: original, targetToken: "fixture") }
+        let current = vm.gid
+        vm.totalPages = 1
+        let newPage = HeldReaderCacheLookup()
+        let replacement = ReaderViewModel.PageResolver(
+            html: { _ in "/s/bbbb/\(current)-1" },
+            page: { url in
+                #expect(url.hasSuffix("/s/bbbb/\(current)-1"))
+                _ = await newPage.read()
+                return .init(imageUrl: "https://image.invalid/new.png")
+            },
+            sleep: { _ in Issue.record("Resolved response must not sleep"); throw CancellationError() }
+        )
+        let second = Task { await vm.loadPageWithRetry(0, resolver: replacement) }
+        await newPage.waitUntilStarted()
+        await oldPage.finish()
+        await first.value
+        #expect(vm.imageURLs[0] == nil)
+        #expect(GalleryCache.shared.getImageURL(gid: original, page: 0) == nil)
+        #expect(GalleryCache.shared.getImageURL(gid: current, page: 0) == nil)
+        #expect(vm.retryingPages[0] == 0)
+        #expect(!vm.isStalled(0))
+        await newPage.finish()
+        await second.value
+        #expect(vm.imageURLs[0] == "https://image.invalid/new.png")
+        #expect(GalleryCache.shared.getImageURL(gid: current, page: 0) == vm.imageURLs[0])
+        #expect(vm.retryingPages[0] == nil)
+    }
+
+    @Test func cancelledDiagnosticDoesNotInstallErrorOrLeaveMarkers() async {
+        let vm = ReaderViewModel()
+        let gid: Int64 = 900010001033
+        vm.gid = gid
+        vm.totalPages = 1
+        let diagnostic = HeldReaderCacheLookup()
+        let resolver = ReaderViewModel.PageResolver(
+            html: { request in
+                if request.contains("/s/") {
+                    _ = await diagnostic.read()
+                    return "neutral diagnostic"
+                }
+                return "/s/aaaa/\(gid)-1"
+            },
+            page: { _ in .init() },
+            sleep: { _ in Issue.record("Cancelled diagnostic must not sleep"); throw CancellationError() }
+        )
+        let task = Task { await vm.loadPageWithRetry(0, resolver: resolver) }
+        await diagnostic.waitUntilStarted()
+        task.cancel()
+        await diagnostic.finish()
+        await task.value
+        #expect(vm.errorPages.isEmpty)
+        #expect(vm.retryingPages.isEmpty)
+        #expect(vm.isStalled(0))
+    }
+
+    @Test func currentRetryKeepsBackoffAndPublishesSuccessfulURL() async {
+        let vm = ReaderViewModel()
+        let gid: Int64 = 900010001035
+        vm.gid = gid
+        vm.totalPages = 1
+        defer { GalleryCache.shared.removeImageURL(gid: gid, page: 0) }
+        var attempts: [Int] = []
+        var delays: [UInt64] = []
+        let resolver = ReaderViewModel.PageResolver(
+            html: { _ in "/s/aaaa/\(gid)-1" },
+            page: { _ in
+                attempts.append(vm.retryingPages[0] ?? -1)
+                if attempts.count < 3 { throw URLError(.timedOut) }
+                return .init(imageUrl: "https://image.invalid/current.png")
+            },
+            sleep: { delays.append($0) }
+        )
+        await vm.loadPageWithRetry(0, resolver: resolver)
+        #expect(attempts == [0, 1, 2])
+        #expect(delays == [1_000_000_000, 2_000_000_000])
+        #expect(vm.imageURLs[0] == "https://image.invalid/current.png")
+        #expect(vm.retryingPages[0] == nil)
+    }
+
+    @Test func galleryTokenResponseDoesNotOverwriteRetriedSiblingButSeedsUnchangedSibling() async {
+        let vm = ReaderViewModel()
+        let gid: Int64 = 900010001034
+        vm.gid = gid
+        vm.totalPages = 3
+        defer { for i in 0..<3 { GalleryCache.shared.removeImageURL(gid: gid, page: i) } }
+        let html = HeldReaderCacheLookup()
+        let first = ReaderViewModel.PageResolver(
+            html: { _ in
+                _ = await html.read()
+                return "/s/aaaa/\(gid)-1 /s/bbbb/\(gid)-2 /s/cccc/\(gid)-3"
+            },
+            page: { _ in .init(imageUrl: "https://image.invalid/first.png") },
+            sleep: { _ in throw CancellationError() }
+        )
+        let old = Task { await vm.loadPage(0, resolver: first) }
+        await html.waitUntilStarted()
+        vm.retryGeneration[1, default: 0] += 1
+        await html.finish()
+        await old.value
+        let sibling = ReaderViewModel.PageResolver(
+            html: { _ in "/s/dddd/\(gid)-2" },
+            page: { url in
+                #expect(url.hasSuffix("/s/dddd/\(gid)-2") || url.hasSuffix("/s/cccc/\(gid)-3"))
+                return .init(imageUrl: url)
+            },
+            sleep: { _ in throw CancellationError() }
+        )
+        await vm.loadPage(1, resolver: sibling)
+        await vm.loadPage(2, resolver: sibling)
+        #expect(vm.imageURLs[1]?.hasSuffix("/s/dddd/\(gid)-2") == true)
+        #expect(vm.imageURLs[2]?.hasSuffix("/s/cccc/\(gid)-3") == true)
+    }
+}
