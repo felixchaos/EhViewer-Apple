@@ -37,6 +37,7 @@ printf 'Logs: %s\n' "$out"
 printf 'Commit: %s\n' "$(git rev-parse HEAD)"
 run EhCore swift test --package-path Packages/EhCore --scratch-path "$cache/core" --jobs "$jobs" || true
 run EhParser swift test --package-path Packages/EhParser --scratch-path "$cache/parser" --jobs "$jobs" || true
+run EhDownload swift test --package-path Packages/EhDownload --scratch-path "$cache/download" --jobs "$jobs" || true
 
 if [[ ${1:-} == --packages-only ]]; then exit "$status"; fi
 if [[ $# != 2 ]]; then
