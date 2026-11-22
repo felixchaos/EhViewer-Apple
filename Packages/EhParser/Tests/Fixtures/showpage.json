@@ -1,0 +1,6 @@
+{
+  "i3": "<img id=\"img\" src=\"https://fixture.invalid/page.webp?size=1200&amp;mode=fit\">",
+  "i6": "<a onclick=\"return nl('fixture-retry')\">Retry</a>",
+  "i7": "<a href=\"https://fixture.invalid/original.webp?item=1&amp;kind=original\">Original</a>",
+  "s": "fixture-show"
+}
