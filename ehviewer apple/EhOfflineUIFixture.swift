@@ -130,6 +130,16 @@ enum EhOfflineUIFixture {
             default: return GalleryListResult()
             }
         }
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_ADVANCED_SEARCH"] == "1",
+           let components = URLComponents(string: url) {
+            let values = components.queryItems ?? []
+            func value(_ name: String) -> String? { values.first { $0.name == name }?.value }
+            if value("f_search") == nil, value("advsearch") == "1", value("f_sr") == "on",
+               let rating = value("f_srdd"), ["4", "5"].contains(rating) {
+                return GalleryListResult(galleries: [.init(gid: rating == "4" ? 900010001064 : 900010001065,
+                                                            token: "fixture", title: "Synthetic rating \(rating)")])
+            }
+        }
         // Assert the actual submitted request, not merely a selected tab label.
         if let term = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "f_search" })?.value {
             if term == "offlineretap", ProcessInfo.processInfo.environment["EH_FIXTURE_HOME_RESELECT"] == "1" {

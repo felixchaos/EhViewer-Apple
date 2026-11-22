@@ -187,6 +187,58 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(ranking.buttons["全部时间"].firstMatch.exists)
     }
 
+    @MainActor func testApplyKeywordlessMinimumRatingAndReplaceIt() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_ADVANCED_SEARCH"] = "1"
+        app.launch()
+
+        func openOptions() {
+            let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题"))
+                .allElementsBoundByIndex.first(where: \.isHittable)
+            XCTAssertNotNil(field)
+            field?.tap()
+            app.buttons["高级搜索"].firstMatch.tap()
+            XCTAssertTrue(app.navigationBars["搜索选项"].waitForExistence(timeout: 5))
+        }
+        func chooseRating(_ current: String, _ next: String) {
+            let currentRating = app.buttons[current].firstMatch
+            if !currentRating.isHittable { app.swipeUp() }
+            XCTAssertTrue(currentRating.waitForExistence(timeout: 5))
+            currentRating.tap()
+            app.buttons[next].firstMatch.tap()
+        }
+        func apply() {
+            let apply = app.buttons["应用"].firstMatch
+            if apply.exists { apply.tap() } else { app.buttons["完成"].firstMatch.tap() }
+        }
+        XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
+        openOptions()
+        app.switches["Enable advance options"].firstMatch.tap()
+        let rating = app.buttons["Minimum Rating:"].firstMatch
+        if !rating.isHittable { app.swipeUp() }
+        XCTAssertTrue(rating.waitForExistence(timeout: 5))
+        rating.tap()
+        chooseRating("2 stars", "4 stars")
+        apply()
+        let four = app.staticTexts["Synthetic rating 4"].firstMatch
+        let five = app.staticTexts["Synthetic rating 5"].firstMatch
+        XCTAssertTrue(four.waitForExistence(timeout: 8))
+
+        openOptions()
+        chooseRating("4 stars", "5 stars")
+        app.navigationBars["搜索选项"].buttons["取消"].tap()
+        XCTAssertTrue(four.isHittable)
+        XCTAssertFalse(five.exists)
+
+        openOptions()
+        chooseRating("4 stars", "5 stars")
+        apply()
+        XCTAssertTrue(five.waitForExistence(timeout: 8))
+        XCTAssertFalse(four.exists)
+    }
+
     @MainActor func testHomeAndPopularUseSubmittedSearchQuery() {
         let app = launch(cloud: "empty")
         XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
