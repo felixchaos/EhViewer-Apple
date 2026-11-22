@@ -3,7 +3,7 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false, clearFinished: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
@@ -13,6 +13,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         if let launchPage { app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = String(launchPage) }
         if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
         if historyTag { app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1" }
+        if clearFinished { app.launchEnvironment["EH_FIXTURE_CLEAR_FINISHED"] = "1" }
         app.launch()
         return app
     }
@@ -230,6 +231,41 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(tag.waitForExistence(timeout: 8))
         back(app)
         XCTAssertTrue(historyItem.waitForExistence(timeout: 8))
+    }
+
+    // Run only on a dedicated offline simulator with no non-fixture downloads.
+    @MainActor func testClearFinishedDownloadsRequiresDestructiveConfirmation() {
+        let app = launch(cloud: "empty", localReader: true, clearFinished: true)
+        tab("下载", in: app)
+        let completed = app.staticTexts["Synthetic cleared download"].firstMatch
+        let paused = app.staticTexts["Synthetic preserved download"].firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: 8))
+        XCTAssertTrue(paused.waitForExistence(timeout: 8))
+        let actions = app.buttons["downloads-actions"].firstMatch
+
+        func openConfirmation() {
+            XCTAssertTrue(actions.waitForExistence(timeout: 5))
+            actions.tap()
+            let clear = app.buttons["清空已完成"].firstMatch
+            XCTAssertTrue(clear.waitForExistence(timeout: 5))
+            clear.tap()
+            XCTAssertTrue(app.staticTexts["删除 1 个已完成的下载？"].firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["删除记录和文件"].firstMatch.exists)
+        }
+
+        openConfirmation()
+        let cancel = app.buttons["取消"].firstMatch
+        if cancel.exists { cancel.tap() }
+        else {
+            // iPad SwiftUI popover omits Cancel; outside-tap is dismissal.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.10, dy: 0.85)).tap()
+        }
+        XCTAssertTrue(completed.exists)
+        XCTAssertTrue(paused.exists)
+        openConfirmation()
+        app.buttons["删除记录和文件"].firstMatch.tap()
+        XCTAssertTrue(completed.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(paused.exists)
     }
 
     @MainActor func testDownloadedReaderPageJumpAndReopenRetainsProgress() {

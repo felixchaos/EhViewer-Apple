@@ -45,6 +45,13 @@ struct DownloadsView: View {
     @State private var isSelectMode = false
     @State private var selectedGids: Set<Int64> = []
     @State private var showBatchDeleteConfirm = false
+    @State private var showClearFinishedConfirm = false
+    @State private var finishedDeletionRequest: FinishedDeletionRequest?
+
+    private struct FinishedDeletionRequest {
+        let targets: [Int64: UUID]
+        let root: URL
+    }
     @State private var showResetProgressConfirm = false
     /// 标签管理页。重命名和删除的代码一直都在，但从来没有入口——
     /// showRenameLabelAlert / showDeleteLabelConfirm 在此之前没有任何地方
@@ -139,6 +146,21 @@ struct DownloadsView: View {
                 Button("删除记录和文件", role: .destructive) {
                     batchDelete(withFiles: true)
                 }
+            }
+            .confirmationDialog(
+                "删除 \(finishedDeletionRequest?.targets.count ?? 0) 个已完成的下载？",
+                isPresented: $showClearFinishedConfirm, titleVisibility: .visible
+            ) {
+                Button("删除记录和文件", role: .destructive) {
+                    guard let request = finishedDeletionRequest else { return }
+                    finishedDeletionRequest = nil
+                    vm.clearFinished(matching: request.targets, in: request.root)
+                }
+                Button("取消", role: .cancel) {
+                    finishedDeletionRequest = nil
+                }
+            } message: {
+                Text("包含其他标签分组。下载记录和本地文件将被删除，此操作无法撤销。")
             }
             // 单项删除确认 (Fix: 放在父视图，不受 Timer 刷新影响)
             .confirmationDialog("确认删除下载？", isPresented: $showSingleDeleteConfirm, titleVisibility: .visible) {
@@ -746,14 +768,19 @@ struct DownloadsView: View {
                 Divider()
 
                 Button(role: .destructive) {
-                    vm.clearFinished()
+                    let targets = vm.finishedDeletionSnapshot
+                    guard !targets.isEmpty else { return }
+                    finishedDeletionRequest = .init(targets: targets, root: DownloadManager.shared.finishedDeletionRoot)
+                    showClearFinishedConfirm = true
                 } label: {
                     Label("清空已完成", systemImage: "trash")
                 }
+                .disabled(!vm.tasks.contains { $0.state == DownloadManager.stateFinish })
             }
         } label: {
             Image(systemName: isSelectMode ? "checkmark.circle.fill" : "ellipsis.circle")
         }
+        .accessibilityIdentifier("downloads-actions")
     }
 
     // MARK: - 下载列表
@@ -1364,12 +1391,17 @@ class DownloadsViewModel {
         }
     }
 
-    /// Fix A-2: 清除已完成下载时同时删除文件，释放磁盘空间
-    func clearFinished() {
+    var finishedDeletionSnapshot: [Int64: UUID] {
+        tasks.reduce(into: [:]) { snapshot, task in
+            guard task.state == DownloadManager.stateFinish else { return }
+            snapshot[task.gallery.gid] = task.recordIdentity
+        }
+    }
+
+    func clearFinished(matching targets: [Int64: UUID], in root: URL) {
+        guard !targets.isEmpty else { return }
         Task {
-            for task in tasks where task.state == DownloadManager.stateFinish {
-                await DownloadManager.shared.deleteDownload(gid: task.gallery.gid, deleteFiles: true)
-            }
+            await DownloadManager.shared.deleteFinishedDownloads(matching: targets, in: root)
             await loadTasks()
         }
     }

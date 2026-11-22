@@ -56,7 +56,12 @@ enum EhOfflineUIFixture {
         // A real download record and images enter through the usual persistence API.
         // Open the fixture UI only once all pages are available, so it cannot fall back to the network.
         let manager = DownloadManager.shared
-        for page in 0..<synthetic.pages {
+        let clearFinished = ProcessInfo.processInfo.environment["EH_FIXTURE_CLEAR_FINISHED"] == "1"
+        let completed = clearFinished
+            ? GalleryInfo(gid: 900010000010, token: "fixture", title: "Synthetic cleared download", pages: 3)
+            : synthetic
+        let paused = GalleryInfo(gid: 900010000011, token: "fixture", title: "Synthetic preserved download", pages: 2)
+        for page in 0..<completed.pages {
             let color: UIColor = [.systemRed, .systemBlue, .systemGreen][page]
             let renderer = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180))
             let image = renderer.image { ctx in
@@ -67,11 +72,14 @@ enum EhOfflineUIFixture {
                 ])
             }
             guard let bytes = image.pngData() else { return false }
-            await manager.saveWhileReading(gallery: synthetic, pageIndex: page, data: bytes, extension: ".png")
+            await manager.saveWhileReading(gallery: completed, pageIndex: page, data: bytes, extension: ".png")
+            if clearFinished, page == 0 {
+                await manager.saveWhileReading(gallery: paused, pageIndex: 0, data: bytes, extension: ".png")
+            }
         }
-        let saved = await manager.getDownloadedPageCount(gid: synthetic.gid)
-        let directory = await manager.localGalleryDirectory(gid: synthetic.gid)
-        return saved == synthetic.pages && directory != nil
+        let saved = await manager.getDownloadedPageCount(gid: completed.gid)
+        let directory = await manager.localGalleryDirectory(gid: completed.gid)
+        return saved == completed.pages && directory != nil
     }
 
     static var injectedImportURL: URL? {

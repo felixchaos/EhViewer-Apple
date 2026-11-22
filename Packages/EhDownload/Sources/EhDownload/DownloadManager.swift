@@ -46,6 +46,7 @@ public actor DownloadManager {
         let gid: Int64
         let title: String?
         let pages: Int
+        let confirmedDirectory: URL?
     }
 
     private var activeAttempt: Attempt?
@@ -73,6 +74,11 @@ public actor DownloadManager {
         #endif
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent("download")
+    }
+
+    /// Capture the physical destination when offering a completed-download deletion.
+    public nonisolated var finishedDeletionRoot: URL {
+        downloadDirectory.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     init(
@@ -186,6 +192,10 @@ public actor DownloadManager {
 
     /// 删除下载 (可选删除文件)
     public func deleteDownload(gid: Int64, deleteFiles: Bool = false) {
+        deleteDownload(gid: gid, deleteFiles: deleteFiles, confirmedDirectory: nil)
+    }
+
+    private func deleteDownload(gid: Int64, deleteFiles: Bool, confirmedDirectory: URL?) {
         let task = downloadQueue.first(where: { $0.gallery.gid == gid })
         if activeAttempt?.gid == gid { retireActiveAttempt() }
         downloadQueue.removeAll { $0.gallery.gid == gid }
@@ -196,7 +206,10 @@ public actor DownloadManager {
                                         userInfo: ["gid": gid, "downloading": false])
 
         if deleteFiles {
-            let deletion = FileDeletion(gid: gid, title: task?.gallery.bestTitle, pages: task?.gallery.pages ?? 0)
+            let deletion = FileDeletion(
+                gid: gid, title: task?.gallery.bestTitle, pages: task?.gallery.pages ?? 0,
+                confirmedDirectory: confirmedDirectory
+            )
             if runner?.attempt.gid == gid {
                 // The old transfer may already be in a disk write. Delete
                 // after it drains and before any replacement starts.
@@ -209,14 +222,30 @@ public actor DownloadManager {
         processQueue()
     }
 
-    /// 获取所有下载任务
+    /// Delete only the same completed tasks shown for confirmation. Rechecking
+    /// and deleting happen on this actor without a suspension between them.
+    public func deleteFinishedDownloads(matching identities: [Int64: UUID], in confirmedRoot: URL) {
+        let currentRoot = finishedDeletionRoot
+        guard confirmedRoot.isFileURL, confirmedRoot.path == currentRoot.path else { return }
+        for gid in identities.keys.sorted() {
+            guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }),
+                  task.recordIdentity == identities[gid],
+                  getTaskState(gid: gid) == Self.stateFinish else { continue }
+            let name = Self.galleryDirectoryName(gid: gid, title: task.gallery.bestTitle)
+            deleteDownload(gid: gid, deleteFiles: true, confirmedDirectory: currentRoot.appendingPathComponent(name))
+        }
+    }
+
     private func removeFiles(_ deletion: FileDeletion) {
         if deletion.pages > 0 {
             // A caller supplying an isolated directory is not using the app's
             // shared read cache.
             if directoryOverride == nil { SpiderDen.clearCache(forGid: deletion.gid, pages: deletion.pages) }
         }
-        if let title = deletion.title, !title.isEmpty {
+        // Deferred cleanup must not pick up a later Settings change.
+        if let directory = deletion.confirmedDirectory {
+            try? FileManager.default.removeItem(at: directory)
+        } else if let title = deletion.title, !title.isEmpty {
             try? FileManager.default.removeItem(at: galleryDirectory(gid: deletion.gid, title: title))
         } else {
             let prefix = "\(deletion.gid)-"
@@ -623,6 +652,9 @@ public actor DownloadManager {
 // MARK: - DownloadTask
 
 public struct DownloadTask: Sendable {
+    /// In-memory identity for confirmations; a replacement with the same GID
+    /// must not inherit an open confirmation. No persisted schema change.
+    public let recordIdentity = UUID()
     public let gallery: GalleryInfo
     public var label: String?
     public var state: Int
