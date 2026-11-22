@@ -126,8 +126,10 @@ final class FavoritesOfflineUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["导入预览"].waitForExistence(timeout: 8))
         app.buttons["导入"].tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 8))
-        app.alerts.firstMatch.buttons["好"].tap()
+        let success = app.alerts["导入完成"]
+        if !success.waitForExistence(timeout: 8) { attachHierarchy(app, note: "Import failed") }
+        XCTAssertTrue(success.exists)
+        success.buttons["好"].tap()
         let labeledBack = app.buttons["返回"].firstMatch
         let nativeBack = app.navigationBars.buttons.firstMatch
         if labeledBack.exists {
