@@ -1193,6 +1193,12 @@ struct ImageReaderView: View {
         let h = geometry.size.height
         let sideW = w * tapZoneRatio
         let deadH = h * tapZoneVerticalDeadZone
+        let guidance = ReaderGestureGuidance(direction: readingDirection)
+        #if os(macOS)
+        let motionTitle = guidance.motionTitle(for: .pointer)
+        #else
+        let motionTitle = guidance.motionTitle(for: .touch)
+        #endif
 
         return ZStack {
             Color.black.opacity(0.75)
@@ -1202,7 +1208,7 @@ struct ImageReaderView: View {
             VStack(spacing: 4) {
                 Image(systemName: readingDirection == .rightToLeft ? "arrow.right" : "arrow.left")
                     .font(.title2)
-                Text(readingDirection == .rightToLeft ? "下一页" : "上一页")
+                Text(LocalizedStringKey(guidance.leftPageTitle))
                     .font(.caption.bold())
             }
             .foregroundStyle(.white)
@@ -1214,19 +1220,21 @@ struct ImageReaderView: View {
                     .font(.title)
                 Text("单击: 显示/隐藏工具栏")
                     .font(.caption.bold())
-                Divider()
-                    .frame(width: 80)
-                    .overlay(Color.white.opacity(0.5))
-                Image(systemName: "hand.tap")
-                    .font(.title)
-                    .overlay(
-                        Image(systemName: "hand.tap")
-                            .font(.title)
-                            .offset(x: 2, y: 2)
-                            .opacity(0.5)
-                    )
-                Text("双击: 放大/复原")
-                    .font(.caption.bold())
+                if guidance.showsDoubleTapZoom {
+                    Divider()
+                        .frame(width: 80)
+                        .overlay(Color.white.opacity(0.5))
+                    Image(systemName: "hand.tap")
+                        .font(.title)
+                        .overlay(
+                            Image(systemName: "hand.tap")
+                                .font(.title)
+                                .offset(x: 2, y: 2)
+                                .opacity(0.5)
+                        )
+                    Text("双击: 放大/复原")
+                        .font(.caption.bold())
+                }
             }
             .foregroundStyle(.white)
             .position(x: w / 2, y: h / 2)
@@ -1235,29 +1243,29 @@ struct ImageReaderView: View {
             VStack(spacing: 4) {
                 Image(systemName: readingDirection == .rightToLeft ? "arrow.left" : "arrow.right")
                     .font(.title2)
-                Text(readingDirection == .rightToLeft ? "上一页" : "下一页")
+                Text(LocalizedStringKey(guidance.rightPageTitle))
                     .font(.caption.bold())
             }
             .foregroundStyle(.white)
             .position(x: w - sideW / 2, y: h / 2)
 
             // 上方死区标注
-            Text("死区 (不响应)")
+            Text("此区单击无操作")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.5))
                 .position(x: w / 2, y: deadH / 2)
 
             // 下方死区标注
-            Text("死区 (不响应)")
+            Text("此区单击无操作")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.5))
                 .position(x: w / 2, y: h - deadH / 2)
 
-            // 左右滑动翻页提示
+            // 当前阅读模式的主要移动方式
             VStack(spacing: 4) {
                 Image(systemName: "hand.draw")
                     .font(.title3)
-                Text("左右滑动也可以翻页")
+                Text(LocalizedStringKey(motionTitle))
                     .font(.caption)
             }
             .foregroundStyle(.white.opacity(0.8))
@@ -1458,7 +1466,7 @@ struct ImageReaderView: View {
                 modeBlock("双页", isOn: vm.isDoublePageEnabled) {
                     vm.toggleDoublePage()
                 }
-                modeBlock(readingDirection == .rightToLeft ? "右→左" : "左→右",
+                modeBlock(ReaderGestureGuidance(direction: readingDirection).directionTitle,
                           isOn: readingDirection == .rightToLeft) {
                     readingDirection = readingDirection == .rightToLeft ? .leftToRight : .rightToLeft
                     AppSettings.shared.readingDirection = readingDirection.rawValue
