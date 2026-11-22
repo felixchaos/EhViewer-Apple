@@ -39,38 +39,61 @@ extension BrowseSource {
 }
 
 struct BrowseHomeView: View {
-    @State private var source: BrowseSource
-    /// 排行榜的时间范围（toplist.php 的 tl）。默认全部时间。
+    @Environment(\.ehTabBarDriverActive) private var parentTabActive
+    /// The originating list stays mounted while its search results are visible.
+    @State private var origin: BrowseSource
+    @State private var isShowingSearch: Bool
     @State private var toplistPeriod = 15
-    /// 搜索页的查询。由 GalleryListView 提交上来，数据源随之切到 .search。
     @State private var search = GalleryBrowseSearch(query: "")
 
     init(initial: BrowseSource = .home) {
-        _source = State(initialValue: initial)
+        _origin = State(initialValue: initial == .search ? .home : initial)
+        _isShowingSearch = State(initialValue: initial == .search)
+    }
+
+    private var selection: Binding<BrowseSource> {
+        Binding(get: { isShowingSearch ? .search : origin }, set: { selected in
+            if selected == .search {
+                isShowingSearch = true
+            } else {
+                origin = selected
+                isShowingSearch = false
+            }
+        })
     }
 
     var body: some View {
-        // 切页条由 GalleryListView 渲染在自己的搜索栏下方，
-        // 这样「搜索 → 切页 → 列表」的纵向顺序与设计稿一致。
+        ZStack {
+            list(for: origin)
+                .id(OriginIdentity(source: origin, period: origin == .toplist ? toplistPeriod : 0))
+                .opacity(isShowingSearch ? 0 : 1)
+                .allowsHitTesting(!isShowingSearch)
+                .accessibilityHidden(isShowingSearch)
+                .ehTabBarDriver(active: parentTabActive && !isShowingSearch)
+
+            if isShowingSearch {
+                list(for: .search)
+                    .id(search)
+                    .ehTabBarDriver(active: parentTabActive)
+            }
+        }
+    }
+
+    private func list(for source: BrowseSource) -> some View {
         GalleryListView(
             mode: source.listMode(toplistPeriod: toplistPeriod, searchQuery: search.query),
-            browseSource: $source,
+            browseSource: selection,
             toplistPeriod: source == .toplist ? $toplistPeriod : nil,
             initialBrowseSearch: source == .search ? search : nil,
             onSearchSubmit: { submitted in
-                // 提交搜索就切到搜索页。空查询表示清空，退回首页。
                 search = submitted
-                source = submitted.query.isEmpty ? .home : .search
+                isShowingSearch = !submitted.query.isEmpty
             }
         )
-        // 数据源、时间范围或查询变了就重建：每个源有各自的分页游标与筛选条件，
-        // 复用同一个 ViewModel 会把上一个源的游标带到下一个源。
-        .id(ListIdentity(source: source, period: source == .toplist ? toplistPeriod : 0, search: search))
     }
 
-    private struct ListIdentity: Hashable {
+    private struct OriginIdentity: Hashable {
         let source: BrowseSource
         let period: Int
-        let search: GalleryBrowseSearch
     }
 }
