@@ -63,7 +63,7 @@ printf 'Simulator: %s\n' "$device"
 sim_build=(-destination 'generic/platform=iOS Simulator' ONLY_ACTIVE_ARCH=YES "ARCHS=$(uname -m)")
 test_options=(-destination "id=$device" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1)
 
-if run ios-unit-build xcodebuild build-for-testing "${common[@]}" -scheme "$scheme" "${sim_build[@]}" -derivedDataPath "$out/unit"; then
+if run ios-unit-build xcodebuild build-for-testing "${common[@]}" -scheme "$scheme" "${sim_build[@]}" -derivedDataPath "$out/unit" ENABLE_TESTABILITY=YES; then
     products="$out/unit/Build/Products"
     original=$(find "$products" -maxdepth 1 -name '*.xctestrun' ! -name eh-offline.xctestrun -print -quit)
     python3 - "$original" "$products/eh-offline.xctestrun" <<'PY'
