@@ -29,6 +29,10 @@ let package = Package(
             ],
             path: "Sources/EhAPI"
         ),
+        .testTarget(
+            name: "EhAPITests",
+            dependencies: ["EhAPI", .product(name: "EhModels", package: "EhCore")]
+        ),
         .target(
             name: "EhCookie",
             dependencies: [

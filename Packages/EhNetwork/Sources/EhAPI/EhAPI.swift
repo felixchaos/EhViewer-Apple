@@ -240,7 +240,7 @@ public actor EhAPI {
     }
 
     /// 判断是否应该尝试域名前置直连回退
-    private static func shouldTryDirectFallback(_ error: Error) -> Bool {
+    static func shouldTryDirectFallback(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {
         case .cannotConnectToHost,    // 无法连接 (代理 503 / 连接被拒)
@@ -281,7 +281,7 @@ public actor EhAPI {
     }
 
     /// 判断 URLError 是否可重试
-    private static func isRetryableError(_ error: URLError) -> Bool {
+    static func isRetryableError(_ error: URLError) -> Bool {
         switch error.code {
         case .timedOut,
              .cannotConnectToHost,
@@ -362,25 +362,7 @@ public actor EhAPI {
 
     /// 获取画廊列表 (对应 Android getGalleryList)
     public func getGalleryList(url: String) async throws -> GalleryListResult {
-        guard let requestUrl = URL(string: url) else {
-            throw EhError.invalidUrl
-        }
-
-        let site: EhSite
-        switch requestUrl.host?.lowercased() {
-        case EhURL.domainE: site = .eHentai
-        case EhURL.domainEX: site = .exHentai
-        default: site = AppSettings.shared.gallerySite
-        }
-        // ★ 列表页永远取最新数据 (对齐 Android OkHttp: HTML 请求不走缓存)
-        //   URLCache 对无缓存头的 HTML 会启用启发式过期, 下拉刷新/翻页可能拿到旧页面,
-        //   表现为"列表不断重复同样的画廊" (issue #8 问题一)
-        //   注意: 响应仍然会写入 URLCache, 离线回退 offlineCacheFallback 不受影响
-        let request = EhRequestBuilder.buildGetRequest(
-            url: requestUrl,
-            referer: EhURL.referer(for: site),
-            cachePolicy: .reloadIgnoringLocalCacheData
-        )
+        let request = try EhRequestBuilder.galleryList(url: url, fallbackSite: AppSettings.shared.gallerySite)
 
         let (data, response) = try await sanitizedData(for: request)
         try checkResponse(response, data: data, requestUrl: url)
@@ -768,14 +750,7 @@ public actor EhAPI {
 
     /// 获取排行榜 (对应 Android getTopList)
     public func getTopList(url: String) async throws -> TopListDetail {
-        guard let requestUrl = URL(string: url) else {
-            throw EhError.invalidUrl
-        }
-
-        let request = EhRequestBuilder.buildGetRequest(
-            url: requestUrl,
-            referer: EhURL.topListUrl()
-        )
+        let request = try EhRequestBuilder.topList(url: url)
 
         let (data, response) = try await sanitizedData(for: request)
         try checkResponse(response, data: data)
@@ -1251,71 +1226,19 @@ public actor EhAPI {
 
     // MARK: - 响应检查 (对应 Android doThrowException)
 
-    private static let sadPandaDisposition = "inline; filename=\"sadpanda.jpg\""
-    private static let sadPandaType = "image/gif"
-    private static let sadPandaLength = "9615"
-
-    /// 从页面正文里识别 IP 封禁，并尽量带出解封倒计时
-    /// 典型文案: "Your IP address has been temporarily banned for excessive pageloads
-    ///           ... Expires in 3 hours and 12 minutes"
-    nonisolated static func parseIPBan(from body: String) -> String? {
-        let lowered = body.lowercased()
-        guard lowered.contains("your ip address has been temporarily banned")
-                || lowered.contains("temporarily banned from")
-                || lowered.contains("banned for excessive pageloads") else {
-            return nil
-        }
-
-        // 带上剩余时间，用户才知道要等多久
-        if let range = body.range(of: #"[Ee]xpires? in[^.<]*"#, options: .regularExpression) {
-            return String(body[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return ""
-    }
-
     private func checkResponse(_ response: URLResponse, data: Data, requestUrl: String? = nil) throws {
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw EhError.networkError("Invalid response")
+        guard let failure = EhResponsePolicy.failure(for: response, data: data, requestUrl: requestUrl) else {
+            return
         }
 
-        // Sad Panda 检测 — 三重检查对齐 Android (EhEngine.java L110-117)
-        if httpResponse.value(forHTTPHeaderField: "Content-Disposition") == Self.sadPandaDisposition,
-           httpResponse.value(forHTTPHeaderField: "Content-Type") == Self.sadPandaType,
-           httpResponse.value(forHTTPHeaderField: "Content-Length") == Self.sadPandaLength {
-            // 自动清除失效的 igneous Cookie 并通知 UI (V-15)
+        switch failure {
+        case .sadPanda, .igneousWrong:
             EhCookieManager.shared.clearIgneous()
             NotificationCenter.default.post(name: .ehSadPandaDetected, object: nil)
-            throw EhError.sadPanda
+        default:
+            break
         }
-
-        let body = String(data: data, encoding: .utf8) ?? ""
-
-        // Kokomade 检测
-        if body.contains("https://exhentai.org/img/kokomade.jpg") {
-            throw EhError.kokomade
-        }
-
-        // IP 封禁检测 —— 页面是 200，正文才有提示，必须显式识别
-        // 否则解析器只会得到 0 条画廊，用户看到的是一片空白 (issue #1)
-        if let banMessage = Self.parseIPBan(from: body) {
-            throw EhError.ipBanned(banMessage)
-        }
-
-        // ExHentai 空 body / igneous 错误 (对应 Android EhEngine.java getGalleryList 中的检测)
-        if httpResponse.statusCode == 200,
-           let url = requestUrl,
-           (url == "https://exhentai.org/" || url == "https://exhentai.org"),
-           body.isEmpty {
-            // 自动清除失效的 igneous Cookie (V-15)
-            EhCookieManager.shared.clearIgneous()
-            NotificationCenter.default.post(name: .ehSadPandaDetected, object: nil)
-            throw EhError.igneousWrong
-        }
-
-        // HTTP 错误码
-        if httpResponse.statusCode >= 400 {
-            throw EhError.httpError(httpResponse.statusCode, body)
-        }
+        throw failure
     }
 }
 

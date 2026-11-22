@@ -1,4 +1,5 @@
 import Foundation
+import EhModels
 
 // MARK: - HTTP 请求构建 (对应 Android EhRequestBuilder.java)
 // 统一 User-Agent / Accept / Accept-Language 等伪装 Header
@@ -24,6 +25,32 @@ public enum EhRequestBuilder {
 
     public static let acceptLanguage =
         "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+
+    // MARK: - Gallery endpoints
+
+    static func galleryList(url: String, fallbackSite: @autoclosure () -> EhSite) throws -> URLRequest {
+        guard let requestUrl = URL(string: url) else { throw EhError.invalidUrl }
+
+        let site: EhSite
+        switch requestUrl.host?.lowercased() {
+        case EhURL.domainE: site = .eHentai
+        case EhURL.domainEX: site = .exHentai
+        default: site = fallbackSite()
+        }
+
+        // A list refresh must not reuse an old response for the same URL.
+        // The transport can still fall back to its offline cache.
+        return buildGetRequest(
+            url: requestUrl,
+            referer: EhURL.referer(for: site),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+    }
+
+    static func topList(url: String) throws -> URLRequest {
+        guard let requestUrl = URL(string: url) else { throw EhError.invalidUrl }
+        return buildGetRequest(url: requestUrl, referer: EhURL.topListUrl())
+    }
 
     /// 构建标准 GET 请求
     public static func buildGetRequest(
