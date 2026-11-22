@@ -348,3 +348,90 @@ private final class HeldReaderFileDecode: Sendable {
 
     func release() { wait.signal() }
 }
+
+@MainActor
+struct ReaderDiskCacheOwnershipTests {
+    @Test func currentMissAllowsTheExistingURLFallback() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001011
+        let result = await vm.readPageFromDiskCache(0, lookup: { _, _ in nil })
+        #expect(result == .missing)
+    }
+
+    @Test func cancelledOrRetriedMissCannotReachFallback() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001012
+        let cancelled = HeldReaderCacheLookup()
+        let oldTask = Task { await vm.readPageFromDiskCache(0, lookup: { _, _ in await cancelled.read() }) }
+        await cancelled.waitUntilStarted()
+        oldTask.cancel()
+        await cancelled.finish()
+        #expect(await oldTask.value == .stale)
+
+        let retried = HeldReaderCacheLookup()
+        let newerRetry = Task { await vm.readPageFromDiskCache(0, lookup: { _, _ in await retried.read() }) }
+        await retried.waitUntilStarted()
+        vm.retryGeneration[0] = 1
+        await retried.finish()
+        #expect(await newerRetry.value == .stale)
+    }
+
+    @Test func oldCacheHitCannotPublishAfterABAContextSwitch() async {
+        let vm = ReaderViewModel()
+        let original: Int64 = 900010001014
+        vm.gid = original
+        let hit = HeldReaderCacheLookup()
+        let task = Task { await vm.readPageFromDiskCache(0, lookup: { _, _ in await hit.read() }) }
+        await hit.waitUntilStarted()
+        _ = vm.prepareForGallery(targetGid: original + 1, targetToken: "fixture")
+        _ = vm.prepareForGallery(targetGid: original, targetToken: "fixture")
+        await hit.finish(with: Data([99]))
+        #expect(await task.value == .stale)
+        #expect(vm.cachedImages[0] == nil)
+    }
+
+    @Test func cancelledLookupCannotDropItsReplacementTaskSlot() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001013
+        let old = HeldReaderCacheLookup()
+        let replacement = HeldReaderCacheLookup()
+
+        let first = Task { await vm.downloadImageData(0, cacheLookup: { _, _ in await old.read() }) }
+        await old.waitUntilStarted()
+        vm.cancelDownload(0)
+        let current = Task { await vm.downloadImageData(0, cacheLookup: { _, _ in await replacement.read() }) }
+        await replacement.waitUntilStarted()
+        await old.finish()
+        await first.value
+        #expect(!vm.isStalled(0))
+        await replacement.finish()
+        await current.value
+        #expect(vm.isStalled(0))
+    }
+}
+
+/// The lookup simulates an already enqueued disk read: caller cancellation
+/// doesn't make the actual disk work suddenly return.
+private actor HeldReaderCacheLookup {
+    private var started = false
+    private var startWaiter: CheckedContinuation<Void, Never>?
+    private var result: CheckedContinuation<Data?, Never>?
+
+    func waitUntilStarted() async {
+        if !started { await withCheckedContinuation { startWaiter = $0 } }
+    }
+
+    func read() async -> Data? {
+        await withCheckedContinuation {
+            result = $0
+            started = true
+            startWaiter?.resume()
+            startWaiter = nil
+        }
+    }
+
+    func finish(with bytes: Data? = nil) {
+        result?.resume(returning: bytes)
+        result = nil
+    }
+}

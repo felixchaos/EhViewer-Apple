@@ -155,13 +155,13 @@ class ReaderViewModel {
     @ObservationIgnored private var loadingPages: Set<Int> = []
     @ObservationIgnored private var downloadingImages: Set<Int> = []
     /// 正在进行的单页下载。由 ViewModel 持有，不随视图或预加载任务被取消。
-    @ObservationIgnored private var downloadTasks: [Int: Task<Void, Never>] = [:]
+    @ObservationIgnored private var downloadTasks: [Int: (id: UUID, task: Task<Void, Never>)] = [:]
     /// 后台预加载任务 —— 翻页时取消上一轮，避免快速翻页堆积并发请求
     @ObservationIgnored private var preloadTask: Task<Void, Never>?
     /// 上一次预加载的锚点页 —— 用来推断翻页方向
     @ObservationIgnored private var lastPreloadAnchor: Int?
     @ObservationIgnored private var downloadDir: URL?
-    @ObservationIgnored private var localImageSession: UInt64 = 0
+    @ObservationIgnored private var readerImageSession: UInt64 = 0
 
     /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
     private func cacheKey(for page: Int) -> NSString {
@@ -607,7 +607,7 @@ class ReaderViewModel {
     /// 彻底重置所有状态 — 在加载新画廊前调用
     /// UI 会因 totalPages == 0 立即切入 Loading 状态
     private func resetState() {
-        localImageSession &+= 1
+        readerImageSession &+= 1
         // 页面状态
         currentPage = 0
         totalPages = 0
@@ -769,31 +769,38 @@ class ReaderViewModel {
     ///
     /// 表现就是「明明加载到 100% 了又重新开始」，流量翻倍。图片下到一半的
     /// 字节没有任何复用价值，取消它省不下什么，重下却要付全额。
-    func downloadImageData(_ index: Int) async {
+    func downloadImageData(
+        _ index: Int, cacheLookup: (@Sendable (Int64, Int) async -> Data?)? = nil
+    ) async {
         if let inFlight = downloadTasks[index] {
             // 已经有人在下这一页，等它就行，不要再发一个请求
-            await inFlight.value
+            await inFlight.task.value
             return
         }
         // Task {} 不继承调用方的取消状态：视图消失、预加载被取消，
         // 都不会再打断已经开始的下载。要停只能显式调 cancelDownload。
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.performImageDownload(index)
+            await self.performImageDownload(index, cacheLookup: cacheLookup)
         }
-        downloadTasks[index] = task
+        let identity = UUID()
+        downloadTasks[index] = (identity, task)
         await task.value
-        downloadTasks[index] = nil
+        if downloadTasks[index]?.id == identity {
+            downloadTasks[index] = nil
+        }
     }
 
     /// 显式取消某一页的下载。只在这一页确实不再需要时调
     /// （evictDistantPages 判定它已经离得太远）。
     func cancelDownload(_ index: Int) {
-        downloadTasks[index]?.cancel()
+        downloadTasks[index]?.task.cancel()
         downloadTasks[index] = nil
     }
 
-    private func performImageDownload(_ index: Int) async {
+    private func performImageDownload(
+        _ index: Int, cacheLookup: (@Sendable (Int64, Int) async -> Data?)?
+    ) async {
         // 已缓存 → 直接提升到 Observable 层 (使用 gid:page 复合 key)
         let key = cacheKey(for: index)
         if let cached = Self.imageCache.object(forKey: key) {
@@ -810,14 +817,7 @@ class ReaderViewModel {
         // 同一页要重新从网络下一遍。这是「同一本看两遍付两份流量」的来源，
         // 也是设置里那个「阅读缓存大小」一直没有真正生效的原因——
         // 阅读器根本没往那块缓存里写过东西。
-        if let cached = SpiderDen.cachedImageData(gid: gid, page: index),
-           let img = await Task.detached(priority: .userInitiated, operation: {
-               Self.downsampledImage(data: cached)
-           }).value {
-            Self.imageCache.setObject(img, forKey: key, cost: Self.decodedCost(of: img))
-            await MainActor.run { self.cachedImages[index] = img }
-            return
-        }
+        guard await readPageFromDiskCache(index, lookup: cacheLookup) == .missing else { return }
 
         guard let urlString = imageURLs[index], let initialURL = URL(string: urlString) else { return }
 
@@ -984,6 +984,53 @@ class ReaderViewModel {
         }
     }
 
+    enum ReaderDiskCacheResult: Equatable {
+        case loaded
+        case missing
+        case stale
+    }
+
+    /// A stale miss must not drive a second load using another gallery's URL.
+    func readPageFromDiskCache(
+        _ index: Int, lookup: (@Sendable (Int64, Int) async -> Data?)? = nil
+    ) async -> ReaderDiskCacheResult {
+        let gallery = gid
+        let session = readerImageSession
+        let retry = retryGeneration[index, default: 0]
+        let key = cacheKey(for: index)
+
+        let bytes: Data?
+        if let lookup {
+            bytes = await lookup(gallery, index)
+        } else {
+            bytes = await SpiderDen.cachedReaderImageData(gid: gallery, page: index)
+        }
+        guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return .stale }
+        guard let bytes else { return .missing }
+
+        // A decoded disk-cache result can also arrive after a retry or switch.
+        let worker = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return nil as PlatformImage? }
+            return Self.downsampledImage(data: bytes)
+        }
+        let image = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return .stale }
+        guard let image else { return .missing }
+
+        Self.imageCache.setObject(image, forKey: key, cost: Self.decodedCost(of: image))
+        cachedImages[index] = image
+        return .loaded
+    }
+
+    private func ownsImageRead(_ index: Int, gallery: Int64, session: UInt64, retry: Int) -> Bool {
+        !Task.isCancelled && gid == gallery && readerImageSession == session
+            && retryGeneration[index, default: 0] == retry
+    }
+
     /// A read from a known downloaded page does not occupy the main actor.
     /// Keep ownership checks around publication because reading/decoding can
     /// outlive an explicit cancellation, a retry, or a gallery replacement.
@@ -992,7 +1039,7 @@ class ReaderViewModel {
         decode: (@Sendable (URL) -> PlatformImage?)? = nil
     ) async {
         let gallery = gid
-        let session = localImageSession
+        let session = readerImageSession
         let retry = retryGeneration[index, default: 0]
         let key = cacheKey(for: index)
 
@@ -1006,8 +1053,8 @@ class ReaderViewModel {
         } onCancel: {
             worker.cancel()
         }
-        guard !Task.isCancelled, gid == gallery, localImageSession == session,
-              retryGeneration[index, default: 0] == retry, imageURLs[index] == source else { return }
+        guard ownsImageRead(index, gallery: gallery, session: session, retry: retry),
+              imageURLs[index] == source else { return }
 
         if let image {
             Self.imageCache.setObject(image, forKey: key, cost: Self.decodedCost(of: image))
@@ -1269,6 +1316,7 @@ class ReaderViewModel {
             && !errorPages.contains(index)
             && !downloadingImages.contains(index)
             && !loadingPages.contains(index)
+            && downloadTasks[index] == nil
     }
 
     /// 盯着某一页，直到它出图或出错。

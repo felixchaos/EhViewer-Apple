@@ -88,6 +88,12 @@ public actor SpiderDen {
         readCache?.getData(forKey: "image_\(gid)_\(page)")
     }
 
+    /// Wait for the existing cache queue without blocking the reader's actor.
+    public static func cachedReaderImageData(gid: Int64, page: Int) async -> Data? {
+        guard let cache = readCache, !Task.isCancelled else { return nil }
+        return await cache.getDataAsync(forKey: "image_\(gid)_\(page)")
+    }
+
     /// 把一页写进阅读缓存。超出上限时由 SimpleDiskCache 自行淘汰。
     @discardableResult
     public static func cacheImageData(_ data: Data, gid: Int64, page: Int) -> Bool {
@@ -486,11 +492,15 @@ public enum SpiderMode: Sendable {
 final class SimpleDiskCache: @unchecked Sendable {
     private let directory: URL
     private let maxSize: Int
-    private let queue = DispatchQueue(label: "com.ehviewer.spider.cache", qos: .utility)
+    private let queue: DispatchQueue
 
-    init(directory: URL, maxSize: Int) {
+    init(
+        directory: URL, maxSize: Int,
+        queue: DispatchQueue = DispatchQueue(label: "com.ehviewer.spider.cache", qos: .utility)
+    ) {
         self.directory = directory
         self.maxSize = maxSize
+        self.queue = queue
 
         // 异步清理过大的缓存
         queue.async { [weak self] in
@@ -506,18 +516,28 @@ final class SimpleDiskCache: @unchecked Sendable {
     }
 
     func getData(forKey key: String) -> Data? {
-        queue.sync {
-            let file = fileURL(for: key)
-            guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        queue.sync { readOnCacheQueue(key: key) }
+    }
 
-            // 更新访问时间 (LRU)
-            try? FileManager.default.setAttributes(
-                [.modificationDate: Date()],
-                ofItemAtPath: file.path
-            )
-
-            return try? Data(contentsOf: file)
+    func getDataAsync(forKey key: String) async -> Data? {
+        guard !Task.isCancelled else { return nil }
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: self.readOnCacheQueue(key: key))
+            }
         }
+    }
+
+    /// The read and LRU timestamp update remain ordered with writers and trim.
+    private func readOnCacheQueue(key: String) -> Data? {
+        let file = fileURL(for: key)
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: file.path
+        )
+        return try? Data(contentsOf: file)
     }
 
     @discardableResult
