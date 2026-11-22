@@ -25,7 +25,10 @@ let package = Package(
         ),
         .testTarget(
             name: "EhParserTests",
-            dependencies: ["EhParser"],
+            dependencies: [
+                "EhParser",
+                .product(name: "EhModels", package: "EhCore"),
+            ],
             path: "Tests",
             resources: [.copy("Fixtures")]
         ),

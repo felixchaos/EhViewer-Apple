@@ -28,10 +28,8 @@ public enum MyTagListParser {
             return list
         }
 
-        let tags = outer.children()
-        // 跳过第一个元素 (header)
-        for i in 1..<tags.size() {
-            let tag = tags.get(i)
+        // Skip the header when present. An empty container is a valid empty list.
+        for tag in outer.children().dropFirst() {
             if let userTag = parseUserTag(tag) {
                 list.userTags.append(userTag)
             }
