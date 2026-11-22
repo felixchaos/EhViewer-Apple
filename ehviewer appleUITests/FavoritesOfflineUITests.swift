@@ -185,6 +185,30 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(ranking.buttons["全部时间"].firstMatch.exists)
     }
 
+    @MainActor func testHomeAndPopularUseSubmittedSearchQuery() {
+        let app = launch(cloud: "empty")
+        XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
+
+        func submit(_ query: String) {
+            let phoneField = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题")).firstMatch
+            let searchField = app.searchFields.firstMatch
+            let field = phoneField.exists ? phoneField : searchField
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            field.typeText(query + "\n")
+        }
+
+        submit("offlinehome")
+        XCTAssertTrue(app.staticTexts["Synthetic home search result"].firstMatch.waitForExistence(timeout: 8))
+
+        let popular = app.buttons["热门"].firstMatch
+        XCTAssertTrue(popular.waitForExistence(timeout: 5))
+        popular.tap()
+        XCTAssertTrue(app.staticTexts["Synthetic popular launch"].firstMatch.waitForExistence(timeout: 8))
+        submit("offlinepopular")
+        XCTAssertTrue(app.staticTexts["Synthetic popular search result"].firstMatch.waitForExistence(timeout: 8))
+    }
+
     @MainActor func testDownloadedReaderPageJumpAndReopenRetainsProgress() {
         let app = launch(cloud: "empty", localReader: true)
         openSynthetic(app)

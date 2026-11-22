@@ -103,6 +103,17 @@ enum EhOfflineUIFixture {
             default: return GalleryListResult()
             }
         }
+        // Assert the actual submitted request, not merely a selected tab label.
+        if let term = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "f_search" })?.value {
+            let results: (Int64, String)? = switch term {
+            case "offlinehome": (900010000006, "Synthetic home search result")
+            case "offlinepopular": (900010000007, "Synthetic popular search result")
+            default: nil
+            }
+            if let (id, title) = results {
+                return GalleryListResult(galleries: [GalleryInfo(gid: id, token: "fixture", title: title)])
+            }
+        }
         // Deliberately distinct responses prove the UI chose the expected request.
         // Keep the original home fixture and other paths stable.
         switch URLComponents(string: url)?.path {
