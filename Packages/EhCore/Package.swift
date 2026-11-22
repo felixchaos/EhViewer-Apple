@@ -28,6 +28,10 @@ let package = Package(
             ],
             path: "Sources/EhDatabase"
         ),
+        .testTarget(
+            name: "EhDatabaseTests",
+            dependencies: ["EhDatabase", .product(name: "GRDB", package: "GRDB.swift")]
+        ),
         .target(
             name: "EhSettings",
             dependencies: ["EhModels"],

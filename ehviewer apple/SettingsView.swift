@@ -648,6 +648,8 @@ struct SettingsView: View {
             NavigationLink("收藏夹名称") {
                 favCatNamesView
             }
+
+            AndroidLibraryImportControl()
         }
     }
 
@@ -1033,12 +1035,12 @@ struct SettingsView: View {
             ))
 
             // 导出数据 (对齐 Android: export_data)
-            Button("导出数据") {
+            Button("导出 Apple 端设置（JSON）") {
                 vm.exportData()
             }
 
             // 导入数据 (对齐 Android: import_data)
-            Button("导入数据") {
+            Button("导入 Apple 端设置（JSON）") {
                 vm.importData()
             }
             .fileImporter(

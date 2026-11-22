@@ -89,7 +89,7 @@ public final class EhDatabase: Sendable {
 
     private let dbQueue: DatabaseQueue
 
-    private init(inMemory: Bool = false) throws {
+    init(inMemory: Bool = false, storageURL: URL? = nil) throws {
         self.isDegraded = inMemory
 
         var config = Configuration()
@@ -110,9 +110,9 @@ public final class EhDatabase: Sendable {
         if inMemory {
             dbQueue = try DatabaseQueue(configuration: config)
         } else {
-            let dbPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-                .first!.appendingPathComponent("eh.sqlite").path
-            dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
+            let dbURL = storageURL ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                .first!.appendingPathComponent("eh.sqlite")
+            dbQueue = try DatabaseQueue(path: dbURL.path, configuration: config)
         }
         try migrator.migrate(dbQueue)
     }
@@ -311,6 +311,62 @@ public final class EhDatabase: Sendable {
         try dbQueue.write { db in
             _ = try DownloadRecord.deleteOne(db, key: gid)
         }
+    }
+
+    // MARK: - Android library import
+
+    public func previewAndroidLibrary(_ source: AndroidLibraryImport, historyLimit: Int)
+        throws -> AndroidLibraryImportSummary
+    {
+        guard !isDegraded else { throw AndroidLibraryImportError.destinationUnavailable }
+        return try dbQueue.read { db in
+            try Self.mergeAndroidLibrary(source, historyLimit: historyLimit, into: db, shouldWrite: false)
+        }
+    }
+
+    /// Rechecks duplicates and available history slots in the same transaction
+    /// as both inserts. Never trims or replaces destination rows.
+    public func importAndroidLibrary(_ source: AndroidLibraryImport, historyLimit: Int)
+        throws -> AndroidLibraryImportSummary
+    {
+        guard !isDegraded else { throw AndroidLibraryImportError.destinationUnavailable }
+        return try dbQueue.write { db in
+            try Self.mergeAndroidLibrary(source, historyLimit: historyLimit, into: db, shouldWrite: true)
+        }
+    }
+
+    private static func mergeAndroidLibrary(_ source: AndroidLibraryImport, historyLimit: Int,
+                                    into db: Database, shouldWrite: Bool) throws -> AndroidLibraryImportSummary {
+        var favorites = AndroidLibraryImportCounts()
+        var history = AndroidLibraryImportCounts()
+        favorites.invalid = source.invalidFavorites
+        history.invalid = source.invalidHistory
+        for record in source.favorites {
+            if try LocalFavoriteRecord.exists(db, key: record.gid) {
+                favorites.existing += 1
+            } else {
+                if shouldWrite { try record.insert(db) }
+                favorites.new += 1
+            }
+        }
+
+        let existingHistoryCount = try HistoryRecord.fetchCount(db)
+        var budget = max(0, max(0, historyLimit) - existingHistoryCount)
+        let newestFirst = source.history.sorted {
+            $0.date == $1.date ? $0.gid > $1.gid : $0.date > $1.date
+        }
+        for record in newestFirst {
+            if try HistoryRecord.exists(db, key: record.gid) {
+                history.existing += 1
+            } else if budget > 0 {
+                if shouldWrite { try record.insert(db) }
+                history.new += 1
+                budget -= 1
+            } else {
+                history.overHistoryLimit += 1
+            }
+        }
+        return .init(favorites: favorites, history: history)
     }
 
     // MARK: - 历史记录操作
