@@ -190,10 +190,14 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
 
         func submit(_ query: String) {
-            let phoneField = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题")).firstMatch
-            let searchField = app.searchFields.firstMatch
-            let field = phoneField.exists ? phoneField : searchField
+            // The wide shell keeps Home's submitted search mounted when a
+            // sidebar destination is selected. Target the current empty input,
+            // not Home's retained field that still holds the prior query.
+            let placeholder = "搜索标签或标题"
+            let emptyInput = NSPredicate(format: "placeholderValue == %@ AND (value == %@ OR value == %@ OR value == nil)", placeholder, placeholder, "")
+            let field = app.textFields.matching(emptyInput).firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 5))
+            XCTAssertTrue(field.isHittable)
             field.tap()
             field.typeText(query + "\n")
         }
