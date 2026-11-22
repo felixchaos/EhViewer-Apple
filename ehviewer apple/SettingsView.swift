@@ -21,6 +21,7 @@ import UIKit
 
 struct SettingsView: View {
     @State private var vm = SettingsViewModel()
+    @State private var showSettingsBackupImportPicker = false
     @Environment(\.openURL) private var openURL
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
@@ -1036,20 +1037,59 @@ struct SettingsView: View {
 
             // 导出数据 (对齐 Android: export_data)
             Button("导出 Apple 端设置（JSON）") {
-                vm.exportData()
+                exportSettingsBackup()
             }
 
             // 导入数据 (对齐 Android: import_data)
             Button("导入 Apple 端设置（JSON）") {
-                vm.importData()
+                showSettingsBackupImportPicker = true
             }
             .fileImporter(
-                isPresented: $vm.showImportPicker,
+                isPresented: $showSettingsBackupImportPicker,
                 allowedContentTypes: [.json],
                 allowsMultipleSelection: false
             ) { result in
-                vm.handleImport(result)
+                handleSettingsBackupImport(result)
             }
+        }
+    }
+
+    private func exportSettingsBackup() {
+        guard let jsonData = try? SettingsBackup.exportJSON(from: .standard) else { return }
+
+        #if os(iOS)
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("ehviewer_settings.json")
+        try? jsonData.write(to: tempURL)
+
+        let activityVC = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(activityVC, animated: true)
+        }
+        #else
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "ehviewer_settings.json"
+        panel.title = "导出设置"
+        if panel.runModal() == .OK, let url = panel.url {
+            try? jsonData.write(to: url)
+        }
+        #endif
+    }
+
+    private func handleSettingsBackupImport(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        guard let data = try? Data(contentsOf: url) else { return }
+        do {
+            try SettingsBackup.restoreJSON(data, into: .standard)
+            vm.reloadSettingsAfterBackupImport()
+        } catch {
+            // Keep the existing behavior when the selected file is not a settings archive.
+            return
         }
     }
 
@@ -2108,90 +2148,7 @@ class SettingsViewModel {
         GalleryCache.shared.clearAll()
     }
 
-    // MARK: - 数据导出/导入 (对齐 Android: ExportDataPreference / ImportDataPreference)
-
-    var showImportPicker = false
-    var showExportSuccess = false
-
-    /// 导出数据: 将 UserDefaults 设置导出为 JSON
-    func exportData() {
-        let defaults = UserDefaults.standard
-        let allKeys = [
-            "gallery_site", "domain_fronting", "dns_over_https", "built_in_hosts",
-            "multi_thread_download", "preload_image", "download_delay", "download_timeout",
-            "download_origin_image", "image_resolution", "read_cache_size", "list_mode",
-            "show_jpn_title", "show_tag_translations", "show_gallery_comment", "show_gallery_rating",
-            "show_read_progress", "wide_screen_list_mode", "show_eh_events", "show_eh_limits",
-            "default_categories", "excluded_tag_namespaces", "excluded_languages",
-            "reading_direction", "page_scaling", "start_position", "keep_screen_on",
-            "reading_fullscreen", "gallery_show_clock", "gallery_show_progress", "gallery_show_battery",
-            "show_page_interval", "volume_page", "reverse_volume_page", "screen_rotation",
-            "auto_page_interval", "color_filter", "default_favorite_2", "thumb_size",
-            "detail_size", "thumb_resolution", "fix_thumb_url",
-            "enable_secure", "security_delay", "save_parse_error_body", "history_info_size",
-            "theme", "launch_page", "show_gallery_pages", "cellular_network_warning",
-            "custom_screen_lightness", "screen_lightness",
-        ]
-
-        var exportDict: [String: Any] = [:]
-        for key in allKeys {
-            if let value = defaults.object(forKey: key) {
-                exportDict[key] = value
-            }
-        }
-
-        // 收藏夹名称
-        for i in 0..<10 {
-            if let name = defaults.string(forKey: "fav_cat_\(i)") {
-                exportDict["fav_cat_\(i)"] = name
-            }
-        }
-
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: exportDict, options: .prettyPrinted) else {
-            return
-        }
-
-        #if os(iOS)
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("ehviewer_settings.json")
-        try? jsonData.write(to: tempURL)
-
-        let activityVC = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController {
-            rootVC.present(activityVC, animated: true)
-        }
-        #else
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "ehviewer_settings.json"
-        panel.title = "导出设置"
-        if panel.runModal() == .OK, let url = panel.url {
-            try? jsonData.write(to: url)
-        }
-        #endif
-    }
-
-    /// 导入数据
-    func importData() {
-        showImportPicker = true
-    }
-
-    func handleImport(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, let url = urls.first else { return }
-
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
-
-        guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
-        }
-
-        let defaults = UserDefaults.standard
-        for (key, value) in dict {
-            defaults.set(value, forKey: key)
-        }
-
+    func reloadSettingsAfterBackupImport() {
         // 重新加载 ViewModel 的存储属性
         gallerySite = AppSettings.shared.gallerySite.rawValue
         listMode = AppSettings.shared.listMode.rawValue
