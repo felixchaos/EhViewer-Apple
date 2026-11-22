@@ -217,7 +217,7 @@ final class FavoritesOfflineUITests: XCTestCase {
     @MainActor func testHistoryDetailTagShowsScopedResultAndReturnsToHistory() {
         let app = launch(cloud: "empty", launchPage: 5, historyTag: true)
         let historyItem = app.staticTexts["Synthetic tag history item"].firstMatch
-        let tag = app.staticTexts["route fixture"].firstMatch
+        let tag = app.buttons["route fixture"].firstMatch
         let result = app.staticTexts["Synthetic history tag result"].firstMatch
 
         XCTAssertTrue(historyItem.waitForExistence(timeout: 8))
