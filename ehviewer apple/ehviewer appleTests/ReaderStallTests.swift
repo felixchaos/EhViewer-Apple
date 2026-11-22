@@ -403,10 +403,10 @@ struct ReaderDiskCacheOwnershipTests {
         await replacement.waitUntilStarted()
         await old.finish()
         await first.value
-        #expect(!vm.isStalled(0))
+        #expect(vm.activeDownloadPages().contains(0))
         await replacement.finish()
         await current.value
-        #expect(vm.isStalled(0))
+        #expect(!vm.activeDownloadPages().contains(0))
     }
 }
 

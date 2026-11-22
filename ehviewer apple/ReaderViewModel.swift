@@ -493,7 +493,7 @@ class ReaderViewModel {
     }
 
     /// 当前有下载在跑的页
-    private func activeDownloadPages() -> [Int] {
+    func activeDownloadPages() -> [Int] {
         Array(downloadTasks.keys)
     }
 
@@ -1316,7 +1316,6 @@ class ReaderViewModel {
             && !errorPages.contains(index)
             && !downloadingImages.contains(index)
             && !loadingPages.contains(index)
-            && downloadTasks[index] == nil
     }
 
     /// 盯着某一页，直到它出图或出错。
