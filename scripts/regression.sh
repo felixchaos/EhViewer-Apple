@@ -35,11 +35,16 @@ run() {
 # Package tests can be used independently on macOS with no simulator.
 printf 'Logs: %s\n' "$out"
 printf 'Commit: %s\n' "$(git rev-parse HEAD)"
-run EhCore swift test --package-path Packages/EhCore --scratch-path "$cache/core" --jobs "$jobs" || true
-run EhParser swift test --package-path Packages/EhParser --scratch-path "$cache/parser" --jobs "$jobs" || true
-run EhDownload swift test --package-path Packages/EhDownload --scratch-path "$cache/download" --jobs "$jobs" || true
-run EhNetwork swift test --package-path Packages/EhNetwork --scratch-path "$cache/network" --jobs "$jobs" || true
-run EhSpider swift test --package-path Packages/EhSpider --scratch-path "$cache/spider" --jobs "$jobs" || true
+# Standalone SwiftPM resolves a different dependency graph than the Xcode
+# workspace. Isolate its Package.resolved writes from the source checkout.
+package_source="$out/package-source"
+mkdir -p "$package_source"
+tar --exclude .build --exclude .swiftpm -cf - Packages | tar -xf - -C "$package_source"
+run EhCore swift test --package-path "$package_source/Packages/EhCore" --scratch-path "$cache/core" --jobs "$jobs" || true
+run EhParser swift test --package-path "$package_source/Packages/EhParser" --scratch-path "$cache/parser" --jobs "$jobs" || true
+run EhDownload swift test --package-path "$package_source/Packages/EhDownload" --scratch-path "$cache/download" --jobs "$jobs" || true
+run EhNetwork swift test --package-path "$package_source/Packages/EhNetwork" --scratch-path "$cache/network" --jobs "$jobs" || true
+run EhSpider swift test --package-path "$package_source/Packages/EhSpider" --scratch-path "$cache/spider" --jobs "$jobs" || true
 
 if [[ ${1:-} == --packages-only ]]; then exit "$status"; fi
 if [[ $# != 2 ]]; then
