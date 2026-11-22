@@ -33,6 +33,7 @@ struct EhSearchBar: View {
 
     var placeholder: String = "搜索标签或标题"
     var showsCancelButton: Bool = true
+    var showsClearForEmpty: Bool = false
 
     /// 聚焦状态。这里用普通 Binding 而不是 @FocusState.Binding：
     /// iOS 侧的焦点由 UISearchTextField 自己持有，而 @FocusState.Binding
@@ -88,6 +89,12 @@ struct EhSearchBar: View {
                             .foregroundStyle(EhColor.tertiaryLabel)
                     }
                     .buttonStyle(.plain)
+                } else if showsClearForEmpty {
+                    Button("清除搜索", systemImage: "xmark.circle.fill") { onClear?() }
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 15))
+                        .foregroundStyle(EhColor.tertiaryLabel)
+                        .buttonStyle(.plain)
                 }
 
                 if !isFocused {

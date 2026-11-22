@@ -816,6 +816,7 @@ struct GalleryListView: View {
             text: $searchFieldText,
             tokens: $searchTokens,
             placeholder: "搜索标签或标题",
+            showsClearForEmpty: initialSavedSearch?.query.isEmpty == true && initialSavedSearch?.explicitFilters != nil,
             isFocused: $isSearchFocused,
             // 右侧不再放小图标：15pt 的点按目标远低于 HIG 的 44pt，手机上按不中。
             // 标签选择器、高级搜索、快速搜索都移进聚焦面板，那里有整行宽度。
@@ -1038,10 +1039,6 @@ struct GalleryListView: View {
         // 其余按钮 (对齐 Android FAB secondaryButtons)
         ToolbarItem(placement: .automatic) {
             HStack(spacing: 4) {
-                if let search = initialSavedSearch, search.query.isEmpty, search.explicitFilters != nil {
-                    Button("清除搜索", systemImage: "xmark.circle") { clearSearchField() }
-                        .labelStyle(.iconOnly)
-                }
                 // 快速搜索 (对齐 Android QuickSearch)
                 Button { showQuickSearch = true } label: {
                     Image(systemName: "bookmark")
