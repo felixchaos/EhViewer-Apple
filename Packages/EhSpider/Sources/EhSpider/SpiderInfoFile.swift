@@ -132,20 +132,12 @@ public struct SpiderInfoFile: Sendable {
     ///   - totalPages: 总页数
     /// - Returns: 已下载的页面索引集合
     public static func getDownloadedPages(in directory: URL, totalPages: Int) -> Set<Int> {
+        guard totalPages > 0 else { return [] }
+
         var downloaded = Set<Int>()
-
-        for pageIndex in 0..<totalPages {
-            // 尝试常见图片扩展名
-            for ext in [".jpg", ".png", ".gif", ".webp"] {
-                let filename = String(format: "%08d%@", pageIndex + 1, ext)
-                let fileURL = directory.appendingPathComponent(filename)
-                if FileManager.default.fileExists(atPath: fileURL.path) {
-                    downloaded.insert(pageIndex)
-                    break
-                }
-            }
+        for pageIndex in 0..<totalPages where getLocalImageURL(in: directory, pageIndex: pageIndex) != nil {
+            downloaded.insert(pageIndex)
         }
-
         return downloaded
     }
 
@@ -155,13 +147,7 @@ public struct SpiderInfoFile: Sendable {
     ///   - pageIndex: 页面索引 (0-based)
     /// - Returns: 本地图片 URL，不存在返回 nil
     public static func getLocalImageURL(in directory: URL, pageIndex: Int) -> URL? {
-        for ext in [".jpg", ".png", ".gif", ".webp"] {
-            let filename = String(format: "%08d%@", pageIndex + 1, ext)
-            let fileURL = directory.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                return fileURL
-            }
-        }
-        return nil
+        guard pageIndex >= 0, pageIndex < Int.max else { return nil }
+        return SpiderDen.findImageFile(in: directory, index: pageIndex)
     }
 }
