@@ -430,36 +430,41 @@ class ReaderViewModel {
         return compositeImages(left: left, right: right)
     }
 
-    /// 双页合成: 将两张图片水平拼合
-    /// 安全限制: 合成结果不超过 maxDecodePixelSize，防止双大图合成导致 OOM
+    /// 拼合保持原始布局比例，iOS 按实际输出像素而非设备点数限制位图。
     private func compositeImages(left: PlatformImage, right: PlatformImage) -> PlatformImage {
-        var maxH = max(left.size.height, right.size.height)
-        var totalW = left.size.width + right.size.width
-
-        // 安全阀: 如果合成尺寸过大，按比例缩小
-        let maxDimension = max(totalW, maxH)
-        let scale: CGFloat = maxDimension > Self.maxDecodePixelSize
-            ? Self.maxDecodePixelSize / maxDimension
-            : 1.0
-
-        if scale < 1.0 {
-            totalW *= scale
-            maxH *= scale
-        }
+        let inputH = max(left.size.height, right.size.height)
+        let inputW = left.size.width + right.size.width
+        let maxDimension = max(inputW, inputH)
+        let dimensionScale = min(1, Self.maxDecodePixelSize / maxDimension)
 
         #if os(iOS)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: maxH))
+        // Decoded UIImage sizes already represent source pixels here. A
+        // default @2x/@3x renderer would multiply that buffer without detail.
+        let pixelBudget: CGFloat = 16 * 1024 * 1024  // ≤64 MiB of standard RGBA pixels
+        let areaScale = sqrt(pixelBudget / (inputW * inputH))
+        let scale = min(dimensionScale, areaScale)
+        let totalW = max(1, floor(inputW * scale))
+        let maxH = max(1, floor(inputH * scale))
+        let layoutScale = min(totalW / inputW, maxH / inputH)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.preferredRange = .standard
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: maxH), format: format)
         return renderer.image { _ in
-            let lw = left.size.width * scale
-            let lh = left.size.height * scale
-            let rw = right.size.width * scale
-            let rh = right.size.height * scale
+            let lw = left.size.width * layoutScale
+            let lh = left.size.height * layoutScale
+            let rw = right.size.width * layoutScale
+            let rh = right.size.height * layoutScale
+            let leftX = (totalW - lw - rw) / 2
             let leftY = (maxH - lh) / 2
-            left.draw(in: CGRect(x: 0, y: leftY, width: lw, height: lh))
+            left.draw(in: CGRect(x: leftX, y: leftY, width: lw, height: lh))
             let rightY = (maxH - rh) / 2
-            right.draw(in: CGRect(x: lw, y: rightY, width: rw, height: rh))
+            right.draw(in: CGRect(x: leftX + lw, y: rightY, width: rw, height: rh))
         }
         #else
+        let scale = dimensionScale
+        let totalW = inputW * scale
+        let maxH = inputH * scale
         let composited = NSImage(size: NSSize(width: totalW, height: maxH))
         composited.lockFocus()
         let lw = left.size.width * scale

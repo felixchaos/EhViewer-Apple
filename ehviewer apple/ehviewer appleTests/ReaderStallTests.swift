@@ -625,3 +625,76 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
     override func stopLoading() {}
 }
 #endif
+
+#if os(iOS)
+@MainActor struct ReaderSpreadBudgetTests {
+    private func page(_ size: CGSize, color: UIColor) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+
+    private func spread(_ primary: UIImage, _ secondary: UIImage?) -> ReaderViewModel {
+        let model = ReaderViewModel()
+        model.spreads = [.init(id: 0, primaryPage: 0, secondaryPage: 1)]
+        model.cachedImages = [0: primary]
+        model.cachedImages[1] = secondary
+        return model
+    }
+
+    @Test func preservesPrimaryUntilPartnerArrivesAndDoesNotMagnifySourcePixels() throws {
+        let first = page(CGSize(width: 1600, height: 2400), color: .red)
+        let second = page(CGSize(width: 1600, height: 2400), color: .blue)
+        let model = spread(first, nil)
+        #expect(model.spreadImage(at: 0, direction: .leftToRight) === first)
+        model.cachedImages[1] = second
+        let image = try #require(model.spreadImage(at: 0, direction: .leftToRight))
+        let cg = try #require(image.cgImage)
+        #expect(image.scale == 1)
+        #expect(cg.width == 3200)
+        #expect(cg.height == 2400)
+    }
+
+    @Test func largePairRespectsHardPixelBudgetAndProportions() throws {
+        let first = page(CGSize(width: 2600, height: 3600), color: .red)
+        let model = spread(first, first)
+        let cg = try #require(model.spreadImage(at: 0, direction: .leftToRight)?.cgImage)
+        #expect(cg.width * cg.height <= 16 * 1024 * 1024)
+        #expect(abs(Double(cg.width) / Double(cg.height) - 5200.0 / 3600) < 0.002)
+    }
+
+    private func rgb(_ image: CGImage, x: Int) throws -> [UInt8] {
+        let sample = try #require(image.cropping(to: CGRect(x: x, y: 8, width: 1, height: 1)))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let ok = pixel.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                          bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        #expect(ok)
+        return pixel
+    }
+
+    @Test func originalVisualOrderMatchesBothReadingDirections() throws {
+        let first = page(CGSize(width: 32, height: 32), color: .red)
+        let second = page(CGSize(width: 32, height: 32), color: .blue)
+        let model = spread(first, second)
+        let ltr = try #require(model.spreadImage(at: 0, direction: .leftToRight)?.cgImage)
+        let rtl = try #require(model.spreadImage(at: 0, direction: .rightToLeft)?.cgImage)
+        let ltrLeft = try rgb(ltr, x: 8)
+        let ltrRight = try rgb(ltr, x: 40)
+        let rtlLeft = try rgb(rtl, x: 8)
+        let rtlRight = try rgb(rtl, x: 40)
+        #expect(ltrLeft == rtlRight)
+        #expect(ltrRight == rtlLeft)
+        #expect(ltrLeft[0] > ltrLeft[2])
+        #expect(ltrRight[2] > ltrRight[0])
+    }
+}
+#endif
