@@ -227,7 +227,10 @@ struct ImageReaderView: View {
         // 跳页弹窗已随浮动导航一起删除：跳页现在走顶栏的目录网格
         // （ReaderPageGrid）和底栏的滑杆，不再需要手输页码
         // 切换阅读模式时从 NSCache 恢复已加载图片，避免重新下载
-        .onChange(of: readingDirection) { _, _ in
+        .onChange(of: readingDirection) { previous, current in
+            #if os(iOS)
+            vm.discardSpreadOnEnteringVertical(from: previous, to: current)
+            #endif
             vm.restoreCachedImages(around: vm.currentPage)
         }
         // 键盘 / 外置翻页器

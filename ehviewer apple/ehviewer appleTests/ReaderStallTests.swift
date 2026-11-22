@@ -729,6 +729,19 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
         #expect(model.spreadPresentation(at: 0, direction: .leftToRight) == nil)
     }
 
+    @Test func enteringVerticalReleasesReuseEvenWhenTheWindowStillSupportsSpreads() throws {
+        let first = page(CGSize(width: 32, height: 32), color: .red)
+        let second = page(CGSize(width: 32, height: 32), color: .blue)
+        let model = spread(first, second)
+        model.isDoublePageEnabled = true
+        let original = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)).image
+        model.discardSpreadOnEnteringVertical(from: .leftToRight, to: .rightToLeft)
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight)?.image === original)
+        model.discardSpreadOnEnteringVertical(from: .leftToRight, to: .topToBottom)
+        #expect(model.isDoublePageEnabled)
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight)?.image !== original)
+    }
+
     private func rgb(_ image: CGImage, x: Int) throws -> [UInt8] {
         let sample = try #require(image.cropping(to: CGRect(x: x, y: 8, width: 1, height: 1)))
         var pixel = [UInt8](repeating: 0, count: 4)

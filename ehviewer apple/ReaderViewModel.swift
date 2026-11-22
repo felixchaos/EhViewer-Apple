@@ -462,6 +462,12 @@ class ReaderViewModel {
     func discardSpreadComposition() {
         lastSpread = nil
     }
+
+    func discardSpreadOnEnteringVertical(from previous: ReadingDirection, to current: ReadingDirection) {
+        if previous != .topToBottom && current == .topToBottom {
+            discardSpreadComposition()
+        }
+    }
     #endif
 
     /// 将一个 spread 的两页合成为一张图片
