@@ -133,21 +133,25 @@ nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
     let query: String
     let savedCategory: Int?
     let savedMinimumRating: Int?
+    let explicitFilters: GalleryListRequest.Filters?
 
     static func validMinimumRating(_ value: Int?) -> Int? {
         guard let value, (2...5).contains(value) else { return nil }
         return value
     }
 
-    var hasSavedFilters: Bool { savedCategory != nil || savedMinimumRating != nil }
+    var hasSavedFilters: Bool { savedCategory != nil || savedMinimumRating != nil || explicitFilters != nil }
+    var showsResults: Bool { !query.isEmpty || explicitFilters?.supportsKeywordlessSearch == true }
 
     var initialFilters: GalleryListRequest.Filters {
-        .init(category: savedCategory ?? 0, advanceSearch: savedMinimumRating == nil ? -1 : 0,
+        if let explicitFilters { return explicitFilters }
+        return .init(category: savedCategory ?? 0, advanceSearch: savedMinimumRating == nil ? -1 : 0,
               minRating: savedMinimumRating ?? -1)
     }
 
     init(query: String, savedCategory: Int? = nil, savedMinimumRating: Int? = nil) {
         self.query = query
+        explicitFilters = nil
         let all = EhCategory.all.rawValue
         if !query.isEmpty, let savedCategory, savedCategory > 0,
            savedCategory != all, (savedCategory & ~all) == 0 {
@@ -156,6 +160,13 @@ nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
             self.savedCategory = nil
         }
         self.savedMinimumRating = query.isEmpty ? nil : Self.validMinimumRating(savedMinimumRating)
+    }
+
+    init(query: String, applying filters: GalleryListRequest.Filters) {
+        self.query = ListUrlBuilder.sanitizeKeyword(query)
+        savedCategory = nil
+        savedMinimumRating = nil
+        explicitFilters = filters.normalizedAdvancedSearch
     }
 
     /// Standalone list screens use the historical Quick Search URL encoding
@@ -195,7 +206,7 @@ nonisolated struct GalleryListRequest: Sendable {
         case favorites(slot: Int)
     }
 
-    nonisolated struct Filters: Sendable {
+    nonisolated struct Filters: Sendable, Hashable {
         var mode: ListUrlBuilder.Mode = .normal
         /// The existing cache used the settings search mode's raw value,
         /// which differs from the protocol mode (e.g. subscription: 1 vs 5).
@@ -205,6 +216,30 @@ nonisolated struct GalleryListRequest: Sendable {
         var minRating = -1
         var pageFrom = -1
         var pageTo = -1
+
+        var supportsKeywordlessSearch: Bool {
+            if mode == .subscription { return true }
+            guard mode == .normal else { return false }
+            return category > 0 || (advanceSearch >= 0 &&
+                (minRating >= 2 || pageFrom > 0 || pageTo > 0 || advanceSearch & ~0x003 != 0))
+        }
+
+        var normalizedAdvancedSearch: Self {
+            var result = self
+            let all = EhCategory.all.rawValue
+            if category <= 0 || category == all || category & ~all != 0 { result.category = 0 }
+            if advanceSearch < 0 {
+                result.advanceSearch = -1
+                result.minRating = -1
+                result.pageFrom = -1
+                result.pageTo = -1
+            } else {
+                result.minRating = GalleryBrowseSearch.validMinimumRating(minRating) ?? -1
+                if pageFrom <= 0 { result.pageFrom = -1 }
+                if pageTo <= 0 { result.pageTo = -1 }
+            }
+            return result
+        }
 
         fileprivate var cacheSignature: String {
             "\(cacheMode)|\(category)|\(advanceSearch)|\(minRating)|\(pageFrom)-\(pageTo)"

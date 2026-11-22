@@ -74,7 +74,7 @@ struct BrowseHomeView: View {
             initialBrowseSearch: source == .search ? search : nil,
             onSearchSubmit: { submitted in
                 search = submitted
-                route.setSearchResultsVisible(!submitted.query.isEmpty)
+                route.setSearchResultsVisible(submitted.showsResults)
             }
         )
     }

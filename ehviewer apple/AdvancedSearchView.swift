@@ -195,6 +195,8 @@ class AdvancedSearchState {
 
 struct AdvancedSearchView: View {
     @Bindable var state: AdvancedSearchState
+    var allowsApply: Bool = true
+    var onApply: ((AdvancedSearchState) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -218,7 +220,12 @@ struct AdvancedSearchView: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                    if let onApply {
+                        Button("应用") { onApply(state); dismiss() }
+                            .disabled(!allowsApply)
+                    } else {
+                        Button("完成") { dismiss() }
+                    }
                 }
                 #if os(iOS)
                 ToolbarItem(placement: .bottomBar) {

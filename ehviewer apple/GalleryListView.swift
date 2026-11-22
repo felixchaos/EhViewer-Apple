@@ -109,7 +109,7 @@ struct GalleryListView: View {
         self.initialSavedSearch = initialBrowseSearch
         if let initialBrowseSearch, initialBrowseSearch.hasSavedFilters {
             let state = AdvancedSearchState()
-            state.restoreQuickSearch(initialBrowseSearch)
+            state.restoreListFilters(initialBrowseSearch.initialFilters)
             _advancedSearch = State(initialValue: state)
             _viewModel = State(initialValue: GalleryListViewModel(initialFilters: initialBrowseSearch.initialFilters))
         }
@@ -255,7 +255,7 @@ struct GalleryListView: View {
             visibleGalleries?.wrappedValue = list
         }
         .onChange(of: showAdvancedSearch) { _, isShowing in
-            if !isShowing {
+            if !isShowing, onSearchSubmit == nil {
                 // 高级搜索面板关闭时，静默保存参数到 ViewModel (不自动触发搜索)
                 // 用户提交搜索或点击搜索按钮时才会使用这些参数
                 viewModel.syncAdvancedSettings(advancedSearch.appliedListFilters)
@@ -392,7 +392,7 @@ struct GalleryListView: View {
                 )
             }
             .sheet(isPresented: $showAdvancedSearch) {
-                AdvancedSearchView(state: advancedSearch)
+                advancedSearchSheet
             }
             .sheet(item: $pendingDownload) { gallery in
                 DownloadLabelPicker(
@@ -488,7 +488,7 @@ struct GalleryListView: View {
             )
         }
         .sheet(isPresented: $showAdvancedSearch) {
-            AdvancedSearchView(state: advancedSearch)
+            advancedSearchSheet
         }
         .sheet(isPresented: $showTagSelector) {
             TagSelectorView { pickSearchTag($0) }
@@ -751,7 +751,7 @@ struct GalleryListView: View {
             )
         }
         .sheet(isPresented: $showAdvancedSearch) {
-            AdvancedSearchView(state: advancedSearch)
+            advancedSearchSheet
         }
         .sheet(isPresented: $showTagSelector) {
             TagSelectorView { pickSearchTag($0) }
@@ -971,10 +971,27 @@ struct GalleryListView: View {
         }
     }
 
+    @ViewBuilder private var advancedSearchSheet: some View {
+        if let onSearchSubmit {
+            BrowseAdvancedSearchSheet(initialFilters: initialSavedSearch?.initialFilters ?? .init(),
+                                      query: searchField.submittedQuery) { filters, query in
+                isSearchFocused = false
+                restoreAppliedSearchField()
+                onSearchSubmit(GalleryBrowseSearch(query: query, applying: filters))
+            }
+        } else {
+            AdvancedSearchView(state: advancedSearch)
+        }
+    }
+
     /// Only already-applied saved options cross the browse route. Ordinary
     /// searches keep their previous behavior and advanced-form rules.
     private func browseSearch(for query: String) -> GalleryBrowseSearch {
-        .init(query: query,
+        guard !query.isEmpty else { return .init(query: "") }
+        if let filters = initialSavedSearch?.explicitFilters {
+            return .init(query: query, applying: filters)
+        }
+        return .init(query: query,
               savedCategory: initialSavedSearch?.savedCategory == nil ? nil : advancedSearch.categoryValue,
               savedMinimumRating: initialSavedSearch?.savedMinimumRating == nil ? nil : advancedSearch.minRatingValue)
     }
@@ -1021,6 +1038,10 @@ struct GalleryListView: View {
         // 其余按钮 (对齐 Android FAB secondaryButtons)
         ToolbarItem(placement: .automatic) {
             HStack(spacing: 4) {
+                if let search = initialSavedSearch, search.query.isEmpty, search.explicitFilters != nil {
+                    Button("清除搜索", systemImage: "xmark.circle") { clearSearchField() }
+                        .labelStyle(.iconOnly)
+                }
                 // 快速搜索 (对齐 Android QuickSearch)
                 Button { showQuickSearch = true } label: {
                     Image(systemName: "bookmark")
@@ -1340,8 +1361,12 @@ struct GalleryListView: View {
                 ),
                 primaryAction: advancedSearch.isEnabled
                     ? ("清除筛选条件", {
-                        advancedSearch = AdvancedSearchState()
-                        viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
+                        if initialSavedSearch?.explicitFilters != nil {
+                            clearSearchField()
+                        } else {
+                            advancedSearch = AdvancedSearchState()
+                            viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
+                        }
                     })
                     : nil
             )
@@ -1515,8 +1540,12 @@ struct GalleryRow: View {
 
 private extension AdvancedSearchState {
     func restoreQuickSearch(_ preset: GalleryBrowseSearch) {
-        let filters = preset.initialFilters
-        selectedCategories = preset.savedCategory ?? EhCategory.all.rawValue
+        restoreListFilters(preset.initialFilters)
+    }
+
+    func restoreListFilters(_ filters: GalleryListRequest.Filters) {
+        searchMode = SearchMode(rawValue: filters.cacheMode) ?? .normal
+        selectedCategories = filters.category == 0 ? EhCategory.all.rawValue : filters.category
         restore(advanceSearch: filters.advanceSearch, minRating: filters.minRating,
                 pageFrom: filters.pageFrom, pageTo: filters.pageTo)
     }
@@ -1533,6 +1562,31 @@ private extension AdvancedSearchState {
             pageFrom: pageFromValue,
             pageTo: pageToValue
         )
+    }
+}
+
+/// Only the browse destination applies the form immediately. Other list
+/// surfaces keep their existing deferred action semantics.
+private struct BrowseAdvancedSearchSheet: View {
+    @State private var draft: AdvancedSearchState
+    let query: String
+    let onApply: (GalleryListRequest.Filters, String) -> Void
+
+    init(initialFilters: GalleryListRequest.Filters, query: String,
+         onApply: @escaping (GalleryListRequest.Filters, String) -> Void) {
+        let draft = AdvancedSearchState()
+        draft.restoreListFilters(initialFilters)
+        _draft = State(initialValue: draft)
+        self.query = query
+        self.onApply = onApply
+    }
+
+    var body: some View {
+        let needsKeyword = draft.searchMode == .uploader || draft.searchMode == .tag
+        AdvancedSearchView(state: draft,
+                           allowsApply: !needsKeyword || !ListUrlBuilder.sanitizeKeyword(query).isEmpty) { applied in
+            onApply(applied.appliedListFilters, query)
+        }
     }
 }
 
