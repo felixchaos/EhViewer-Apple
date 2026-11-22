@@ -6,6 +6,9 @@ cd "$(cd "$(dirname "$0")/.." && pwd)"
 output_root=${EH_QA_OUTPUT_ROOT:-${TMPDIR:-/tmp}}
 mkdir -p "$output_root"
 out=$(mktemp -d "$(cd "$output_root" && pwd)/eh-regression.XXXXXX")
+cache=${EH_QA_CACHE_ROOT:-$out}
+mkdir -p "$cache"
+cache=$(cd "$cache" && pwd)
 jobs=${EH_QA_JOBS:-2}
 project="ehviewer apple.xcodeproj"
 scheme="ehviewer apple"
@@ -32,8 +35,8 @@ run() {
 # Package tests can be used independently on macOS with no simulator.
 printf 'Logs: %s\n' "$out"
 printf 'Commit: %s\n' "$(git rev-parse HEAD)"
-run EhCore swift test --package-path Packages/EhCore --scratch-path "$out/core" --jobs "$jobs" || true
-run EhParser swift test --package-path Packages/EhParser --scratch-path "$out/parser" --jobs "$jobs" || true
+run EhCore swift test --package-path Packages/EhCore --scratch-path "$cache/core" --jobs "$jobs" || true
+run EhParser swift test --package-path Packages/EhParser --scratch-path "$cache/parser" --jobs "$jobs" || true
 
 if [[ ${1:-} == --packages-only ]]; then exit "$status"; fi
 if [[ $# != 2 ]]; then
@@ -50,8 +53,8 @@ common=(-project "$project" -configuration Release -jobs "$jobs" CODE_SIGNING_AL
 if [[ -n ${EH_QA_PACKAGE_CHECKOUTS:-} ]]; then
     common+=(-clonedSourcePackagesDirPath "$EH_QA_PACKAGE_CHECKOUTS" -disableAutomaticPackageResolution)
 fi
-run macos-release xcodebuild build "${common[@]}" -scheme "$scheme" -destination 'platform=macOS' -derivedDataPath "$out/mac" || true
-run ios-release xcodebuild build "${common[@]}" -scheme "$scheme" -destination 'generic/platform=iOS' -derivedDataPath "$out/ios" || true
+run macos-release xcodebuild build "${common[@]}" -scheme "$scheme" -destination 'platform=macOS' -derivedDataPath "$cache/mac" || true
+run ios-release xcodebuild build "${common[@]}" -scheme "$scheme" -destination 'generic/platform=iOS' -derivedDataPath "$cache/ios" || true
 
 if xcrun simctl list devices booted | grep -q '(Booted)'; then
     echo 'Simulator slot is occupied; no other device was started or stopped.' >&2
@@ -63,8 +66,8 @@ printf 'Simulator: %s\n' "$device"
 sim_build=(-destination 'generic/platform=iOS Simulator' ONLY_ACTIVE_ARCH=YES "ARCHS=$(uname -m)")
 test_options=(-destination "id=$device" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1)
 
-if run ios-unit-build xcodebuild build-for-testing "${common[@]}" -scheme "$scheme" "${sim_build[@]}" -derivedDataPath "$out/unit" ENABLE_TESTABILITY=YES; then
-    products="$out/unit/Build/Products"
+if run ios-unit-build xcodebuild build-for-testing "${common[@]}" -scheme "$scheme" "${sim_build[@]}" -derivedDataPath "$cache/unit" ENABLE_TESTABILITY=YES; then
+    products="$cache/unit/Build/Products"
     original=$(find "$products" -maxdepth 1 -name '*.xctestrun' ! -name eh-offline.xctestrun -print -quit)
     python3 - "$original" "$products/eh-offline.xctestrun" <<'PY'
 import plistlib
@@ -90,9 +93,9 @@ fi
 # These UI tests opt in via their own launch environment. Do not run the default
 # launch/performance UI target cases; they launch the normal app without a fixture.
 if run ios-ui-build xcodebuild build-for-testing "${common[@]}" -scheme 'ehviewer offline UI' \
-    "${sim_build[@]}" -derivedDataPath "$out/ui" \
+    "${sim_build[@]}" -derivedDataPath "$cache/ui" \
     'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) EH_OFFLINE_UI_FIXTURE'; then
-    product=$(find "$out/ui/Build/Products" -maxdepth 1 -name '*.xctestrun' -print -quit)
+    product=$(find "$cache/ui/Build/Products" -maxdepth 1 -name '*.xctestrun' -print -quit)
     run ios-ui xcodebuild test-without-building -xctestrun "$product" "${test_options[@]}" \
         -resultBundlePath "$out/ios-ui.xcresult" '-only-testing:ehviewer appleUITests/FavoritesOfflineUITests' || true
 fi

@@ -21,6 +21,8 @@ Offline workflow: scripts/regression.sh --packages-only
 Then choose one device/runtime from: xcrun simctl list devicetypes / runtimes
 Run: scripts/regression.sh SIM_DEVICE_TYPE SIM_RUNTIME
 Set EH_QA_OUTPUT_ROOT for a different output location (a new run dir per invocation).
+Set EH_QA_CACHE_ROOT to reuse build products across checkpoints for this worktree;
+do not share that build cache between simultaneous runners.
 A fresh simulator is created and shut down by the runner. Do not run on a real
 account, edit Keychain entries, sign, upload, or reuse a user's simulator.
 regression-matrix.tsv separates tested behavior from build-only and absent gates.
