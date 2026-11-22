@@ -25,5 +25,13 @@ let package = Package(
             ],
             path: "Sources"
         ),
+        .testTarget(
+            name: "EhDownloadTests",
+            dependencies: [
+                "EhDownload",
+                .product(name: "EhModels", package: "EhCore"),
+                .product(name: "EhDatabase", package: "EhCore"),
+            ]
+        ),
     ]
 )

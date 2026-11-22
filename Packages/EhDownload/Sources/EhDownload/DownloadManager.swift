@@ -69,33 +69,14 @@ public actor DownloadManager {
     private nonisolated static func tasksFromDatabase(downloadDirectory: URL) -> [DownloadTask] {
         do {
             let records = try EhDatabase.shared.getAllDownloads()
-            var tasks: [DownloadTask] = records.map { record in
-                let gallery = GalleryInfo(
-                    gid: record.gid, token: record.token,
-                    title: record.title, titleJpn: record.titleJpn,
-                    thumb: record.thumb,
-                    category: EhCategory(rawValue: record.category),
-                    posted: record.posted, uploader: record.uploader,
-                    rating: record.rating, pages: record.pages
-                )
-                return DownloadTask(gallery: gallery, label: record.label, state: record.state)
-            }
-            // 扫描磁盘已下载的图片文件，恢复中断下载的进度
-            for i in tasks.indices {
-                let task = tasks[i]
-                if task.state == Self.stateFinish {
-                    // 已完成的任务直接设置为总页数
-                    tasks[i].downloadedPages = task.gallery.pages
-                } else if task.gallery.pages > 0 {
-                    // 扫描目录中已有的图片文件数
+            return records.map { record in
+                DownloadTaskPersistence.restore(record) { gallery in
                     let dir = downloadDirectory.appendingPathComponent(
-                        Self.galleryDirectoryName(gid: task.gallery.gid, title: task.gallery.bestTitle)
+                        Self.galleryDirectoryName(gid: gallery.gid, title: gallery.bestTitle)
                     )
-                    let existingPages = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: task.gallery.pages)
-                    tasks[i].downloadedPages = existingPages.count
+                    return SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
                 }
             }
-            return tasks
         } catch {
             print("Failed to load downloads from database: \(error)")
             return []
@@ -123,17 +104,7 @@ public actor DownloadManager {
         downloadQueue.append(task)
 
         // 持久化到数据库
-        var record = DownloadRecord(
-            gid: gallery.gid, token: gallery.token,
-            title: gallery.bestTitle, titleJpn: gallery.titleJpn,
-            thumb: gallery.thumb, category: gallery.category.rawValue,
-            posted: gallery.posted, uploader: gallery.uploader,
-            rating: gallery.rating, simpleLanguage: gallery.simpleLanguage,
-            pages: gallery.pages, state: Self.stateWait, date: Date()
-        )
-        // 标签也存下来，否则下载页的卡片比首页少一行信息
-        record.simpleTags = gallery.simpleTags
-        try? EhDatabase.shared.insertDownload(record)
+        try? EhDatabase.shared.insertDownload(DownloadTaskPersistence.record(for: task))
 
         // 启动队列处理
         if !isRunning {
@@ -628,15 +599,7 @@ public actor DownloadManager {
         ).count
         downloadQueue.append(task)
 
-        let record = DownloadRecord(
-            gid: gallery.gid, token: gallery.token,
-            title: gallery.bestTitle, titleJpn: gallery.titleJpn,
-            thumb: gallery.thumb, category: gallery.category.rawValue,
-            posted: gallery.posted, uploader: gallery.uploader,
-            rating: gallery.rating, simpleLanguage: gallery.simpleLanguage,
-            pages: gallery.pages, state: Self.stateNone, date: Date()
-        )
-        try? EhDatabase.shared.insertDownload(record)
+        try? EhDatabase.shared.insertDownload(DownloadTaskPersistence.record(for: task))
     }
 
     /// 获取已下载画廊的目录路径 (由 ReaderViewModel 调用，替代硬编码路径)
