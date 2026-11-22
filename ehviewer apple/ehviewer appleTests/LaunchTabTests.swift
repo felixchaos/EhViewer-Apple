@@ -17,6 +17,7 @@ import CoreFoundation
 import CoreGraphics
 import Foundation
 import SwiftUI
+import EhModels
 import Testing
 #if os(iOS)
 import UIKit
