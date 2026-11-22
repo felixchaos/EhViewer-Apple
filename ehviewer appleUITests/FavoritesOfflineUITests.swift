@@ -213,7 +213,13 @@ final class FavoritesOfflineUITests: XCTestCase {
         let resume = app.buttons["继续阅读"].firstMatch
         XCTAssertTrue(resume.waitForExistence(timeout: 8))
         resume.tap()
-        XCTAssertTrue(pages.waitForExistence(timeout: 8))
+        if !pages.waitForExistence(timeout: 3) {
+            let hud = app.staticTexts["2 / 3"].firstMatch
+            if !hud.waitForExistence(timeout: 4) { attachHierarchy(app, note: "Reader reopen did not show page 2") }
+            XCTAssertTrue(hud.exists)
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
         pages.tap()
         XCTAssertTrue(app.navigationBars["跳转到第 2 页"].waitForExistence(timeout: 5))
     }
