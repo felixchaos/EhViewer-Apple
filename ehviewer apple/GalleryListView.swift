@@ -287,36 +287,38 @@ struct GalleryListView: View {
 
     @ViewBuilder
     private var compactListBody: some View {
-        // 顶部横向切页 — 首页/订阅/热门/排行。
-        // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
-        // 此前热门与排行要经「更多」标签页二级跳转才能到达。
-        if let browseSource {
-            EhTopTabs(
-                items: BrowseSource.allCases.map { ($0, $0.title) },
-                selection: browseSource
-            )
-        }
+        VStack(spacing: 0) {
+            // 顶部横向切页 — 首页/订阅/热门/排行。
+            // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
+            // 此前热门与排行要经「更多」标签页二级跳转才能到达。
+            if let browseSource {
+                EhTopTabs(
+                    items: BrowseSource.allCases.map { ($0, $0.title) },
+                    selection: browseSource
+                )
+            }
 
-        // 排行榜的时间范围。挂在切页条下面而不是另起一屏，
-        // 是因为它和「首页/订阅/热门」是同一层级的数据源筛选。
-        if let toplistPeriod {
-            EhFilterPills(
-                items: Self.toplistPeriods.map { ($0.tl, $0.title) },
-                selection: toplistPeriod
-            )
-            .padding(.bottom, 6)
-        }
+            // 排行榜的时间范围。挂在切页条下面而不是另起一屏，
+            // 是因为它和「首页/订阅/热门」是同一层级的数据源筛选。
+            if let toplistPeriod {
+                EhFilterPills(
+                    items: Self.toplistPeriods.map { ($0.tl, $0.title) },
+                    selection: toplistPeriod
+                )
+                .padding(.bottom, 6)
+            }
 
-        Group {
-            if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
-                errorView
-            } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                // 加载完但一条都没有：此前直接渲染空 List，屏幕一片白，
-                // 用户分不清是没结果、没登录，还是界面坏了
-                if !hidesEmptyState { emptyStateView }
-            } else {
-                // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
-                galleryList
+            Group {
+                if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
+                    errorView
+                } else if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                    // 加载完但一条都没有：此前直接渲染空 List，屏幕一片白，
+                    // 用户分不清是没结果、没登录，还是界面坏了
+                    if !hidesEmptyState { emptyStateView }
+                } else {
+                    // 离线可用: 始终显示列表结构，加载指示器为内联行，不阻塞界面
+                    galleryList
+                }
             }
         }
     }
