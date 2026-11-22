@@ -11,19 +11,7 @@
 
 import SwiftUI
 
-/// 顶部切页的四个数据源
-enum BrowseSource: String, CaseIterable, Hashable {
-    case home
-    /// 搜索结果自成一页，而不是在当前数据源里就地筛选。
-    ///
-    /// 此前无论站在「订阅」还是「热门」上按搜索，都会把那一页变成搜索结果 ——
-    /// 顶部还高亮着「订阅」，内容却已经是全站搜索了，而且退不回原来的列表。
-    /// 数据源和查询是两件事，混在一起就说不清「我现在看的到底是什么」。
-    case search
-    case subscription
-    case popular
-    case toplist
-
+extension BrowseSource {
     var title: String {
         switch self {
         case .home:         return "首页"

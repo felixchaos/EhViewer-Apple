@@ -10,7 +10,13 @@ import EhModels
 import EhSettings
 
 struct MainTabView: View {
+    #if os(macOS)
+    @State private var navigation = MainTabNavigation(
+        launchPage: AppSettings.shared.launchPage, usesHomeBrowseContainer: false
+    )
+    #else
     @State private var navigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage)
+    #endif
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(macOS)
@@ -208,7 +214,7 @@ struct MainTabView: View {
         switch tab {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
-            BrowseHomeView()
+            BrowseHomeView(initial: navigation.initialBrowseSource)
         case .subscription:
             GalleryListView(mode: .subscription)
         case .popular:

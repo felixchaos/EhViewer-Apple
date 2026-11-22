@@ -36,9 +36,15 @@ struct LaunchTabTests {
     }
 
     /// 热门与排行不再是独立标签页，应当落到首页（切页由 initialBrowseSource 决定）
-    @Test func popularAndToplistLandOnHome() {
-        #expect(MainTabView.Tab.fromLaunchPage(1) == .home)
-        #expect(MainTabView.Tab.fromLaunchPage(2) == .home)
+    @Test func popularAndToplistStartOnTheirActualBrowseSourceOrDesktopTab() {
+        let mobilePopular = MainTabNavigation(launchPage: 1)
+        let mobileToplist = MainTabNavigation(launchPage: 2)
+        #expect(mobilePopular.selection == .home)
+        #expect(mobilePopular.initialBrowseSource == .popular)
+        #expect(mobileToplist.selection == .home)
+        #expect(mobileToplist.initialBrowseSource == .toplist)
+        #expect(MainTabNavigation(launchPage: 1, usesHomeBrowseContainer: false).selection == .popular)
+        #expect(MainTabNavigation(launchPage: 2, usesHomeBrowseContainer: false).selection == .toplist)
     }
 
     /// 其余几项仍然各自对应自己的标签

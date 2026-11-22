@@ -35,13 +35,28 @@ enum MainTab: String, CaseIterable {
     }
 }
 
+enum BrowseSource: String, CaseIterable, Hashable {
+    case home, search, subscription, popular, toplist
+}
+
 /// Shared navigation policy; both the sidebar and compact chrome select the same routes.
 struct MainTabNavigation {
     private(set) var selection: MainTab
-    private(set) var visitedExtras: Set<MainTab> = []
+    let initialBrowseSource: BrowseSource
+    private var visitedExtras: Set<MainTab> = []
 
-    init(launchPage: Int) {
-        selection = .fromLaunchPage(launchPage)
+    init(launchPage: Int, usesHomeBrowseContainer: Bool = true) {
+        switch launchPage {
+        case 1:
+            initialBrowseSource = .popular
+            selection = usesHomeBrowseContainer ? .home : .popular
+        case 2:
+            initialBrowseSource = .toplist
+            selection = usesHomeBrowseContainer ? .home : .toplist
+        default:
+            initialBrowseSource = .home
+            selection = .fromLaunchPage(launchPage)
+        }
     }
 
     var retainedTabs: [MainTab] {
