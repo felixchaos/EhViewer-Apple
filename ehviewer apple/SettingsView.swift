@@ -22,6 +22,7 @@ import UIKit
 struct SettingsView: View {
     @State private var vm = SettingsViewModel()
     @State private var showSettingsBackupImportPicker = false
+    @State private var settingsBackupImportMessage: String?
     @Environment(\.openURL) private var openURL
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
@@ -1042,6 +1043,7 @@ struct SettingsView: View {
 
             // 导入数据 (对齐 Android: import_data)
             Button("导入 Apple 端设置（JSON）") {
+                settingsBackupImportMessage = nil
                 showSettingsBackupImportPicker = true
             }
             .fileImporter(
@@ -1050,6 +1052,11 @@ struct SettingsView: View {
                 allowsMultipleSelection: false
             ) { result in
                 handleSettingsBackupImport(result)
+            }
+            if let settingsBackupImportMessage {
+                Text(settingsBackupImportMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -1080,16 +1087,33 @@ struct SettingsView: View {
     private func handleSettingsBackupImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
 
-        guard url.startAccessingSecurityScopedResource() else { return }
+        guard url.startAccessingSecurityScopedResource() else {
+            settingsBackupImportMessage = "无法访问所选备份文件，未更改任何设置。"
+            return
+        }
         defer { url.stopAccessingSecurityScopedResource() }
 
-        guard let data = try? Data(contentsOf: url) else { return }
         do {
-            try SettingsBackup.restoreJSON(data, into: .standard)
-            vm.reloadSettingsAfterBackupImport()
+            let data = try Data(contentsOf: url)
+            let report = try SettingsBackup.restoreJSON(data, into: .standard)
+            var message: String
+            if report.appliedCount > 0 {
+                vm.reloadSettingsAfterBackupImport()
+                message = "已导入 \(report.appliedCount) 项设置。"
+            } else {
+                message = "没有可恢复的设置，未更改现有设置。"
+            }
+            if report.skippedObsoleteMediaScan {
+                message += "\n已跳过旧版媒体扫描设置，Apple 端没有对应功能。"
+            }
+            if report.skippedUnknownCount > 0 {
+                message += "\n已跳过 \(report.skippedUnknownCount) 个无法识别的字段。"
+            }
+            settingsBackupImportMessage = message
+        } catch SettingsBackup.RestoreError.invalidValue(_) {
+            settingsBackupImportMessage = "备份里有设置值格式不正确，未更改任何设置。"
         } catch {
-            // Keep the existing behavior when the selected file is not a settings archive.
-            return
+            settingsBackupImportMessage = "无法读取有效的 Apple 设置备份，未更改任何设置。"
         }
     }
 
