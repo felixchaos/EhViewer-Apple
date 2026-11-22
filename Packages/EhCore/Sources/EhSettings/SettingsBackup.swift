@@ -18,6 +18,7 @@ public enum SettingsBackup {
     private enum ValueKind: Sendable {
         case boolean
         case integer
+        case integerRange(ClosedRange<Int>)
         case string
 
         func accepts(_ value: Any) -> Bool {
@@ -25,10 +26,12 @@ public enum SettingsBackup {
             case .boolean:
                 guard let number = value as? NSNumber else { return false }
                 return CFGetTypeID(number) == CFBooleanGetTypeID()
-            case .integer:
+            case .integer, .integerRange:
                 guard let number = value as? NSNumber,
-                      CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
-                return (number as? Int) != nil
+                      CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      let integer = number as? Int else { return false }
+                if case .integerRange(let valid) = self { return valid.contains(integer) }
+                return true
             case .string:
                 return value is String
             }
@@ -49,7 +52,8 @@ public enum SettingsBackup {
         "page_scaling": .integer, "start_position": .integer, "keep_screen_on": .boolean,
         "reading_fullscreen": .boolean, "gallery_show_clock": .boolean, "gallery_show_progress": .boolean,
         "gallery_show_battery": .boolean, "show_page_interval": .boolean, "volume_page": .boolean,
-        "reverse_volume_page": .boolean, "screen_rotation": .integer, "auto_page_interval": .integer,
+        "reverse_volume_page": .boolean, "screen_rotation": .integer,
+        AppSettings.autoPageIntervalKey: .integerRange(AppSettings.autoPageIntervalRange),
         "color_filter": .boolean, "default_favorite_2": .integer, "thumb_size": .integer,
         "detail_size": .integer, "thumb_resolution": .integer, "fix_thumb_url": .boolean,
         "enable_secure": .boolean, "security_delay": .integer, "save_parse_error_body": .boolean,
@@ -63,7 +67,13 @@ public enum SettingsBackup {
         var archive: [String: Any] = [:]
         for key in preferenceKinds.keys {
             if let value = defaults.object(forKey: key) {
-                archive[key] = value
+                if key == AppSettings.autoPageIntervalKey {
+                    // Export the effective value rather than a stale invalid value
+                    // restored by older builds, so the archive can be restored later.
+                    archive[key] = AppSettings.validAutoPageInterval(value as? Int)
+                } else {
+                    archive[key] = value
+                }
             }
         }
 

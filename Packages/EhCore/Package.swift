@@ -37,5 +37,9 @@ let package = Package(
             dependencies: ["EhModels"],
             path: "Sources/EhSettings"
         ),
+        .testTarget(
+            name: "EhSettingsTests",
+            dependencies: ["EhSettings"]
+        ),
     ]
 )

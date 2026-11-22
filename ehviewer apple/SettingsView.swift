@@ -788,7 +788,7 @@ struct SettingsView: View {
             }
 
             // 自动翻页间隔 (对齐 Android Settings.KEY_AUTO_PAGE_INTERVAL)
-            Stepper("自动翻页间隔: \(vm.autoPageInterval)s", value: $vm.autoPageInterval, in: 1...60)
+            Stepper("自动翻页间隔: \(vm.autoPageInterval)s", value: $vm.autoPageInterval, in: AppSettings.autoPageIntervalRange)
 
             // 色彩滤镜 (对齐 Android Settings.KEY_COLOR_FILTER)
             Toggle("色彩滤镜 (护眼)", isOn: Binding(

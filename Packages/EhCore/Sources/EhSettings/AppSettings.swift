@@ -22,7 +22,7 @@ public final class AppSettings: @unchecked Sendable {
     
     /// 读取 UserDefaults 并触发 observation access
     @ObservationIgnored
-    private let _defaults = UserDefaults.standard
+    private let _defaults: UserDefaults
 
     // MARK: - 站点选择 (UI 联动)
     public var gallerySite: EhSite {
@@ -438,11 +438,19 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "screen_rotation") }
     }
 
-    /// 自动翻页延迟 (秒)
+    public static let autoPageIntervalRange = 1...60
+    static let autoPageIntervalKey = "auto_page_interval"
+
+    static func validAutoPageInterval(_ value: Int?) -> Int {
+        guard let value, autoPageIntervalRange.contains(value) else { return 5 }
+        return value
+    }
+
+    /// 自动翻页延迟 (秒)。旧版导入可能已存入不安全的值，读取时也校验。
     @ObservationIgnored
     public var autoPageInterval: Int {
-        get { _defaults.object(forKey: "auto_page_interval") as? Int ?? 5 }
-        set { _defaults.set(newValue, forKey: "auto_page_interval") }
+        get { Self.validAutoPageInterval(_defaults.object(forKey: Self.autoPageIntervalKey) as? Int) }
+        set { _defaults.set(Self.validAutoPageInterval(newValue), forKey: Self.autoPageIntervalKey) }
     }
 
     /// 色彩滤镜 (护眼模式)
@@ -688,7 +696,8 @@ public final class AppSettings: @unchecked Sendable {
     // 两者都只是从 Android 抄过来的键，声明之后从没有任何代码读过。
     // 留着只会让人以为「这个功能有，只是还没接上」。
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        _defaults = defaults
         // 注册默认值
         _defaults.register(defaults: [
             "gallery_site": EhSite.eHentai.rawValue,

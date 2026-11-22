@@ -1663,7 +1663,7 @@ struct ReaderSettingsSheet: View {
                             get: { AppSettings.shared.autoPageInterval },
                             set: { AppSettings.shared.autoPageInterval = $0 }
                         ),
-                        in: 1...60
+                        in: AppSettings.autoPageIntervalRange
                     )
                 }
             }
