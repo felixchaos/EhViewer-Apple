@@ -3,7 +3,7 @@ import EhModels
 
 /// Query syntax shared by browsing interfaces. Focus, token appearance and the
 /// decision to submit stay with the caller.
-enum GallerySearchQuery {
+nonisolated enum GallerySearchQuery {
     static func fieldQuery(tokens: [String], text: String) -> String {
         let typed = text.trimmingCharacters(in: .whitespaces)
         return (tokens + (typed.isEmpty ? [] : [typed])).joined(separator: " ")
@@ -47,8 +47,8 @@ enum GallerySearchQuery {
 /// Immutable description of a list's source and applied filters. It has no UI,
 /// global settings, network or cache dependency: a browsing session supplies
 /// the site and uses the same description to request and cache its response.
-struct GalleryListRequest: Sendable {
-    enum Source: Sendable {
+nonisolated struct GalleryListRequest: Sendable {
+    nonisolated enum Source: Sendable {
         case home
         case subscription
         case popular
@@ -58,7 +58,7 @@ struct GalleryListRequest: Sendable {
         case favorites(slot: Int)
     }
 
-    struct Filters: Sendable {
+    nonisolated struct Filters: Sendable {
         var mode: ListUrlBuilder.Mode = .normal
         /// The existing cache used the settings search mode's raw value,
         /// which differs from the protocol mode (e.g. subscription: 1 vs 5).
