@@ -15,7 +15,8 @@ enum EhOfflineUIFixture {
     static func seed() {
         AppSettings.shared.recentFavCat = -1
         AppSettings.shared.defaultFavSlot = -1
-        AppSettings.shared.launchPage = 0
+        let fixturePage = ProcessInfo.processInfo.environment["EH_FIXTURE_LAUNCH_PAGE"].flatMap(Int.init) ?? 0
+        AppSettings.shared.launchPage = (0...5).contains(fixturePage) ? fixturePage : 0
         try? EhDatabase.shared.deleteLocalFavorite(gid: synthetic.gid)
         try? EhDatabase.shared.deleteLocalFavorite(gid: cloud.gid)
         GalleryCache.shared.putDetail(.init(info: synthetic))
@@ -72,7 +73,20 @@ enum EhOfflineUIFixture {
             default: return GalleryListResult()
             }
         }
-        return GalleryListResult(galleries: [synthetic])
+        // Deliberately distinct responses prove the UI chose the expected request.
+        // Keep the original home fixture and other paths stable.
+        switch URLComponents(string: url)?.path {
+        case "/popular":
+            return GalleryListResult(galleries: [
+                GalleryInfo(gid: 900010000004, token: "fixture", title: "Synthetic popular launch")
+            ])
+        case "/toplist.php":
+            return GalleryListResult(galleries: [
+                GalleryInfo(gid: 900010000005, token: "fixture", title: "Synthetic ranking launch")
+            ])
+        default:
+            return GalleryListResult(galleries: [synthetic])
+        }
     }
 }
 #endif

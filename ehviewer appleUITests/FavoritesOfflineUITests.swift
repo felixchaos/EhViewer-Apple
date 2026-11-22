@@ -3,13 +3,14 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         app.launchEnvironment["EH_FIXTURE_CLOUD"] = cloud
         if let importID { app.launchEnvironment["EH_FIXTURE_IMPORT"] = importID }
         if nativePicker { app.launchEnvironment["EH_FIXTURE_NATIVE_FILE_PICKER"] = "1" }
+        if let launchPage { app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = String(launchPage) }
         app.launch()
         return app
     }
@@ -171,6 +172,17 @@ final class FavoritesOfflineUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_NATIVE_FILE_SMOKE"] == "1",
                           "Native Files provider smoke is an explicit separate check.")
         checkMountedImport(nativePicker: true)
+    }
+
+    @MainActor func testLaunchPreferenceSelectsPopularAndRankingRequests() {
+        let popular = launch(cloud: "empty", launchPage: 1)
+        XCTAssertTrue(popular.staticTexts["Synthetic popular launch"].firstMatch.waitForExistence(timeout: 8))
+        XCTAssertFalse(popular.staticTexts["Synthetic Gallery"].firstMatch.exists)
+        popular.terminate()
+
+        let ranking = launch(cloud: "empty", launchPage: 2)
+        XCTAssertTrue(ranking.staticTexts["Synthetic ranking launch"].firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(ranking.buttons["全部时间"].firstMatch.exists)
     }
 
     @MainActor func testSuccessfulEmptyCloudAndLocalFavoriteReopen() { checkFlow(cloud: "empty") }
