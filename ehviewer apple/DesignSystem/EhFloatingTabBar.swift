@@ -49,9 +49,23 @@ extension View {
             }
     }
 
+    /// A retained route may suspend its own driver without enabling an inactive parent tab.
+    func ehSuspendTabBarDriver(_ suspended: Bool) -> some View {
+        modifier(EhSuspendTabBarDriverModifier(suspended: suspended))
+    }
+
     /// 在这一屏隐藏底部浮起导航条
     func ehHidesTabBar(_ hidden: Bool = true) -> some View {
         preference(key: EhHidesTabBarKey.self, value: hidden)
+    }
+}
+
+private struct EhSuspendTabBarDriverModifier: ViewModifier {
+    @Environment(\.ehTabBarDriverActive) private var parentActive
+    let suspended: Bool
+
+    func body(content: Content) -> some View {
+        content.ehTabBarDriver(active: parentActive && !suspended)
     }
 }
 

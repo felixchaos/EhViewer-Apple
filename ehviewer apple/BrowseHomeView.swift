@@ -39,7 +39,6 @@ extension BrowseSource {
 }
 
 struct BrowseHomeView: View {
-    @Environment(\.ehTabBarDriverActive) private var parentTabActive
     /// The originating list stays mounted while its search results are visible.
     @State private var origin: BrowseSource
     @State private var isShowingSearch: Bool
@@ -69,12 +68,11 @@ struct BrowseHomeView: View {
                 .opacity(isShowingSearch ? 0 : 1)
                 .allowsHitTesting(!isShowingSearch)
                 .accessibilityHidden(isShowingSearch)
-                .ehTabBarDriver(active: parentTabActive && !isShowingSearch)
+                .ehSuspendTabBarDriver(isShowingSearch)
 
             if isShowingSearch {
                 list(for: .search)
                     .id(search)
-                    .ehTabBarDriver(active: parentTabActive)
             }
         }
     }
