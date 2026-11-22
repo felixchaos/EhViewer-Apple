@@ -34,6 +34,28 @@ struct OfflinePageStorageTests {
         }
     }
 
+    @Test func emptyFilesAndDirectoriesDoNotMaskUsablePageAlternates() throws {
+        try withScratchDirectory { directory in
+            try Data().write(to: directory.appendingPathComponent("00000001.jpg"))
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent("00000002.jpg"), withIntermediateDirectories: false
+            )
+            try Data().write(to: directory.appendingPathComponent("00000003.jpg"))
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent("00000003.png"), withIntermediateDirectories: false
+            )
+            for filename in ["00000003.gif", "00000003.webp", "00000004.jpg", "00000004.png"] {
+                try Data([1]).write(to: directory.appendingPathComponent(filename))
+            }
+
+            #expect(SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: 0) == nil)
+            #expect(SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: 1) == nil)
+            #expect(SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: 2)?.lastPathComponent == "00000003.gif")
+            #expect(SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: 3)?.lastPathComponent == "00000004.jpg")
+            #expect(SpiderInfoFile.getDownloadedPages(in: directory, totalPages: 4) == [2, 3])
+        }
+    }
+
     @Test func inventoryIsEmptyWhenMetadataHasNoUsablePageCount() throws {
         try withScratchDirectory { directory in
             try Data([0x01]).write(to: directory.appendingPathComponent("00000000.jpg"))

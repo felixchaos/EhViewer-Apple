@@ -210,7 +210,12 @@ public actor SpiderDen {
         for ext in supportedExtensions {
             let filename = generateImageFilename(index: index, extension: ext)
             let file = dir.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: file.path) {
+            // A truncated write or a directory with a page filename is
+            // missing for both Reader and download-resume purposes. Keep
+            // looking for another supported extension without decoding files.
+            if let attributes = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+               attributes.isRegularFile == true,
+               let byteCount = attributes.fileSize, byteCount > 0 {
                 return file
             }
         }
