@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: xcode-27
     
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
 
     # Keep the iOS check on a toolchain that supports the full iPhone Duo display.
     - name: Verify iOS SDK
@@ -43,3 +48,16 @@ jobs:
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO
+
+    - name: Run offline Swift package regressions
+      shell: bash
+      run: |
+        export EH_QA_OUTPUT_ROOT="$(mktemp -d "${RUNNER_TEMP}/eh-package-checks.XXXXXX")"
+        if ! bash scripts/regression.sh --packages-only; then
+          for log in "$EH_QA_OUTPUT_ROOT"/eh-regression.*/*.log; do
+            [ -f "$log" ] || continue
+            printf '\n--- %s (last 100 lines) ---\n' "${log##*/}"
+            tail -n 100 "$log"
+          done
+          exit 1
+        fi
