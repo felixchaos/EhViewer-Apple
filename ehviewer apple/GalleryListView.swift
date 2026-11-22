@@ -1950,7 +1950,12 @@ class GalleryListViewModel {
         currentFilters = filters
     }
 
-    func applyQuickSearch(_ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool) {
+    @discardableResult
+    func applyQuickSearch(
+        _ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool
+    ) -> Task<Void, Never> {
+        listEpoch &+= 1
+        let requestEpoch = listEpoch
         searchText = preset.query
         submittedTagRouteQuery = preset.query
         currentFilters = preset.initialFilters
@@ -1961,16 +1966,21 @@ class GalleryListViewModel {
         prevHref = nil
         nextHref = nil
 
-        Task {
-            await fetchQuickSearch(preset, storedCategory: storedCategory, legacyAdvanced: legacyAdvanced)
+        return Task {
+            await fetchQuickSearch(preset, storedCategory: storedCategory, legacyAdvanced: legacyAdvanced,
+                                   requestEpoch: requestEpoch)
         }
     }
 
-    private func fetchQuickSearch(_ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool) async {
+    private func fetchQuickSearch(
+        _ preset: GalleryBrowseSearch, storedCategory: Int, legacyAdvanced: Bool, requestEpoch: UInt64
+    ) async {
+        guard requestEpoch == listEpoch else { return }
         do {
             let url = preset.standaloneURL(site: AppSettings.shared.gallerySite,
                                            storedCategory: storedCategory, legacyAdvanced: legacyAdvanced)
             let result = try await requestGalleryList(url)
+            guard requestEpoch == listEpoch else { return }
 
             self.galleries = result.galleries
             // ★ 记录分页游标: 快速搜索的 URL 是这里现拼的，
@@ -1987,6 +1997,7 @@ class GalleryListViewModel {
             }
             self.isLoading = false
         } catch {
+            guard requestEpoch == listEpoch else { return }
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 self.isLoading = false
                 return

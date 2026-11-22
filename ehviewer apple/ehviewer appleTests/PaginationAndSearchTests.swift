@@ -554,3 +554,121 @@ struct GalleryAppliedAdvancedBrowseSearchTests {
         ])
     }
 }
+
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct StandaloneQuickSearchOwnershipTests {
+    private static let query = "synthetic gallery"
+    private static let olderCursor = "https://search.invalid/four-next"
+    private static let newestCursor = "https://search.invalid/five-next"
+    private static let newestPrev = "https://search.invalid/five-prev"
+
+    @Test func delayedFourStarSuccessCannotReplaceFiveStarRowsOrCursor() async {
+        let older = HeldQuickSearchResult()
+        var requests: [String] = []
+        let model = GalleryListViewModel(filterGalleries: { _ in 0 }, listRequest: { url in
+            requests.append(url)
+            if url == Self.newestCursor { return Self.result(6) }
+            if Self.rating(in: url) == "4" { return try await older.request() }
+            #expect(Self.rating(in: url) == "5")
+            return Self.result(5, previous: Self.newestPrev, next: Self.newestCursor)
+        })
+
+        let first = select(4, in: model)
+        await older.waitUntilRequested()
+        await select(5, in: model).value
+        older.finish(.success(Self.result(4, next: Self.olderCursor)))
+        await first.value
+
+        #expect(model.galleries.map(\.gid) == [5])
+        #expect(model.prevHref == Self.newestPrev)
+        #expect(model.nextHref == Self.newestCursor)
+        #expect(model.totalPages == -1 && model.hasMore)
+        #expect(model.errorMessage == nil && !model.isLoading)
+        await model.loadMore(mode: .search(keyword: Self.query))
+        #expect(requests.last == Self.newestCursor)
+        #expect(model.galleries.map(\.gid) == [5, 6])
+    }
+
+    @Test func obsoleteFailureLeavesReplacementLoadingUntilItCompletes() async {
+        let older = HeldQuickSearchResult()
+        let newest = HeldQuickSearchResult()
+        let model = GalleryListViewModel(filterGalleries: { _ in 0 }, listRequest: { url in
+            if Self.rating(in: url) == "4" { return try await older.request() }
+            #expect(Self.rating(in: url) == "5")
+            return try await newest.request()
+        })
+        let first = select(4, in: model)
+        await older.waitUntilRequested()
+        let second = select(5, in: model)
+        await newest.waitUntilRequested()
+
+        older.finish(.failure(URLError(.timedOut)))
+        await first.value
+        #expect(model.isLoading && model.errorMessage == nil)
+        #expect(model.galleries.isEmpty && model.nextHref == nil)
+
+        newest.finish(.success(Self.result(5, previous: Self.newestPrev, next: Self.newestCursor)))
+        await second.value
+        #expect(model.galleries.map(\.gid) == [5])
+        #expect(model.prevHref == Self.newestPrev && model.nextHref == Self.newestCursor)
+        #expect(!model.isLoading && model.errorMessage == nil)
+    }
+
+    @Test func oldHrefPageCannotAppendToNewQuickSearch() async {
+        let oldPage = HeldQuickSearchResult()
+        let model = GalleryListViewModel(filterGalleries: { _ in 0 }, listRequest: { url in
+            if url == Self.olderCursor { return try await oldPage.request() }
+            if Self.rating(in: url) == "4" { return Self.result(4, next: Self.olderCursor) }
+            #expect(Self.rating(in: url) == "5")
+            return Self.result(5, previous: Self.newestPrev, next: Self.newestCursor)
+        })
+        await select(4, in: model).value
+        let pagination = Task { await model.loadMore(mode: .search(keyword: Self.query)) }
+        await oldPage.waitUntilRequested()
+        await select(5, in: model).value
+
+        oldPage.finish(.success(Self.result(46)))
+        await pagination.value
+        #expect(model.galleries.map(\.gid) == [5])
+        #expect(model.prevHref == Self.newestPrev && model.nextHref == Self.newestCursor)
+        #expect(!model.isLoading && model.errorMessage == nil && model.hasMore)
+    }
+
+    private func select(_ rating: Int, in model: GalleryListViewModel) -> Task<Void, Never> {
+        model.applyQuickSearch(GalleryBrowseSearch(query: Self.query, savedMinimumRating: rating),
+                               storedCategory: 0, legacyAdvanced: false)
+    }
+
+    private static func result(_ id: Int64, previous: String? = nil, next: String? = nil) -> GalleryListResult {
+        .init(galleries: [GalleryInfo(gid: id, token: "neutral", title: "Fixture \(id)")],
+              pages: -1, prevHref: previous, nextHref: next)
+    }
+
+    private static func rating(in url: String) -> String? {
+        URLComponents(string: url)?.queryItems?.first(where: { $0.name == "f_srdd" })?.value
+    }
+}
+
+@MainActor
+private final class HeldQuickSearchResult {
+    private var response: CheckedContinuation<GalleryListResult, any Error>?
+    private var start: CheckedContinuation<Void, Never>?
+
+    func request() async throws -> GalleryListResult {
+        try await withCheckedThrowingContinuation {
+            response = $0
+            start?.resume()
+            start = nil
+        }
+    }
+
+    func waitUntilRequested() async {
+        if response == nil { await withCheckedContinuation { start = $0 } }
+    }
+
+    func finish(_ result: Result<GalleryListResult, any Error>) {
+        response?.resume(with: result)
+        response = nil
+    }
+}
