@@ -175,18 +175,19 @@ struct MainTabView: View {
 
     #if os(iOS)
     private var adaptiveSidebar: some View {
-        List {
+        let sidebarSelection = navigation.sidebarSelection
+        return List {
             ForEach(Tab.sidebarTabs, id: \.self) { tab in
                 Button {
-                    navigation.select(tab)
+                    navigation.selectFromSidebar(tab)
                 } label: {
                     Label(tab.rawValue, systemImage: tab.icon)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.15) : nil)
-                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                .listRowBackground(sidebarSelection == tab ? Color.accentColor.opacity(0.15) : nil)
+                .accessibilityAddTraits(sidebarSelection == tab ? .isSelected : [])
             }
         }
         .listStyle(.sidebar)
@@ -214,13 +215,10 @@ struct MainTabView: View {
         switch tab {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
-            BrowseHomeView(initial: navigation.initialBrowseSource)
-        case .subscription:
-            GalleryListView(mode: .subscription)
-        case .popular:
-            GalleryListView(mode: .popular)
-        case .toplist:
-            GalleryListView(mode: .toplist(period: 15))
+            BrowseHomeView(route: $navigation.browse)
+        case .subscription, .popular, .toplist:
+            // These sidebar shortcuts are aliases of the retained Home stack on iOS.
+            EmptyView()
         case .favorites:
             FavoritesView()
         case .downloads:

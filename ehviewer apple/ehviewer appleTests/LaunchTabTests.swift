@@ -36,14 +36,14 @@ struct LaunchTabTests {
         }
     }
 
-    /// 热门与排行不再是独立标签页，应当落到首页（切页由 initialBrowseSource 决定）
+    /// 热门与排行不再是独立标签页，应当落到首页（切页由 Browse route 决定）
     @Test func popularAndToplistStartOnTheirActualBrowseSourceOrDesktopTab() {
         let mobilePopular = MainTabNavigation(launchPage: 1)
         let mobileToplist = MainTabNavigation(launchPage: 2)
         #expect(mobilePopular.selection == .home)
-        #expect(mobilePopular.initialBrowseSource == .popular)
+        #expect(mobilePopular.browse.origin == .popular)
         #expect(mobileToplist.selection == .home)
-        #expect(mobileToplist.initialBrowseSource == .toplist)
+        #expect(mobileToplist.browse.origin == .toplist)
         #expect(MainTabNavigation(launchPage: 1, usesHomeBrowseContainer: false).selection == .popular)
         #expect(MainTabNavigation(launchPage: 2, usesHomeBrowseContainer: false).selection == .toplist)
     }
@@ -68,10 +68,10 @@ struct LaunchTabTests {
     @Test func wideOnlyTabRemainsMountedWhenNarrowingAndAfterSelectingAnotherTab() {
         typealias Tab = MainTabView.Tab
         #expect(Tab.adaptiveContentTabs(visitedExtras: [], selected: .home) == Tab.bottomTabs)
-        let selected = Tab.adaptiveContentTabs(visitedExtras: [], selected: .subscription)
-        #expect(selected.contains(.subscription))
-        #expect(!selected.contains(.settings))
-        #expect(Tab.adaptiveContentTabs(visitedExtras: [.subscription], selected: .home) == selected)
+        let selected = Tab.adaptiveContentTabs(visitedExtras: [], selected: .settings)
+        #expect(selected.contains(.settings))
+        #expect(!selected.contains(.subscription))
+        #expect(Tab.adaptiveContentTabs(visitedExtras: [.settings], selected: .home) == selected)
     }
 
     @Test func navigationControllerRetainsVisitedTabsAcrossSelectionChanges() {
@@ -82,10 +82,68 @@ struct LaunchTabTests {
         routing.select(.subscription)
         routing.select(.home)
         routing.select(.subscription)
-        #expect(routing.selection == .subscription)
-        #expect(routing.retainedTabs == MainTab.bottomTabs + [.subscription, .settings])
+        #expect(routing.selection == .home)
+        #expect(routing.browse.selection == .subscription)
+        #expect(routing.retainedTabs == MainTab.bottomTabs + [.settings])
         #expect(MainTab.moreTabs == [.subscription, .popular, .toplist, .settings])
         #expect(!MainTab.sidebarTabs.contains(.more))
+    }
+
+    @Test func eachMobileSidebarBrowseShortcutMatchesTheSourceChipWithoutMountingAnotherStack() {
+        let aliases: [(MainTab, BrowseSource)] = [
+            (.home, .home), (.subscription, .subscription), (.popular, .popular), (.toplist, .toplist)
+        ]
+
+        for (tab, source) in aliases {
+            var chip = MainTabNavigation(launchPage: 0)
+            chip.browse.select(source)
+            var sidebar = MainTabNavigation(launchPage: 0)
+            sidebar.selectFromSidebar(tab)
+            #expect(sidebar.browse == chip.browse)
+            #expect(sidebar.selection == .home)
+            #expect(sidebar.sidebarSelection == tab)
+            #expect(sidebar.retainedTabs == MainTab.bottomTabs)
+
+            let activeRoute = sidebar.browse
+            sidebar.selectFromSidebar(tab)
+            sidebar.browse.select(source)
+            #expect(sidebar.browse == activeRoute)
+        }
+    }
+
+    @Test func compactHomeReturnsToCurrentBrowseSourceAndSearchKeepsItsOrigin() {
+        var routing = MainTabNavigation(launchPage: 0)
+        routing.selectFromSidebar(.toplist)
+        routing.select(.downloads)
+        #expect(routing.sidebarSelection == .downloads)
+        routing.select(.home)
+        #expect(routing.browse.selection == .toplist)
+        #expect(routing.sidebarSelection == .toplist)
+
+        routing.browse.select(.search)
+        #expect(routing.sidebarSelection == nil)
+        #expect(routing.browse.origin == .toplist)
+        routing.browse.setSearchResultsVisible(false)
+        #expect(routing.sidebarSelection == .toplist)
+
+        routing.browse.setSearchResultsVisible(true)
+        routing.selectFromSidebar(.popular)
+        #expect(routing.sidebarSelection == .popular)
+        #expect(routing.browse.origin == .popular)
+        #expect(!routing.browse.isShowingSearch)
+
+        routing.selectFromSidebar(.home)
+        #expect(routing.browse.selection == .home)
+    }
+
+    @Test func desktopDoesNotRouteSidebarSourcesThroughHome() {
+        var routing = MainTabNavigation(launchPage: 1, usesHomeBrowseContainer: false)
+        #expect(routing.sidebarSelection == .popular)
+        routing.selectFromSidebar(.subscription)
+        #expect(routing.selection == .subscription)
+        #expect(routing.sidebarSelection == .subscription)
+        routing.select(.toplist)
+        #expect(routing.selection == .toplist)
     }
 
     @Test func clipboardNavigationRejectsIncompletePayloadWithoutPresentingGallery() {

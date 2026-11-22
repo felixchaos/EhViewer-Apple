@@ -40,28 +40,17 @@ extension BrowseSource {
 
 struct BrowseHomeView: View {
     /// The originating list stays mounted while its search results are visible.
-    @State private var origin: BrowseSource
-    @State private var isShowingSearch: Bool
+    @Binding var route: BrowseHomeRoute
     @State private var toplistPeriod = 15
     @State private var search = GalleryBrowseSearch(query: "")
 
-    init(initial: BrowseSource = .home) {
-        _origin = State(initialValue: initial == .search ? .home : initial)
-        _isShowingSearch = State(initialValue: initial == .search)
-    }
-
     private var selection: Binding<BrowseSource> {
-        Binding(get: { isShowingSearch ? .search : origin }, set: { selected in
-            if selected == .search {
-                isShowingSearch = true
-            } else {
-                origin = selected
-                isShowingSearch = false
-            }
-        })
+        Binding(get: { route.selection }, set: { route.select($0) })
     }
 
     var body: some View {
+        let origin = route.origin
+        let isShowingSearch = route.isShowingSearch
         ZStack {
             list(for: origin)
                 .id(OriginIdentity(source: origin, period: origin == .toplist ? toplistPeriod : 0))
@@ -85,7 +74,7 @@ struct BrowseHomeView: View {
             initialBrowseSearch: source == .search ? search : nil,
             onSearchSubmit: { submitted in
                 search = submitted
-                isShowingSearch = !submitted.query.isEmpty
+                route.setSearchResultsVisible(!submitted.query.isEmpty)
             }
         )
     }
