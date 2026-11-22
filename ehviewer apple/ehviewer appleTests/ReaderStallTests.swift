@@ -1070,6 +1070,19 @@ struct ReaderSharedMemorySpreadTests {
         #if os(iOS)
         #expect(composed.logicalSize == CGSize(width: 2, height: 1))
         #expect(vm.spreadPresentation(at: 0, direction: .leftToRight)?.image === composed.image)
+
+        // Unrelated prefetch should not recompose an NSCache-only pair.
+        vm.cachedImages[2] = primary
+        #expect(vm.spreadPresentation(at: 0, direction: .leftToRight)?.image === composed.image)
+
+        // Restoring the identical source is harmless, but subsequent eviction
+        // intentionally releases the raster even if both image entries stay warm.
+        vm.cachedImages[0] = primary
+        #expect(vm.spreadPresentation(at: 0, direction: .leftToRight)?.image === composed.image)
+        vm.cachedImages.removeValue(forKey: 0)
+        #expect(vm.image(at: 0) === primary)
+        let afterEviction = try #require(vm.spreadPresentation(at: 0, direction: .leftToRight))
+        #expect(afterEviction.image !== composed.image)
         #else
         #expect(composed.logicalSize == nil)
         #expect(composed.image.size == NSSize(width: 2, height: 1))

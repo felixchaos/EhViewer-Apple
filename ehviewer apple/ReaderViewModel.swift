@@ -163,10 +163,19 @@ class ReaderViewModel {
     var cachedImages: [Int: PlatformImage] = [:] {
         didSet {
             #if os(iOS)
-            if let lastSpread,
-               !lastSpread.hasSources(primary: cachedImages[lastSpread.pages.primaryPage],
-                                      secondary: lastSpread.pages.secondaryPage.flatMap({ cachedImages[$0] })) {
-                self.lastSpread = nil
+            if let lastSpread, let secondary = lastSpread.pages.secondaryPage {
+                let primary = lastSpread.pages.primaryPage
+                // An explicit eviction/replacement of either observed input
+                // releases the raster. Unrelated prefetch insertions must not
+                // flush a pair that was already sourced from shared memory.
+                let observedSourceChanged = [primary, secondary].contains { page in
+                    guard let previous = oldValue[page] else { return false }
+                    return cachedImages[page] !== previous
+                }
+                if observedSourceChanged ||
+                    !lastSpread.hasSources(primary: image(at: primary), secondary: image(at: secondary)) {
+                    self.lastSpread = nil
+                }
             }
             #endif
         }
