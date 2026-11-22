@@ -739,19 +739,8 @@ struct ImageReaderView: View {
     /// 显示一个 spread (单页或双页合成) — 使用 ViewModel 合成图
     @ViewBuilder
     private func spreadPageView(spread: PageSpread) -> some View {
-        if let composited = vm.spreadImage(at: spread.id, direction: readingDirection) {
-            ZoomableImageView(
-                image: composited,
-                scaleMode: scaleMode,
-                startPosition: startPosition,
-                allowsHorizontalScrollAtMinZoom: false,
-                onSingleTap: { location, viewSize in
-                    handleTapZone(location: location, viewSize: viewSize)
-                },
-                onZoomChanged: { zoomed in
-                    isZoomed = zoomed
-                }
-            )
+        if let spread = vm.spreadPresentation(at: spread.id, direction: readingDirection) {
+            spreadImageView(spread)
         } else {
             // 至少一页尚未加载 — 显示加载状态
             VStack(spacing: 12) {
@@ -777,6 +766,28 @@ struct ImageReaderView: View {
                 }
             }
         }
+    }
+
+    private func spreadImageView(_ spread: ReaderViewModel.SpreadPresentation) -> ZoomableImageView {
+        let view = ZoomableImageView(
+            image: spread.image,
+            scaleMode: scaleMode,
+            startPosition: startPosition,
+            allowsHorizontalScrollAtMinZoom: false,
+            onSingleTap: { location, viewSize in
+                handleTapZone(location: location, viewSize: viewSize)
+            },
+            onZoomChanged: { zoomed in
+                isZoomed = zoomed
+            }
+        )
+        #if os(iOS)
+        var sizedView = view
+        sizedView.logicalImageSize = spread.logicalSize
+        return sizedView
+        #else
+        return view
+        #endif
     }
 
     /// 单页加载指示器 (复用于 spread 和单页模式)

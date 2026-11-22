@@ -650,9 +650,9 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
         let first = page(CGSize(width: 1600, height: 2400), color: .red)
         let second = page(CGSize(width: 1600, height: 2400), color: .blue)
         let model = spread(first, nil)
-        #expect(model.spreadImage(at: 0, direction: .leftToRight) === first)
+        #expect(model.spreadPresentation(at: 0, direction: .leftToRight)?.image === first)
         model.cachedImages[1] = second
-        let image = try #require(model.spreadImage(at: 0, direction: .leftToRight))
+        let image = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)).image
         let cg = try #require(image.cgImage)
         #expect(image.scale == 1)
         #expect(cg.width == 3200)
@@ -662,9 +662,31 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
     @Test func largePairRespectsHardPixelBudgetAndProportions() throws {
         let first = page(CGSize(width: 2600, height: 3600), color: .red)
         let model = spread(first, first)
-        let cg = try #require(model.spreadImage(at: 0, direction: .leftToRight)?.cgImage)
+        let presentation = try #require(model.spreadPresentation(at: 0, direction: .leftToRight))
+        let cg = try #require(presentation.image.cgImage)
+        #expect(presentation.logicalSize == CGSize(width: 5200, height: 3600))
         #expect(cg.width * cg.height <= 16 * 1024 * 1024)
         #expect(abs(Double(cg.width) / Double(cg.height) - 5200.0 / 3600) < 0.002)
+    }
+
+    @Test func boundedRasterKeepsOriginalFixedAndFitScrollGeometry() {
+        let raster = page(CGSize(width: 48, height: 36), color: .blue)
+        let logical = CGSize(width: 6000, height: 4500)
+        func layout(_ mode: ScaleMode, logicalSize: CGSize?) -> CGSize {
+            let scroll = ZoomableScrollView(frame: CGRect(x: 0, y: 0, width: 900, height: 450))
+            scroll.scaleMode = mode
+            scroll.logicalImageSize = logicalSize
+            let imageView = UIImageView(image: raster)
+            imageView.tag = 1001
+            scroll.addSubview(imageView)
+            scroll.layoutSubviews()
+            return scroll.contentSize
+        }
+        #expect(layout(.origin, logicalSize: logical) == logical)
+        #expect(layout(.fixed, logicalSize: logical) == logical)
+        #expect(layout(.fit, logicalSize: logical) == CGSize(width: 600, height: 450))
+        #expect(layout(.fitWidth, logicalSize: logical) == CGSize(width: 900, height: 675))
+        #expect(layout(.origin, logicalSize: nil) == raster.size)
     }
 
     private func rgb(_ image: CGImage, x: Int) throws -> [UInt8] {
@@ -685,8 +707,8 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
         let first = page(CGSize(width: 32, height: 32), color: .red)
         let second = page(CGSize(width: 32, height: 32), color: .blue)
         let model = spread(first, second)
-        let ltr = try #require(model.spreadImage(at: 0, direction: .leftToRight)?.cgImage)
-        let rtl = try #require(model.spreadImage(at: 0, direction: .rightToLeft)?.cgImage)
+        let ltr = try #require(model.spreadPresentation(at: 0, direction: .leftToRight)?.image.cgImage)
+        let rtl = try #require(model.spreadPresentation(at: 0, direction: .rightToLeft)?.image.cgImage)
         let ltrLeft = try rgb(ltr, x: 8)
         let ltrRight = try rgb(ltr, x: 40)
         let rtlLeft = try rgb(rtl, x: 8)

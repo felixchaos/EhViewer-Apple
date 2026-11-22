@@ -407,15 +407,21 @@ class ReaderViewModel {
 
     // MARK: - Composite Image (双页合成)
 
+    struct SpreadPresentation {
+        let image: PlatformImage
+        /// The original iOS coordinate space, independently of the bounded raster.
+        let logicalSize: CGSize?
+    }
+
     /// 将一个 spread 的两页合成为一张图片
-    func spreadImage(at index: Int, direction: ReadingDirection) -> PlatformImage? {
+    func spreadPresentation(at index: Int, direction: ReadingDirection) -> SpreadPresentation? {
         guard index >= 0 && index < spreads.count else { return nil }
         let spread = spreads[index]
 
         guard let primary = cachedImages[spread.primaryPage] else { return nil }
         guard let secPage = spread.secondaryPage,
               let secondary = cachedImages[secPage] else {
-            return primary
+            return SpreadPresentation(image: primary, logicalSize: nil)
         }
 
         // RTL: 高页码在左 (漫画翻书序)
@@ -431,7 +437,7 @@ class ReaderViewModel {
     }
 
     /// 拼合保持原始布局比例，iOS 按实际输出像素而非设备点数限制位图。
-    private func compositeImages(left: PlatformImage, right: PlatformImage) -> PlatformImage {
+    private func compositeImages(left: PlatformImage, right: PlatformImage) -> SpreadPresentation {
         let inputH = max(left.size.height, right.size.height)
         let inputW = left.size.width + right.size.width
         let maxDimension = max(inputW, inputH)
@@ -450,7 +456,7 @@ class ReaderViewModel {
         format.scale = 1
         format.preferredRange = .standard
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: maxH), format: format)
-        return renderer.image { _ in
+        let image = renderer.image { _ in
             let lw = left.size.width * layoutScale
             let lh = left.size.height * layoutScale
             let rw = right.size.width * layoutScale
@@ -461,6 +467,8 @@ class ReaderViewModel {
             let rightY = (maxH - rh) / 2
             right.draw(in: CGRect(x: leftX + lw, y: rightY, width: rw, height: rh))
         }
+        return SpreadPresentation(image: image, logicalSize: CGSize(width: inputW * dimensionScale,
+                                                                    height: inputH * dimensionScale))
         #else
         let scale = dimensionScale
         let totalW = inputW * scale
@@ -478,7 +486,7 @@ class ReaderViewModel {
         right.draw(in: NSRect(x: lw, y: rightY, width: rw, height: rh),
                    from: .zero, operation: .copy, fraction: 1.0)
         composited.unlockFocus()
-        return composited
+        return SpreadPresentation(image: composited, logicalSize: nil)
         #endif
     }
 

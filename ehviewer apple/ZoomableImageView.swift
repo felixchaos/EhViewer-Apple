@@ -20,6 +20,8 @@ struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
     let scaleMode: ScaleMode
     let startPosition: StartPosition
+    /// iOS spread source coordinates; ordinary images use their native size.
+    var logicalImageSize: CGSize?
     /// 是否允许在 1x 缩放时拦截水平滑动 (翻页模式需要 false 以允许 TabView 翻页)
     var allowsHorizontalScrollAtMinZoom: Bool = false
     /// 单击回调 — 传入点击位置(相对于视口)和视口尺寸，由调用方判断触发区域
@@ -44,6 +46,7 @@ struct ZoomableImageView: UIViewRepresentable {
         scrollView.alwaysBounceHorizontal = false
         scrollView.isDirectionalLockEnabled = true
         scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.logicalImageSize = logicalImageSize
         scrollView.scaleMode = scaleMode
         scrollView.startPosition = startPosition
         scrollView.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
@@ -82,6 +85,11 @@ struct ZoomableImageView: UIViewRepresentable {
         guard let imageView = scrollView.viewWithTag(1001) as? UIImageView else { return }
 
         let imageChanged = imageView.image !== image
+        let logicalSizeChanged = scrollView.logicalImageSize != logicalImageSize
+        if logicalSizeChanged {
+            scrollView.logicalImageSize = logicalImageSize
+            scrollView.needsStartPositionApply = true
+        }
         let scaleModeChanged = scrollView.scaleMode != scaleMode
         let startPositionChanged = scrollView.startPosition != startPosition
 
@@ -107,7 +115,7 @@ struct ZoomableImageView: UIViewRepresentable {
             scrollView.needsStartPositionApply = true
         }
 
-        if imageChanged || scaleModeChanged || startPositionChanged {
+        if imageChanged || logicalSizeChanged || scaleModeChanged || startPositionChanged {
             scrollView.lastLayoutBoundsSize = .zero
         }
 
@@ -119,7 +127,7 @@ struct ZoomableImageView: UIViewRepresentable {
         scrollView.allowsHorizontalScrollAtMinZoom = allowsHorizontalScrollAtMinZoom
 
         // 仅在需要重新布局时才调用 setNeedsLayout，避免不必要的重绘
-        if imageChanged || scaleModeChanged || startPositionChanged {
+        if imageChanged || logicalSizeChanged || scaleModeChanged || startPositionChanged {
             scrollView.setNeedsLayout()
         }
     }
@@ -247,6 +255,7 @@ struct ZoomableImageView: UIViewRepresentable {
 class ZoomableScrollView: UIScrollView {
     /// 用于检测 bounds 是否变化，避免冗余布局
     var lastLayoutBoundsSize: CGSize = .zero
+    var logicalImageSize: CGSize?
     /// 缩放模式 (对齐 Android ImageView.SCALE_*)
     var scaleMode: ScaleMode = .fit
     /// 起始位置 (对齐 Android ImageView.START_POSITION_*)
@@ -323,7 +332,7 @@ class ZoomableScrollView: UIScrollView {
 
         guard let imageView = viewWithTag(1001) as? UIImageView,
               let image = imageView.image else { return }
-        let imgSize = image.size
+        let imgSize = logicalImageSize ?? image.size
         guard imgSize.width > 0, imgSize.height > 0 else { return }
 
         let wScale = bounds.width / imgSize.width
