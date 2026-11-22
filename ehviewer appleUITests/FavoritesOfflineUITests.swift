@@ -128,7 +128,17 @@ final class FavoritesOfflineUITests: XCTestCase {
         app.buttons["导入"].tap()
         XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 8))
         app.alerts.firstMatch.buttons["好"].tap()
-        app.navigationBars.buttons.firstMatch.tap()
+        let labeledBack = app.buttons["返回"].firstMatch
+        let nativeBack = app.navigationBars.buttons.firstMatch
+        if labeledBack.exists {
+            labeledBack.tap()
+        } else if nativeBack.exists {
+            nativeBack.tap()
+        } else {
+            attachHierarchy(app, note: "Missing settings Back after import")
+            XCTFail("Missing settings Back after import")
+            return
+        }
         tab("收藏", in: app)
         XCTAssertTrue(app.staticTexts["Imported favorite fixture"].firstMatch.waitForExistence(timeout: 8))
         tab("历史", in: app)
