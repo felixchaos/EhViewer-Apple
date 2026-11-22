@@ -199,7 +199,10 @@ final class FavoritesOfflineUITests: XCTestCase {
                 .allElementsBoundByIndex.first(where: \.isHittable)
             XCTAssertNotNil(field)
             field?.tap()
-            app.buttons["高级搜索"].firstMatch.tap()
+            let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "高级搜索")).firstMatch
+            XCTAssertTrue(advanced.waitForExistence(timeout: 5))
+            if !advanced.isHittable { app.swipeUp() }
+            advanced.tap()
             XCTAssertTrue(app.navigationBars["搜索选项"].waitForExistence(timeout: 5))
         }
         func chooseRating(_ current: String, _ next: String) {
