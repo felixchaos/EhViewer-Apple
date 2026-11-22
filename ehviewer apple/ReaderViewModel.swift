@@ -161,6 +161,7 @@ class ReaderViewModel {
     /// 上一次预加载的锚点页 —— 用来推断翻页方向
     @ObservationIgnored private var lastPreloadAnchor: Int?
     @ObservationIgnored private var downloadDir: URL?
+    @ObservationIgnored private var localImageSession: UInt64 = 0
 
     /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
     private func cacheKey(for page: Int) -> NSString {
@@ -606,6 +607,7 @@ class ReaderViewModel {
     /// 彻底重置所有状态 — 在加载新画廊前调用
     /// UI 会因 totalPages == 0 立即切入 Loading 状态
     private func resetState() {
+        localImageSession &+= 1
         // 页面状态
         currentPage = 0
         totalPages = 0
@@ -825,22 +827,7 @@ class ReaderViewModel {
         // 换 H@H 节点……对一个本地文件这些全无意义，却实实在在拖慢了显示，
         // 表现就是「明明已经下载了，翻页还在转圈」。
         if initialURL.isFileURL {
-            if let data = try? Data(contentsOf: initialURL),
-               let img = await Task.detached(priority: .userInitiated, operation: {
-                   Self.downsampledImage(data: data)
-               }).value {
-                Self.imageCache.setObject(img, forKey: key, cost: Self.decodedCost(of: img))
-                await MainActor.run {
-                    self.cachedImages[index] = img
-                    self.downloadProgress.removeValue(forKey: index)
-                    self.errorPages.remove(index)
-                }
-            } else {
-                await MainActor.run {
-                    self.errorPages.insert(index)
-                    self.errorMessages[index] = "本地文件读取失败"
-                }
-            }
+            await loadDownloadedPage(index, from: initialURL, source: urlString)
             return
         }
 
@@ -995,6 +982,46 @@ class ReaderViewModel {
                 }
             }
         }
+    }
+
+    /// A read from a known downloaded page does not occupy the main actor.
+    /// Keep ownership checks around publication because reading/decoding can
+    /// outlive an explicit cancellation, a retry, or a gallery replacement.
+    func loadDownloadedPage(
+        _ index: Int, from url: URL, source: String,
+        decode: @escaping @Sendable (URL) -> PlatformImage? = ReaderViewModel.readAndDecodeDownloadedPage
+    ) async {
+        let gallery = gid
+        let session = localImageSession
+        let retry = retryGeneration[index, default: 0]
+        let key = cacheKey(for: index)
+
+        let worker = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return nil as PlatformImage? }
+            return decode(url)
+        }
+        let image = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        guard !Task.isCancelled, gid == gallery, localImageSession == session,
+              retryGeneration[index, default: 0] == retry, imageURLs[index] == source else { return }
+
+        if let image {
+            Self.imageCache.setObject(image, forKey: key, cost: Self.decodedCost(of: image))
+            cachedImages[index] = image
+            downloadProgress.removeValue(forKey: index)
+            errorPages.remove(index)
+        } else {
+            errorPages.insert(index)
+            errorMessages[index] = "本地文件读取失败"
+        }
+    }
+
+    nonisolated private static func readAndDecodeDownloadedPage(_ url: URL) -> PlatformImage? {
+        guard let data = try? Data(contentsOf: url), !Task.isCancelled else { return nil }
+        return downsampledImage(data: data)
     }
 
     /// 阅读时同步下载 — 浏览未下载的画廊时把看过的图片顺手存进下载目录

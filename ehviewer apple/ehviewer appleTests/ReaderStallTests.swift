@@ -248,3 +248,103 @@ struct ReaderPagingCommitTests {
         }
     }
 }
+
+@MainActor
+struct ReaderDownloadedPageIOTests {
+    @Test func loadingAFileDoesNotRunOnTheMainThreadAndClearsExistingError() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001001
+        let url = URL(fileURLWithPath: "/fixture-only/00000001.png")
+        vm.imageURLs[0] = url.absoluteString
+        vm.errorPages.insert(0)
+        vm.downloadProgress[0] = 0.5
+
+        let gate = HeldReaderFileDecode()
+        let task = Task {
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+        }
+        var entered = gate.entered.makeAsyncIterator()
+        #expect(await entered.next() == false)
+        #expect(vm.cachedImages[0] == nil)
+        gate.release()
+        await task.value
+        #expect(vm.cachedImages[0] != nil)
+        #expect(!vm.errorPages.contains(0))
+        #expect(vm.downloadProgress[0] == nil)
+    }
+
+    @Test func cancelledFileReadCannotPublish() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001002
+        let url = URL(fileURLWithPath: "/fixture-only/00000001.png")
+        vm.imageURLs[0] = url.absoluteString
+
+        let gate = HeldReaderFileDecode()
+        let task = Task {
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+        }
+        var entered = gate.entered.makeAsyncIterator()
+        #expect(await entered.next() == false)
+        task.cancel()
+        gate.release()
+        await task.value
+        #expect(vm.cachedImages[0] == nil)
+        #expect(!vm.errorPages.contains(0))
+    }
+
+    @Test func oldFileReadCannotPublishAfterSameGalleryIsReopened() async {
+        let vm = ReaderViewModel()
+        let gid: Int64 = 900010001003
+        vm.gid = gid
+        let url = URL(fileURLWithPath: "/fixture-only/00000001.png")
+        vm.imageURLs[0] = url.absoluteString
+
+        let gate = HeldReaderFileDecode()
+        let task = Task {
+            await vm.loadDownloadedPage(0, from: url, source: url.absoluteString, decode: gate.decode)
+        }
+        var entered = gate.entered.makeAsyncIterator()
+        #expect(await entered.next() == false)
+        _ = vm.prepareForGallery(targetGid: gid + 1, targetToken: "fixture")
+        _ = vm.prepareForGallery(targetGid: gid, targetToken: "fixture")
+        vm.imageURLs[0] = url.absoluteString
+        gate.release()
+        await task.value
+        #expect(vm.cachedImages[0] == nil)
+        #expect(!vm.errorPages.contains(0))
+    }
+
+    @Test func missingDownloadedFileKeepsExistingReadError() async {
+        let vm = ReaderViewModel()
+        vm.gid = 900010001004
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reader-missing-filename-\(UUID())")
+        vm.imageURLs[0] = url.absoluteString
+        await vm.loadDownloadedPage(0, from: url, source: url.absoluteString)
+        #expect(vm.cachedImages[0] == nil)
+        #expect(vm.errorPages.contains(0))
+        #expect(vm.errorMessages[0] == "本地文件读取失败")
+    }
+}
+
+private final class HeldReaderFileDecode: Sendable {
+    let entered: AsyncStream<Bool>
+    private let continuation: AsyncStream<Bool>.Continuation
+    private let wait = DispatchSemaphore(value: 0)
+
+    init() {
+        let (stream, continuation) = AsyncStream<Bool>.makeStream()
+        self.entered = stream
+        self.continuation = continuation
+    }
+
+    nonisolated func decode(_ url: URL) -> PlatformImage? {
+        continuation.yield(Thread.isMainThread)
+        continuation.finish()
+        // Bound the fixture even if an assertion or task fails before release.
+        guard wait.wait(timeout: .now() + 5) == .success else { return nil }
+        return PlatformImage()
+    }
+
+    func release() { wait.signal() }
+}
