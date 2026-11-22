@@ -18,6 +18,16 @@ enum EhOfflineUIFixture {
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
+    private static let historyTagFixtureEnabled =
+        ProcessInfo.processInfo.environment["EH_FIXTURE_HISTORY_TAG"] == "1"
+    private static let historyTag = "route fixture"
+    private static let historyGallery = GalleryInfo(
+        gid: 900010000008, token: "fixture", title: "Synthetic tag history item"
+    )
+    private static let historyTagResult = GalleryInfo(
+        gid: 900010000009, token: "fixture", title: "Synthetic history tag result"
+    )
+
     static func seed() {
         AppSettings.shared.recentFavCat = -1
         AppSettings.shared.defaultFavSlot = -1
@@ -27,6 +37,13 @@ enum EhOfflineUIFixture {
         try? EhDatabase.shared.deleteLocalFavorite(gid: cloud.gid)
         GalleryCache.shared.putDetail(.init(info: synthetic))
         GalleryCache.shared.putDetail(.init(info: cloud, isFavorited: true))
+        if historyTagFixtureEnabled {
+            try? EhDatabase.shared.insertHistory(.init(gid: historyGallery.gid, token: historyGallery.token,
+                                                       title: historyGallery.title ?? "", date: Date()))
+            GalleryCache.shared.putDetail(.init(info: historyGallery,
+                                                 tags: [.init(groupName: "artist", tags: [historyTag])]))
+            GalleryCache.shared.putDetail(.init(info: historyTagResult))
+        }
         if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMPORT"],
            UUID(uuidString: identifier) != nil {
             seedImportScenario(identifier: identifier)
@@ -126,6 +143,8 @@ enum EhOfflineUIFixture {
         // Deliberately distinct responses prove the UI chose the expected request.
         // Keep the original home fixture and other paths stable.
         switch URLComponents(string: url)?.path {
+        case "/tag/artist:\(historyTag)" where historyTagFixtureEnabled:
+            return GalleryListResult(galleries: [historyTagResult])
         case "/popular":
             return GalleryListResult(galleries: [
                 GalleryInfo(gid: 900010000004, token: "fixture", title: "Synthetic popular launch")

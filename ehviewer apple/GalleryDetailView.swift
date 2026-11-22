@@ -19,6 +19,16 @@ struct TagSearchDestination: Hashable {
     let tag: String
 }
 
+extension View {
+    /// Register once at the root of a stack that pushes tag results in place.
+    /// Split layouts with a dedicated sidebar callback keep their own destination.
+    func ehPushedTagSearchDestination() -> some View {
+        navigationDestination(for: TagSearchDestination.self) { destination in
+            GalleryListView(mode: .tag(keyword: destination.tag), isPushed: true)
+        }
+    }
+}
+
 /// 标签导航动作 — 从 Detail 列传递到 Content/Sidebar 列的 NavigationStack
 struct TagNavigationAction {
     let navigate: (String) -> Void

@@ -3,7 +3,7 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
@@ -12,6 +12,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         if nativePicker { app.launchEnvironment["EH_FIXTURE_NATIVE_FILE_PICKER"] = "1" }
         if let launchPage { app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = String(launchPage) }
         if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
+        if historyTag { app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1" }
         app.launch()
         return app
     }
@@ -211,6 +212,24 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Synthetic popular launch"].firstMatch.waitForExistence(timeout: 8))
         submit("offlinepopular")
         XCTAssertTrue(app.staticTexts["Synthetic popular search result"].firstMatch.waitForExistence(timeout: 8))
+    }
+
+    @MainActor func testHistoryDetailTagShowsScopedResultAndReturnsToHistory() {
+        let app = launch(cloud: "empty", launchPage: 5, historyTag: true)
+        let historyItem = app.staticTexts["Synthetic tag history item"].firstMatch
+        let tag = app.staticTexts["route fixture"].firstMatch
+        let result = app.staticTexts["Synthetic history tag result"].firstMatch
+
+        XCTAssertTrue(historyItem.waitForExistence(timeout: 8))
+        historyItem.tap()
+        XCTAssertTrue(tag.waitForExistence(timeout: 8))
+        tag.tap()
+        // This result is emitted only for the exact namespaced tag endpoint.
+        XCTAssertTrue(result.waitForExistence(timeout: 8))
+        back(app)
+        XCTAssertTrue(tag.waitForExistence(timeout: 8))
+        back(app)
+        XCTAssertTrue(historyItem.waitForExistence(timeout: 8))
     }
 
     @MainActor func testDownloadedReaderPageJumpAndReopenRetainsProgress() {

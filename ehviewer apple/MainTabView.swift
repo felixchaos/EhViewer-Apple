@@ -137,6 +137,11 @@ struct MainTabView: View {
                             Button("关闭") { clipboardGallery = nil }
                         }
                     }
+                    .navigationDestination(for: GalleryInfo.self) { result in
+                        GalleryDetailView(gallery: result)
+                            .id(result.gid)
+                    }
+                    .ehPushedTagSearchDestination()
             }
         }
         #endif

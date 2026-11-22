@@ -38,6 +38,9 @@ struct HistoryView: View {
                             GalleryDetailView(gallery: gallery)
                                 .id(gallery.gid)
                         }
+                        #if os(iOS)
+                        .ehPushedTagSearchDestination()
+                        #endif
                 }
             }
         }
