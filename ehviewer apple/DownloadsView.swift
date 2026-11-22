@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 import EhModels
 import EhDownload
 import EhDatabase
@@ -223,7 +224,7 @@ struct DownloadsView: View {
         // 在别处点了下载要立刻出现在这一页。
         // 此前只有 .task 会拉一次列表，从首页下载完切过来什么都没有，
         // 得杀掉进程重进才看得到。
-        .onReceive(NotificationCenter.default.publisher(for: .galleryDownloadChanged)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .galleryDownloadChanged).receive(on: DispatchQueue.main)) { _ in
             Task {
                 await vm.loadTasks()
                 await calculateStorageSizes()
