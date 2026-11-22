@@ -233,7 +233,12 @@ final class FavoritesOfflineUITests: XCTestCase {
         openOptions()
         chooseRating("4 stars", "5 stars")
         app.navigationBars["搜索选项"].buttons["取消"].tap()
-        XCTAssertTrue(four.isHittable)
+        XCTAssertFalse(app.navigationBars["搜索选项"].exists)
+        // The advanced form returns to search focus; leave the search panel
+        // separately without submitting another query.
+        if !four.isHittable { app.buttons["取消"].firstMatch.tap() }
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: four)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
         XCTAssertFalse(five.exists)
 
         openOptions()
@@ -244,7 +249,9 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Synthetic rating 4 cursor page"].exists)
         XCTAssertTrue(app.staticTexts["Synthetic rating 5 numbered page"].waitForExistence(timeout: 8))
         app.buttons["清除搜索"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.isHittable)
+        let home = app.staticTexts["Synthetic Gallery"].firstMatch
+        let homeVisible = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: home)
+        XCTAssertEqual(XCTWaiter.wait(for: [homeVisible], timeout: 5), .completed)
         XCTAssertFalse(five.exists)
     }
 
