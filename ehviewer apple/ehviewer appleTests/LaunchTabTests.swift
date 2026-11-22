@@ -67,6 +67,35 @@ struct LaunchTabTests {
         #expect(Tab.adaptiveContentTabs(visitedExtras: [.subscription], selected: .home) == selected)
     }
 
+    @Test func navigationControllerRetainsVisitedTabsAcrossSelectionChanges() {
+        var routing = MainTabNavigation(launchPage: 3)
+        #expect(routing.selection == .favorites)
+        #expect(routing.retainedTabs == MainTab.bottomTabs)
+        routing.select(.settings)
+        routing.select(.subscription)
+        routing.select(.home)
+        routing.select(.subscription)
+        #expect(routing.selection == .subscription)
+        #expect(routing.retainedTabs == MainTab.bottomTabs + [.subscription, .settings])
+        #expect(MainTab.moreTabs == [.subscription, .popular, .toplist, .settings])
+        #expect(!MainTab.sidebarTabs.contains(.more))
+    }
+
+    @Test func clipboardNavigationRejectsIncompletePayloadWithoutPresentingGallery() {
+        let name = Notification.Name("offline-clipboard-route")
+        let missingID = Notification(name: name, userInfo: ["token": "fixture-token"])
+        let missingToken = Notification(name: name, userInfo: ["gid": Int64(42)])
+        let wrongType = Notification(name: name, userInfo: ["gid": "42", "token": "fixture-token"])
+        #expect(MainTabNavigation.clipboardGallery(from: missingID) == nil)
+        #expect(MainTabNavigation.clipboardGallery(from: missingToken) == nil)
+        #expect(MainTabNavigation.clipboardGallery(from: wrongType) == nil)
+
+        let valid = Notification(name: name, userInfo: ["gid": Int64(42), "token": "fixture-token"])
+        let gallery = MainTabNavigation.clipboardGallery(from: valid)
+        #expect(gallery?.gid == 42)
+        #expect(gallery?.token == "fixture-token")
+    }
+
     @Test func quickSearchDrawerFitsNarrowWindows() {
         #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 250) == 226)
         #expect(ResponsiveLayout.quickSearchDrawerWidth(in: 390) == 280)

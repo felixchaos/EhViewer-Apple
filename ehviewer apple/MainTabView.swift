@@ -10,111 +10,21 @@ import EhModels
 import EhSettings
 
 struct MainTabView: View {
-    @Environment(AppState.self) private var appState
-    @State private var selectedTab: Tab = Tab.fromLaunchPage(AppSettings.shared.launchPage)
+    @State private var navigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage)
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
-    #if os(iOS)
-    @State private var visitedExtraTabs: Set<Tab> = []
-    #endif
     #if os(macOS)
     @State private var selectedGallery: GalleryInfo?
     /// 标签导航路径 — 支持从 Detail 列点击标签推入新画廊列表到 Content 列
     @State private var contentPath = NavigationPath()
     #endif
 
-    enum Tab: String, CaseIterable {
-        case home = "首页"
-        case subscription = "订阅"
-        case popular = "热门"
-        case toplist = "排行榜"
-        case favorites = "收藏"
-        case downloads = "下载"
-        case history = "历史"
-        case settings = "设置"
-        case more = "更多"
-        case profile = "我的"
+    typealias Tab = MainTab
 
-        var icon: String {
-            switch self {
-            case .home: return "house"
-            case .subscription: return "bell"
-            case .popular: return "flame"
-            case .toplist: return "chart.bar"
-            case .favorites: return "heart"
-            case .downloads: return "arrow.down.circle"
-            case .history: return "clock"
-            case .settings: return "gear"
-            case .more: return "ellipsis.circle"
-            case .profile: return "person.crop.circle"
-            }
-        }
+    private var selectedTab: Tab { navigation.selection }
 
-        /// 固定的底部默认标签页。
-        /// 「热门」「排行」已提到首页顶部的横向切页，不再占用底部位置；
-        /// 「设置」并入「我的」，底部因此空出一格给「历史」。
-        private static let defaultBottomTabs: [Tab] = [.home, .favorites, .downloads, .history, .profile]
-
-        /// iPhone 底部标签固定为这五项。
-        ///
-        /// 此前会按「启动页面」设置把首页替换成热门/排行，但那两者现在是首页顶部的
-        /// 横向切页而非独立标签页；继续替换会让底部栏在不同设置下项数与顺序都不同，
-        /// 而底部栏是肌肉记忆最强的控件，不该随设置变形。
-        /// 启动页指向热门/排行时改为落到首页并选中对应切页，见 initialBrowseSource。
-        static var bottomTabs: [Tab] { defaultBottomTabs }
-
-        /// Only mount the extra destinations after selection, avoiding eager requests
-        /// to every wide-only gallery. Keep them mounted when the window narrows.
-        static func adaptiveContentTabs(visitedExtras: Set<Tab>, selected: Tab) -> [Tab] {
-            bottomTabs + allCases.filter {
-                !bottomTabs.contains($0) && (visitedExtras.contains($0) || $0 == selected)
-            }
-        }
-
-        /// "更多"菜单中的标签页 — 不在底部栏且非 .more 的标签
-        static var moreTabs: [Tab] {
-            let bottom = Set(bottomTabs)
-            return allCases.filter { $0 != .more && $0 != .profile && !bottom.contains($0) }
-        }
-
-        /// 浮起导航条的图标（选中态用实心变体）
-        var filledIcon: String {
-            switch self {
-            case .home: return "house.fill"
-            case .favorites: return "heart.fill"
-            case .downloads: return "arrow.down.circle.fill"
-            case .history: return "clock.fill"
-            case .profile: return "person.crop.circle.fill"
-            default: return icon
-            }
-        }
-
-        /// 启动页面设置映射
-        /// 启动页面设置 → 底部标签。
-        ///
-        /// ⚠️ 返回值必须落在 `bottomTabs` 里。
-        ///
-        /// 这里原本给「热门」「排行」返回 .popular / .toplist，但那两者早就不是
-        /// 独立标签页了，已经并进首页顶部的切页（见 initialBrowseSource，它才是
-        /// 处理这两项的地方）。而底部内容是
-        /// `ForEach(bottomTabs) { .opacity(selectedTab == tab ? 1 : 0) }`——
-        /// selectedTab 落在 bottomTabs 之外时没有任何图层匹配，
-        /// 全部 opacity 0：整屏黑，只剩浮起导航条。
-        /// 把「启动页面」设成热门或排行的用户，每次冷启动都是这个画面。
-        static func fromLaunchPage(_ page: Int) -> Tab {
-            let tab: Tab
-            switch page {
-            // 热门 / 排行 → 首页，具体切页由 initialBrowseSource 决定
-            case 1, 2: tab = .home
-            case 3: tab = .favorites
-            case 4: tab = .downloads
-            case 5: tab = .history
-            default: tab = .home
-            }
-            // 兜底：万一以后又有人往这里加一个不在底部栏的标签，
-            // 也只是回到首页，而不是黑屏
-            return bottomTabs.contains(tab) ? tab : .home
-        }
+    private var tabSelection: Binding<Tab> {
+        Binding(get: { navigation.selection }, set: { navigation.select($0) })
     }
 
     var body: some View {
@@ -124,7 +34,7 @@ struct MainTabView: View {
         #endif
         #if os(macOS)
         NavigationSplitView {
-            List(Tab.allCases.filter { $0 != .more }, id: \.self, selection: $selectedTab) { tab in
+            List(Tab.sidebarTabs, id: \.self, selection: tabSelection) { tab in
                 Label(tab.rawValue, systemImage: tab.icon)
             }
             .navigationTitle("EhViewer")
@@ -157,25 +67,22 @@ struct MainTabView: View {
             contentPath = NavigationPath()
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHome)) { _ in
-            selectedTab = .home
+            navigation.select(.home)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToPopular)) { _ in
-            selectedTab = .popular
+            navigation.select(.popular)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToTopList)) { _ in
-            selectedTab = .toplist
+            navigation.select(.toplist)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToFavorites)) { _ in
-            selectedTab = .favorites
+            navigation.select(.favorites)
         }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
-            guard let userInfo = notification.userInfo,
-                  let gid = userInfo["gid"] as? Int64,
-                  let token = userInfo["token"] as? String else { return }
-            let gallery = GalleryInfo(gid: gid, token: token)
+            guard let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
             selectedGallery = gallery
         }
         #else
@@ -189,7 +96,7 @@ struct MainTabView: View {
 
                 // Keep the same stacks and their state when the navigation controls move.
                 ZStack {
-                    ForEach(Tab.adaptiveContentTabs(visitedExtras: visitedExtraTabs, selected: selectedTab), id: \.self) { tab in
+                    ForEach(navigation.retainedTabs, id: \.self) { tab in
                         tabLayer(tab) { tabContent(tab) }
                     }
                 }
@@ -198,7 +105,7 @@ struct MainTabView: View {
                     items: Tab.bottomTabs.map {
                         .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
                     },
-                    selection: $selectedTab,
+                    selection: tabSelection,
                     isEnabled: !showsSidebar,
                     onReselect: { tab in
                         NotificationCenter.default.post(
@@ -208,17 +115,12 @@ struct MainTabView: View {
                 )
             }
         }
-        .onChange(of: selectedTab) { _, tab in
-            if !Tab.bottomTabs.contains(tab) { visitedExtraTabs.insert(tab) }
-        }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
-            guard let userInfo = notification.userInfo,
-                  let gid = userInfo["gid"] as? Int64,
-                  let token = userInfo["token"] as? String else { return }
-            clipboardGallery = GalleryInfo(gid: gid, token: token)
+            guard let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
+            clipboardGallery = gallery
         }
         .sheet(item: $clipboardGallery) { gallery in
             NavigationStack {
@@ -268,9 +170,9 @@ struct MainTabView: View {
     #if os(iOS)
     private var adaptiveSidebar: some View {
         List {
-            ForEach(Tab.allCases.filter { $0 != .more }, id: \.self) { tab in
+            ForEach(Tab.sidebarTabs, id: \.self) { tab in
                 Button {
-                    selectedTab = tab
+                    navigation.select(tab)
                 } label: {
                     Label(tab.rawValue, systemImage: tab.icon)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -299,15 +201,6 @@ struct MainTabView: View {
             .ehTabBarDriver(active: selectedTab == tab)
     }
 
-    /// 启动页面设置指向「热门 / 排行」时，落到首页并选中对应的顶部切页。
-    /// 这两者已经不是独立标签页了，不能再去替换底部栏的第一项。
-    private static var initialBrowseSource: BrowseSource {
-        switch AppSettings.shared.launchPage {
-        case 1: return .popular
-        case 2: return .toplist
-        default: return .home
-        }
-    }
     #endif
 
     @ViewBuilder
@@ -332,9 +225,38 @@ struct MainTabView: View {
             SettingsView()
         case .more:
             // 保留给 iPad/macOS 侧边栏的兼容路径；iPhone 底部栏已改用 .profile
-            MoreTabView(onNavigate: { tab in selectedTab = tab })
+            MoreTabView(onNavigate: { tab in navigation.select(tab) })
         case .profile:
             ProfileHomeView()
+        }
+    }
+}
+
+extension MainTab {
+    var icon: String {
+        switch self {
+        case .home: return "house"
+        case .subscription: return "bell"
+        case .popular: return "flame"
+        case .toplist: return "chart.bar"
+        case .favorites: return "heart"
+        case .downloads: return "arrow.down.circle"
+        case .history: return "clock"
+        case .settings: return "gear"
+        case .more: return "ellipsis.circle"
+        case .profile: return "person.crop.circle"
+        }
+    }
+
+    /// 浮起导航条的图标（选中态用实心变体）
+    var filledIcon: String {
+        switch self {
+        case .home: return "house.fill"
+        case .favorites: return "heart.fill"
+        case .downloads: return "arrow.down.circle.fill"
+        case .history: return "clock.fill"
+        case .profile: return "person.crop.circle.fill"
+        default: return icon
         }
     }
 }
