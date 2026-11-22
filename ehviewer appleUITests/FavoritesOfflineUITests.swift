@@ -138,10 +138,13 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(success.exists)
         success.buttons["好"].tap()
         let labeledBack = app.buttons["返回"].firstMatch
+        let duoSystemBack = app.buttons["BackButton"].firstMatch
         let nativeBack = app.navigationBars.buttons.firstMatch
-        if labeledBack.exists {
+        if labeledBack.isHittable {
             labeledBack.tap()
-        } else if nativeBack.exists {
+        } else if duoSystemBack.isHittable {
+            duoSystemBack.tap()
+        } else if nativeBack.isHittable {
             nativeBack.tap()
         } else {
             attachHierarchy(app, note: "Missing settings Back after import")
@@ -149,9 +152,13 @@ final class FavoritesOfflineUITests: XCTestCase {
             return
         }
         tab("收藏", in: app)
-        XCTAssertTrue(app.staticTexts["Imported favorite fixture"].firstMatch.waitForExistence(timeout: 8))
+        let importedFavorite = app.staticTexts["Imported favorite fixture"].firstMatch
+        XCTAssertTrue(importedFavorite.waitForExistence(timeout: 8))
+        XCTAssertTrue(importedFavorite.isHittable)
         tab("历史", in: app)
-        XCTAssertTrue(app.staticTexts["Imported reading 54"].firstMatch.waitForExistence(timeout: 8))
+        let importedRead = app.staticTexts["Imported reading 54"].firstMatch
+        XCTAssertTrue(importedRead.waitForExistence(timeout: 8))
+        XCTAssertTrue(importedRead.isHittable)
         tab("首页", in: app)
         XCTAssertTrue(app.staticTexts["Apple resume fixture"].firstMatch.waitForExistence(timeout: 8))
     }
