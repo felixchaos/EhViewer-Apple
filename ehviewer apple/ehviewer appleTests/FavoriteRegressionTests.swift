@@ -11,6 +11,60 @@ import UIKit
 @MainActor
 @Suite(.serialized)
 struct FavoriteRegressionTests {
+    @Test(arguments: [false, true])
+    func delayedCloudSuccessCannotPublishIntoANewerContext(backToOriginalSite: Bool) async {
+        let old = CloudFavoriteContext(generation: UUID(), siteID: 0)
+        var current = old
+        var badgeSlot = 4
+        var cachedDetailSlot = 4
+        var requests = 0
+
+        do {
+            try await old.perform(current: { current }, request: {
+                requests += 1
+                await withCheckedContinuation { (response: CheckedContinuation<Void, Never>) in
+                    Task { @MainActor in
+                        current = CloudFavoriteContext(generation: UUID(), siteID: 1)
+                        if backToOriginalSite {
+                            current = CloudFavoriteContext(generation: UUID(), siteID: 0)
+                        }
+                        badgeSlot = -1
+                        cachedDetailSlot = -1
+                        response.resume()
+                    }
+                }
+            }, commit: {
+                badgeSlot = 2
+                cachedDetailSlot = 2
+            })
+            Issue.record("A successful old request must not publish into the current cache")
+        } catch is CloudFavoriteContext.Superseded {
+            // The test models only the local commit; the old remote response succeeded.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(requests == 1)
+        #expect(badgeSlot == -1)
+        #expect(cachedDetailSlot == -1)
+    }
+
+    @Test func supersededBatchItemDoesNotSendWhileCurrentItemPublishes() async throws {
+        let previous = CloudFavoriteContext(generation: UUID(), siteID: 0)
+        let current = CloudFavoriteContext(generation: UUID(), siteID: 0)
+        var requests = 0
+        var commits = 0
+        do {
+            try await previous.perform(current: { current }, request: { requests += 1 }, commit: { commits += 1 })
+            Issue.record("An invalidated batch must not start another request")
+        } catch is CloudFavoriteContext.Superseded {
+            // Remaining rows from the old selection should never be submitted.
+        }
+        #expect(requests == 0 && commits == 0)
+        try await current.perform(current: { current }, request: { requests += 1 }, commit: { commits += 1 })
+        #expect(requests == 1 && commits == 1)
+    }
+
     @Test func warmAndColdDetailsUseLiveLocalState() async {
         let gid: Int64 = -189321
         defer { GalleryCache.shared.removeDetail(gid: gid) }

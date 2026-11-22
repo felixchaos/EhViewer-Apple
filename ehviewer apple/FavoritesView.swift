@@ -10,7 +10,6 @@ import EhModels
 import EhSettings
 import EhDatabase
 import EhDownload
-import EhAPI
 
 struct FavoritesView: View {
     /// selectedSlot: -2 = 本地收藏, -1 = 全部, 0-9 = 云收藏夹
@@ -223,18 +222,22 @@ struct FavoritesView: View {
     private func batchMoveCloud(to slot: Int) {
         let gids = cloudSelection
         guard !gids.isEmpty else { return }
+        let selected = cloudGalleries.filter { gids.contains($0.gid) }
+        let actions = GalleryActionService.shared
+        let context = actions.cloudFavoriteContext
         Task {
             var moved = 0
-            for info in cloudGalleries where gids.contains(info.gid) {
+            for info in selected {
                 do {
-                    try await EhAPI.shared.addFavorites(
-                        gid: info.gid, token: info.token, dstCat: slot)
+                    try await actions.mutateCloudFavorite(gid: info.gid, token: info.token, slot: slot, context: context)
                     moved += 1
-                    GalleryActionService.shared.recordCloudFavorite(gid: info.gid, slot: slot)
+                } catch is CloudFavoriteContext.Superseded {
+                    return
                 } catch {
                     debugLog("[Favorites] 批量操作失败 gid=\(info.gid): \(error)")
                 }
             }
+            guard actions.isCurrentCloudFavoriteContext(context) else { return }
             if moved == gids.count {
                 EhToast.success(slot >= 0 ? "已移动 \(moved) 本" : "已移出 \(moved) 本")
             } else {
@@ -518,21 +521,28 @@ struct FavoritesView: View {
 
     private func batchMoveToCloud(slot: Int) {
         let selected = localFavorites.filter { selectedGids.contains($0.gid) }
+        let actions = GalleryActionService.shared
+        let context = actions.cloudFavoriteContext
         isBatchProcessing = true
         Task {
+            defer {
+                isBatchProcessing = false
+                if actions.isCurrentCloudFavoriteContext(context) {
+                    isSelectMode = false
+                    selectedGids.removeAll()
+                }
+                loadLocalFavorites()
+            }
             for record in selected {
                 do {
-                    try await GalleryActionService.shared.addFavorite(gid: record.gid, token: record.token, slot: slot)
-                    try GalleryActionService.shared.removeLocalFavorite(gid: record.gid)
+                    try await actions.addFavorite(gid: record.gid, token: record.token, slot: slot, context: context)
+                    guard actions.isCurrentCloudFavoriteContext(context) else { return }
+                    try actions.removeLocalFavorite(gid: record.gid)
+                } catch is CloudFavoriteContext.Superseded {
+                    return
                 } catch {
                     debugLog("[Favorites] Move to cloud failed; local copy retained: \(error)")
                 }
-            }
-            await MainActor.run {
-                isBatchProcessing = false
-                isSelectMode = false
-                selectedGids.removeAll()
-                loadLocalFavorites()
             }
         }
     }

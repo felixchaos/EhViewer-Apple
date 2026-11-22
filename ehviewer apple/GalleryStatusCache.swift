@@ -17,6 +17,7 @@ import Foundation
 import EhDownload
 import EhDatabase
 import EhModels
+import EhSettings
 
 @Observable
 @MainActor
@@ -26,6 +27,7 @@ final class GalleryStatusCache {
     private var downloadedGids: Set<Int64> = []
     private var favoritedGids: Set<Int64> = []
     private var changedCloudSlots: [Int64: Int] = [:]
+    @ObservationIgnored private var cloudFavoriteGeneration = UUID()
     private(set) var isLoaded = false
 
     private init() {
@@ -66,7 +68,12 @@ final class GalleryStatusCache {
         (changedCloudSlots[gallery.gid] ?? gallery.favoriteSlot) >= 0 || favoritedGids.contains(gallery.gid)
     }
 
+    var cloudFavoriteContext: CloudFavoriteContext {
+        CloudFavoriteContext(generation: cloudFavoriteGeneration, siteID: AppSettings.shared.gallerySite.rawValue)
+    }
+
     func resetCloudState() {
+        cloudFavoriteGeneration = UUID()
         changedCloudSlots.removeAll()
     }
 

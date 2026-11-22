@@ -83,18 +83,38 @@ final class GalleryActionService {
         return .needsPicker
     }
 
-    /// 添加云端收藏 (Fix B-3: 失败时抛出错误，让调用方回滚)
-    func addFavorite(gid: Int64, token: String, slot: Int) async throws {
-        do {
+    var cloudFavoriteContext: CloudFavoriteContext { GalleryStatusCache.shared.cloudFavoriteContext }
+
+    func isCurrentCloudFavoriteContext(_ context: CloudFavoriteContext) -> Bool {
+        cloudFavoriteContext == context
+    }
+
+    /// Shared by detail actions and batches; only publish a successful mutation
+    /// to the account/site whose snapshot it belongs to.
+    func mutateCloudFavorite(
+        gid: Int64, token: String, slot: Int, context: CloudFavoriteContext,
+        onCommit: () -> Void = {}
+    ) async throws {
+        try await context.perform(current: { self.cloudFavoriteContext }, request: {
             try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: slot)
+        }, commit: {
+            self.recordCloudFavorite(gid: gid, slot: slot)
+            onCommit()
+        })
+    }
+
+    /// 添加云端收藏，失败时由调用方保留原收藏状态。
+    func addFavorite(gid: Int64, token: String, slot: Int, context: CloudFavoriteContext? = nil) async throws {
+        let context = context ?? cloudFavoriteContext
+        do {
+            try await mutateCloudFavorite(gid: gid, token: token, slot: slot, context: context) {
+                EhToast.success("已添加至收藏")
+                AppSettings.shared.recentFavCat = slot
+            }
         } catch {
-            // 对齐 Android add_to_favorite_failure
-            EhToast.failure("添加收藏失败")
+            if isCurrentCloudFavoriteContext(context) { EhToast.failure("添加收藏失败") }
             throw error
         }
-        EhToast.success("已添加至收藏")
-        AppSettings.shared.recentFavCat = slot
-        recordCloudFavorite(gid: gid, slot: slot)
     }
 
     /// 添加本地收藏 (对齐 Android FAV_CAT_LOCAL = -1)
@@ -124,7 +144,8 @@ final class GalleryActionService {
     }
 
     @discardableResult
-    func removeFavorite(gid: Int64, token: String) async throws -> FavoriteLocation {
+    func removeFavorite(gid: Int64, token: String, context: CloudFavoriteContext? = nil) async throws -> FavoriteLocation {
+        let context = context ?? cloudFavoriteContext
         do {
             return try await Self.removePreferredFavorite(
                 readLocal: { try EhDatabase.shared.containsLocalFavorite(gid: gid) },
@@ -133,13 +154,13 @@ final class GalleryActionService {
                     EhToast.success("已移出本地收藏")
                 },
                 removeCloud: {
-                    try await EhAPI.shared.addFavorites(gid: gid, token: token, dstCat: -1)
-                    self.recordCloudFavorite(gid: gid, slot: -1)
-                    EhToast.success("已取消云端收藏")
+                    try await self.mutateCloudFavorite(gid: gid, token: token, slot: -1, context: context) {
+                        EhToast.success("已取消云端收藏")
+                    }
                 }
             )
         } catch {
-            EhToast.failure("取消收藏失败")
+            if isCurrentCloudFavoriteContext(context) { EhToast.failure("取消收藏失败") }
             throw error
         }
     }

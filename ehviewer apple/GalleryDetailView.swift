@@ -1097,8 +1097,11 @@ class GalleryDetailViewModel {
         guard !favoriteMutationInFlight else { return }
         favoriteMutationInFlight = true
         defer { favoriteMutationInFlight = false }
+        let actions = GalleryActionService.shared
+        let context = actions.cloudFavoriteContext
         do {
-            try await GalleryActionService.shared.addFavorite(gid: gid, token: token, slot: slot)
+            try await actions.addFavorite(gid: gid, token: token, slot: slot, context: context)
+            guard actions.isCurrentCloudFavoriteContext(context) else { return }
             favoriteDidChange(local: nil, cloudSlot: slot)
             Haptics.success()
         } catch {
@@ -1117,11 +1120,15 @@ class GalleryDetailViewModel {
         guard !favoriteMutationInFlight else { return }
         favoriteMutationInFlight = true
         defer { favoriteMutationInFlight = false }
+        let actions = GalleryActionService.shared
+        let context = actions.cloudFavoriteContext
         do {
-            let location = try await GalleryActionService.shared.removeFavorite(gid: gid, token: token)
+            let location = try await actions.removeFavorite(gid: gid, token: token, context: context)
             switch location {
             case .local: favoriteDidChange(local: false, cloudSlot: nil)
-            case .cloud: favoriteDidChange(local: nil, cloudSlot: -1)
+            case .cloud:
+                guard actions.isCurrentCloudFavoriteContext(context) else { return }
+                favoriteDidChange(local: nil, cloudSlot: -1)
             }
             Haptics.impact()
         } catch {

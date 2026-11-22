@@ -1839,6 +1839,10 @@ class SettingsViewModel {
         // 认证凭据改存钥匙串之后，这等于「注销只在本次运行有效」——
         // 重启 App，EhCookieManager.init 从钥匙串把凭据恢复回来，用户又登录了。
         // 借出去的设备上这是实打实的隐私泄漏。
+        // This settings flow clears credentials without changing RootView's AppState.
+        // Invalidate in-flight cloud favorite effects before ending the account session.
+        GalleryStatusCache.shared.resetCloudState()
+        GalleryCache.shared.clearAccountSnapshots()
         EhCookieManager.shared.signOut()
         isLoggedIn = false
         hasExAccess = false
