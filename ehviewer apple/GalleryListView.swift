@@ -1361,8 +1361,8 @@ struct GalleryListView: View {
                 ),
                 primaryAction: advancedSearch.isEnabled
                     ? ("清除筛选条件", {
-                        if initialSavedSearch?.explicitFilters != nil {
-                            clearSearchField()
+                        if let applied = initialSavedSearch, applied.explicitFilters != nil, let onSearchSubmit {
+                            onSearchSubmit(applied.clearingAppliedFilters)
                         } else {
                             advancedSearch = AdvancedSearchState()
                             viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
@@ -1540,7 +1540,10 @@ struct GalleryRow: View {
 
 private extension AdvancedSearchState {
     func restoreQuickSearch(_ preset: GalleryBrowseSearch) {
-        restoreListFilters(preset.initialFilters)
+        let filters = preset.initialFilters
+        selectedCategories = preset.savedCategory ?? EhCategory.all.rawValue
+        restore(advanceSearch: filters.advanceSearch, minRating: filters.minRating,
+                pageFrom: filters.pageFrom, pageTo: filters.pageTo)
     }
 
     func restoreListFilters(_ filters: GalleryListRequest.Filters) {

@@ -530,6 +530,15 @@ struct GalleryAppliedAdvancedBrowseSearchTests {
         #expect(GalleryBrowseSearch(query: "", applying: .init(category: EhCategory.manga.rawValue)).showsResults)
     }
 
+    @Test func clearingOnlyFiltersKeepsTheSubmittedKeyword() {
+        let filters = GalleryListRequest.Filters(advanceSearch: 3, minRating: 5)
+        let typed = GalleryBrowseSearch(query: "fixture title", applying: filters)
+        #expect(typed.clearingAppliedFilters == .init(query: "fixture title"))
+        #expect(typed.clearingAppliedFilters.showsResults)
+        let blank = GalleryBrowseSearch(query: "", applying: filters)
+        #expect(!blank.clearingAppliedFilters.showsResults)
+    }
+
     @Test func normalizedSnapshotKeepsExplicitOptionsAndUnchangedTextSemantics() throws {
         let search = GalleryBrowseSearch(
             query: "  artist:\"fixture example\"  ",

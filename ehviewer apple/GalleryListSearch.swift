@@ -142,6 +142,7 @@ nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
 
     var hasSavedFilters: Bool { savedCategory != nil || savedMinimumRating != nil || explicitFilters != nil }
     var showsResults: Bool { !query.isEmpty || explicitFilters?.supportsKeywordlessSearch == true }
+    var clearingAppliedFilters: Self { .init(query: query) }
 
     var initialFilters: GalleryListRequest.Filters {
         if let explicitFilters { return explicitFilters }
