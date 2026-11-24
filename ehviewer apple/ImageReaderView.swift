@@ -1792,13 +1792,12 @@ private struct ViewSizePreferenceKey: PreferenceKey {
 /// 纯 SwiftUI 可缩放图片 — 不使用 UIScrollView，彻底避免与父 ScrollView 的手势冲突
 ///
 /// 手势架构:
-/// 1. 单击/双击: 统一用 SpatialTapGesture(count:1) + 手动 300ms 延时检测
-///    解决 TapGesture(count:2) 与 SpatialTapGesture(count:1) 类型不匹配导致双击无法触发的问题
+/// 1. 未放大时保留当前的点按和双击处理；放大后由同一组互斥手势区分平移、双击、单击。
 /// 2. 双指缩放 (MagnifyGesture): 始终以 .simultaneousGesture 挂载，不阻塞父 ScrollView
 /// 3. 拖动平移 (DragGesture): 通过 overlay + allowsHitTesting(isZoomed) 控制
 ///    - 1x 时 overlay 不接收触摸 → 父 ScrollView 自由滚动/翻页
 ///    - >1x 时 overlay 拦截触摸 → 拖动平移图片，阻止父 ScrollView 滚动
-///    - overlay 上同时挂载 tap + pinch 手势，防止被 overlay 遮挡
+///    - overlay 上平移比点按优先且互斥；缩放仍可同时识别
 #if os(iOS)
 private struct SwiftUIZoomableImage: View {
     let image: PlatformImage
@@ -1848,16 +1847,9 @@ private struct SwiftUIZoomableImage: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .allowsHitTesting(isZoomed)
-                    // overlay 上也需要 tap + pinch，否则会被 overlay 吞掉
+                    // A small drag can satisfy the tap recognizer's movement
+                    // tolerance. Once panning wins, never also run a tap zone.
                     .gesture(
-                        SpatialTapGesture(count: 1)
-                            .onEnded { value in
-                                handleTap(at: value.location)
-                            }
-                    )
-                    .simultaneousGesture(magnifyGesture)
-                    // 拖动平移 (simultaneousGesture: 不阻塞同层 tap/pinch)
-                    .simultaneousGesture(
                         DragGesture(minimumDistance: 5)
                             .onChanged { value in
                                 guard !isPinching else { return }
@@ -1869,13 +1861,14 @@ private struct SwiftUIZoomableImage: View {
                             }
                             .onEnded { _ in
                                 if isPinching {
-                                    // 双指缩放期间的误触拖动 → 还原
                                     offset = lastOffset
                                 } else {
                                     lastOffset = offset
                                 }
                             }
+                            .exclusively(before: zoomedTapGesture)
                     )
+                    .simultaneousGesture(magnifyGesture)
             }
     }
 
@@ -1899,6 +1892,32 @@ private struct SwiftUIZoomableImage: View {
             }
     }
 
+    private var zoomedTapGesture: some Gesture {
+        SpatialTapGesture(count: 2)
+            .onEnded { _ in
+                pendingSingleTap?.cancel()
+                pendingSingleTap = nil
+                lastTapTime = .distantPast
+                toggleDoubleTapZoom()
+            }
+            .exclusively(before:
+                SpatialTapGesture(count: 1)
+                    .onEnded { value in onSingleTap?(value.location, viewSize) }
+            )
+    }
+
+    private func toggleDoubleTapZoom() {
+        withAnimation(.spring(duration: 0.3)) {
+            if scale < 1.5 {
+                scale = 2.0
+                lastScale = 2.0
+                onZoomChanged?(true)
+            } else {
+                resetZoom()
+            }
+        }
+    }
+
     /// 手动双击/单击检测: 300ms 窗口
     /// - 第二次点击在 300ms 内 → 双击 (缩放切换)
     /// - 超过 300ms 无第二次 → 单击 (工具栏/翻页)
@@ -1911,15 +1930,7 @@ private struct SwiftUIZoomableImage: View {
             // ── 双击 ──
             pendingSingleTap?.cancel()
             pendingSingleTap = nil
-            withAnimation(.spring(duration: 0.3)) {
-                if scale < 1.5 {
-                    scale = 2.0
-                    lastScale = 2.0
-                    onZoomChanged?(true)
-                } else {
-                    resetZoom()
-                }
-            }
+            toggleDoubleTapZoom()
         } else {
             // ── 可能是单击 — 等 300ms 确认不是双击 ──
             pendingSingleTap?.cancel()
