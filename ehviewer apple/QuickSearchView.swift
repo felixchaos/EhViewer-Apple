@@ -65,6 +65,10 @@ struct QuickSearchView: View {
                                 .font(.body)
                                 .foregroundStyle(.primary)
 
+                            if let scope = BrowseQuickSearchSnapshot.scopeTitle(search) {
+                                Text(scope).font(.caption).foregroundStyle(.secondary)
+                            }
+
                             if let keyword = search.keyword, !keyword.isEmpty {
                                 Text(keyword)
                                     .font(.caption)
@@ -208,7 +212,7 @@ struct QuickSearchView: View {
 struct QuickSearchDrawerContent: View {
     @State private var vm = QuickSearchViewModel()
     @Binding var selectedSearch: QuickSearchRecord?
-    let currentKeyword: String
+    let currentSearch: QuickSearchRecord?
     let onDismiss: () -> Void
 
     var body: some View {
@@ -219,31 +223,31 @@ struct QuickSearchDrawerContent: View {
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(EhColor.label)
                 Spacer()
-                // 收藏当前搜索词 (对齐 Android: 抽屉顶部添加按钮)
+                // The drawer saves the applied request, not an unsubmitted edit.
                 Button {
-                    let record = QuickSearchRecord(
-                        name: nil,
-                        mode: 0,
-                        category: 0,
-                        keyword: currentKeyword
-                    )
-                    vm.addSearch(record)
-                    Haptics.success()
+                    guard let currentSearch else { return }
+                    if vm.addSearch(currentSearch) {
+                        Haptics.success()
+                    } else {
+                        EhToast.failure("无法保存快速搜索")
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(
-                            currentKeyword.isEmpty ? EhColor.tertiaryLabel : EhColor.onAccentFill
+                            currentSearch == nil ? EhColor.tertiaryLabel : EhColor.onAccentFill
                         )
                         .frame(width: 30, height: 30)
                         .background {
                             Circle().fill(
-                                currentKeyword.isEmpty ? EhColor.fill : EhColor.accentFill
+                                currentSearch == nil ? EhColor.fill : EhColor.accentFill
                             )
                         }
                 }
                 .buttonStyle(.plain)
-                .disabled(currentKeyword.isEmpty)
+                .disabled(currentSearch == nil)
+                .accessibilityLabel("保存当前搜索")
+                .accessibilityIdentifier("quick-search-save-current")
             }
             .padding(.horizontal, EhSpacing.page)
             .padding(.top, 14)
@@ -256,7 +260,7 @@ struct QuickSearchDrawerContent: View {
                 EhStateView(kind: .empty(
                     symbol: "bookmark",
                     title: "还没有快速搜索",
-                    message: currentKeyword.isEmpty
+                    message: currentSearch == nil
                         ? "先搜一次，再回到这里把条件存下来"
                         : "点右上角 + 把当前搜索条件存下来"
                 ))
@@ -271,6 +275,9 @@ struct QuickSearchDrawerContent: View {
                                 Text(search.name ?? QuickSearchView.translateKeyword(search.keyword) ?? "未命名")
                                     .font(.body)
                                     .foregroundStyle(.primary)
+                                if let scope = BrowseQuickSearchSnapshot.scopeTitle(search) {
+                                    Text(scope).font(.caption).foregroundStyle(EhColor.secondaryLabel)
+                                }
                                 if let keyword = search.keyword, !keyword.isEmpty,
                                    search.name != nil {
                                     Text(QuickSearchView.translateKeyword(keyword) ?? keyword)
@@ -279,6 +286,8 @@ struct QuickSearchDrawerContent: View {
                                         .lineLimit(1)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -367,8 +376,11 @@ struct AddQuickSearchSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        save()
-                        dismiss()
+                        if save() {
+                            dismiss()
+                        } else {
+                            EhToast.failure("无法保存快速搜索")
+                        }
                     }
                     .disabled(keyword.isEmpty)
                 }
@@ -376,7 +388,7 @@ struct AddQuickSearchSheet: View {
         }
     }
 
-    private func save() {
+    private func save() -> Bool {
         let categoryMask = selectedCategories.reduce(0) { $0 | $1.rawValue }
         var record = QuickSearchRecord(
             name: name.isEmpty ? nil : name,
@@ -385,7 +397,7 @@ struct AddQuickSearchSheet: View {
             keyword: keyword
         )
         record.minRating = GalleryBrowseSearch.validMinimumRating(minRating) ?? 0
-        vm.addSearch(record)
+        return vm.addSearch(record)
     }
 }
 
@@ -403,12 +415,17 @@ class QuickSearchViewModel {
         }
     }
 
-    func addSearch(_ record: QuickSearchRecord) {
+    @discardableResult
+    func addSearch(_ record: QuickSearchRecord) -> Bool {
+        let database = EhDatabase.shared
+        guard !database.isDegraded else { return false }
         do {
-            try EhDatabase.shared.insertQuickSearch(record)
+            try database.insertQuickSearch(record)
             loadSearches()
+            return true
         } catch {
             debugLog("Failed to add quick search: \(error)")
+            return false
         }
     }
 

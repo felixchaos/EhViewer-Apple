@@ -159,6 +159,12 @@ enum EhDatabaseSchema {
             }
         }
 
+        migrator.registerMigration("v4") { db in
+            try db.alter(table: "quickSearch") { t in
+                t.add(column: "browseSnapshotVersion", .integer)
+            }
+        }
+
         return migrator
     }
 }

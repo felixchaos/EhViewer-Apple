@@ -43,6 +43,7 @@ struct BrowseHomeView: View {
     @Binding var route: BrowseHomeRoute
     @State private var toplistPeriod = 15
     @State private var search = GalleryBrowseSearch(query: "")
+    @State private var replayGeneration = 0
     @State private var visitedOrigins: Set<BrowseSource> = []
 
     private var selection: Binding<BrowseSource> {
@@ -69,7 +70,7 @@ struct BrowseHomeView: View {
 
             if isShowingSearch {
                 list(for: .search)
-                    .id(search)
+                    .id(SearchIdentity(search: search, replayGeneration: replayGeneration))
                     .zIndex(2)
             }
         }
@@ -89,11 +90,23 @@ struct BrowseHomeView: View {
             browseSource: selection,
             toplistPeriod: source == .toplist ? $toplistPeriod : nil,
             initialBrowseSearch: source == .search ? search : nil,
-            onSearchSubmit: { submitted in
-                search = submitted
-                route.setSearchResultsVisible(submitted.showsResults)
+            onSearchSubmit: showSearch,
+            onSearchReplay: { preset in
+                // Even the same preset reopens at page one when explicitly replayed.
+                replayGeneration &+= 1
+                showSearch(preset)
             }
         )
+    }
+
+    private func showSearch(_ submitted: GalleryBrowseSearch) {
+        search = submitted
+        route.setSearchResultsVisible(submitted.showsResults)
+    }
+
+    private struct SearchIdentity: Hashable {
+        let search: GalleryBrowseSearch
+        let replayGeneration: Int
     }
 
     private struct OriginIdentity: Hashable {

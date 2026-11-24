@@ -819,12 +819,15 @@ public struct QuickSearchRecord: Codable, FetchableRecord, PersistableRecord, Se
     public var minRating: Int
     public var pageFrom: Int
     public var pageTo: Int
+    /// nil identifies legacy records, whose dormant mode and bounds stay ignored.
+    public var browseSnapshotVersion: Int?
     public var date: Date
 
     public init(name: String? = nil, mode: Int = 0, category: Int = 0, keyword: String? = nil,
                 date: Date = .init()) {
         self.name = name; self.mode = mode; self.category = category; self.keyword = keyword
         self.advanceSearch = 0; self.minRating = 0; self.pageFrom = 0; self.pageTo = 0; self.date = date
+        self.browseSnapshotVersion = nil
     }
 }
 

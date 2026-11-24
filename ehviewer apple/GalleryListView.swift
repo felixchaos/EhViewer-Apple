@@ -28,6 +28,7 @@ struct GalleryListView: View {
     @State private var showTagSelector = false
     @State private var advancedSearch = AdvancedSearchState()
     @State private var selectedQuickSearch: QuickSearchRecord?
+    @State private var standalonePreset: GalleryBrowseSearch?
     @State private var selectedGallery: GalleryInfo?
     /// 搜索框聚焦态。用 @State 而非 @FocusState：焦点实际由
     /// UISearchTextField 持有，这里只是把它的状态镜像出来供布局使用。
@@ -76,6 +77,7 @@ struct GalleryListView: View {
     /// 提交搜索时交给父容器处理（切到独立的搜索页），而不是就地把
     /// 当前数据源变成搜索结果。只有浏览容器会传它。
     private var onSearchSubmit: ((GalleryBrowseSearch) -> Void)?
+    private var onSearchReplay: ((GalleryBrowseSearch) -> Void)?
     /// Retain the independently applied saved options when editing its query.
     private var initialSavedSearch: GalleryBrowseSearch?
 
@@ -104,9 +106,12 @@ struct GalleryListView: View {
 
     /// 浏览容器的根列表 — 在搜索栏下方带出顶部切页条
     init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil,
-         initialBrowseSearch: GalleryBrowseSearch? = nil, onSearchSubmit: ((GalleryBrowseSearch) -> Void)? = nil) {
+         initialBrowseSearch: GalleryBrowseSearch? = nil,
+         onSearchSubmit: ((GalleryBrowseSearch) -> Void)? = nil,
+         onSearchReplay: ((GalleryBrowseSearch) -> Void)? = nil) {
         self.toplistPeriod = toplistPeriod
         self.onSearchSubmit = onSearchSubmit
+        self.onSearchReplay = onSearchReplay
         self.initialSavedSearch = initialBrowseSearch
         if let initialBrowseSearch, initialBrowseSearch.hasSavedFilters {
             let state = AdvancedSearchState()
@@ -162,6 +167,7 @@ struct GalleryListView: View {
     /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
     /// 但收藏夹模式下搜索应保持在收藏夹内 (对齐 Android: 收藏夹搜索只搜收藏内容)
     private var effectiveMode: ListMode {
+        if let standalonePreset { return .search(keyword: standalonePreset.query) }
         if case .tag = mode {
             return .tagRoute(source: mode, submittedQuery: viewModel.submittedTagRouteQuery)
         }
@@ -256,7 +262,7 @@ struct GalleryListView: View {
             visibleGalleries?.wrappedValue = list
         }
         .onChange(of: showAdvancedSearch) { _, isShowing in
-            if !isShowing, onSearchSubmit == nil {
+            if !isShowing, onSearchSubmit == nil, standalonePreset == nil {
                 // 高级搜索面板关闭时，静默保存参数到 ViewModel (不自动触发搜索)
                 // 用户提交搜索或点击搜索按钮时才会使用这些参数
                 viewModel.syncAdvancedSettings(advancedSearch.appliedListFilters)
@@ -389,7 +395,7 @@ struct GalleryListView: View {
             .rightDrawer(isOpen: $showQuickSearch) {
                 QuickSearchDrawerContent(
                     selectedSearch: $selectedQuickSearch,
-                    currentKeyword: viewModel.searchText,
+                    currentSearch: currentQuickSearchRecord,
                     onDismiss: { showQuickSearch = false }
                 )
             }
@@ -485,7 +491,7 @@ struct GalleryListView: View {
         .rightDrawer(isOpen: $showQuickSearch) {
             QuickSearchDrawerContent(
                 selectedSearch: $selectedQuickSearch,
-                currentKeyword: viewModel.searchText,
+                currentSearch: currentQuickSearchRecord,
                 onDismiss: { showQuickSearch = false }
             )
         }
@@ -748,7 +754,7 @@ struct GalleryListView: View {
         .rightDrawer(isOpen: $showQuickSearch) {
             QuickSearchDrawerContent(
                 selectedSearch: $selectedQuickSearch,
-                currentKeyword: viewModel.searchText,
+                currentSearch: currentQuickSearchRecord,
                 onDismiss: { showQuickSearch = false }
             )
         }
@@ -814,6 +820,7 @@ struct GalleryListView: View {
 
 
     private var searchesSubscriptions: Bool {
+        if let standalonePreset { return standalonePreset.initialFilters.mode == .subscription }
         if case .subscription = mode { return true }
         return initialSavedSearch?.initialFilters.mode == .subscription
     }
@@ -933,17 +940,37 @@ struct GalleryListView: View {
     /// 标签在列表里一直只是装饰，看到感兴趣的还得自己回搜索框打一遍。
     /// 快速搜索。在浏览容器里同样要切到搜索页，
     /// 而不是把当前这一页原地变成搜索结果。
+    private var currentQuickSearchRecord: QuickSearchRecord? {
+        if onSearchSubmit != nil {
+            return initialSavedSearch.flatMap(BrowseQuickSearchSnapshot.save)
+        }
+        if let standalonePreset { return BrowseQuickSearchSnapshot.save(standalonePreset) }
+        guard !viewModel.searchText.isEmpty else { return nil }
+        return QuickSearchRecord(keyword: viewModel.searchText)
+    }
+
     private func applyQuickSearch(_ search: QuickSearchRecord) {
-        guard let keyword = search.keyword, !keyword.isEmpty else { return }
-        let preset = GalleryBrowseSearch(query: keyword, savedCategory: search.category,
-                                         savedMinimumRating: search.minRating)
+        guard let replay = BrowseQuickSearchSnapshot.replay(search) else { return }
+        let preset: GalleryBrowseSearch
+        switch replay {
+        case .legacy(let saved), .snapshot(let saved): preset = saved
+        }
+        isSearchFocused = false
         if let onSearchSubmit {
             restoreAppliedSearchField()
-            onSearchSubmit(preset)
+            (onSearchReplay ?? onSearchSubmit)(preset)
         } else {
-            syncField(from: keyword)
-            advancedSearch.restoreQuickSearch(preset)
-            viewModel.applyQuickSearch(preset, storedCategory: search.category, legacyAdvanced: search.advanceSearch > 0)
+            syncField(from: preset.query)
+            switch replay {
+            case .snapshot:
+                standalonePreset = preset
+                advancedSearch.restoreListFilters(preset.initialFilters)
+                viewModel.applyQuickSearchSnapshot(preset)
+            case .legacy:
+                standalonePreset = nil
+                advancedSearch.restoreQuickSearch(preset)
+                viewModel.applyQuickSearch(preset, storedCategory: search.category, legacyAdvanced: search.advanceSearch > 0)
+            }
         }
     }
 
@@ -962,6 +989,7 @@ struct GalleryListView: View {
         #endif
         lastAppliedField = field
         setSearchField(field)
+        standalonePreset = nil
         viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
     }
 
@@ -1045,6 +1073,7 @@ struct GalleryListView: View {
                 onSearchSubmit(browseSearch(for: query))
             }
         } else {
+            standalonePreset = nil
             syncField(from: query)
             viewModel.performSearch(query: query, filters: advancedSearch.appliedListFilters)
         }
@@ -1380,6 +1409,7 @@ struct GalleryListView: View {
                         if let applied = initialSavedSearch, applied.explicitFilters != nil, let onSearchSubmit {
                             onSearchSubmit(applied.clearingAppliedFilters)
                         } else {
+                            standalonePreset = nil
                             advancedSearch = AdvancedSearchState()
                             viewModel.searchWithAdvanced(advancedSearch.appliedListFilters)
                         }
@@ -1967,6 +1997,27 @@ class GalleryListViewModel {
     /// 静默同步高级搜索参数到 ViewModel (不触发搜索)
     func syncAdvancedSettings(_ filters: GalleryListRequest.Filters) {
         currentFilters = filters
+    }
+
+    @discardableResult
+    func applyQuickSearchSnapshot(_ preset: GalleryBrowseSearch) -> Task<Void, Never> {
+        listEpoch &+= 1
+        let epoch = listEpoch
+        let source = GalleryListRequest.Source.search(keyword: preset.query)
+        searchText = preset.query
+        submittedTagRouteQuery = preset.query
+        currentMode = source
+        currentFilters = preset.initialFilters
+        galleries = []
+        isLoading = true
+        hasMore = false
+        errorMessage = nil
+        currentPage = 0
+        prevHref = nil
+        nextHref = nil
+        let descriptor = listRequestDescriptor(for: source)
+        currentCacheKey = descriptor.cacheKey(page: 0)
+        return Task { await fetchPage(descriptor, page: 0, replacementEpoch: epoch) }
     }
 
     @discardableResult

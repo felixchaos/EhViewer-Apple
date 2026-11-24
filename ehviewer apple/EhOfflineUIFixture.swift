@@ -168,6 +168,37 @@ enum EhOfflineUIFixture {
                 return GalleryListResult(galleries: [item], pages: 2, nextPage: 1)
             }
         }
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_SUBSCRIPTION_FLOW"] == "1",
+           let request = URLComponents(string: url) {
+            let watched = request.path == "/watched"
+            let values = request.queryItems ?? []
+            func value(_ name: String) -> String? { values.first { $0.name == name }?.value }
+            if value("f_search") == "fixtureflow" {
+                if !watched {
+                    return GalleryListResult(galleries: [
+                        .init(gid: 900010011001, token: "fixture", title: "Unexpected global flow result")
+                    ])
+                }
+                if value("advsearch") == "1", value("f_sr") == "on", value("f_srdd") == "4" {
+                    return GalleryListResult()
+                }
+                if value("next") == "watched-fixture-cursor" {
+                    return GalleryListResult(galleries: [
+                        .init(gid: 900010011002, token: "fixture", title: "Watched flow cursor result")
+                    ])
+                }
+                var cursor = request
+                cursor.queryItems = values + [URLQueryItem(name: "next", value: "watched-fixture-cursor")]
+                return GalleryListResult(galleries: [
+                    .init(gid: 900010011003, token: "fixture", title: "Watched flow first result")
+                ], pages: -1, nextHref: cursor.url?.absoluteString)
+            }
+            if watched, value("f_search") == nil {
+                return GalleryListResult(galleries: (1...30).map { row in
+                    .init(gid: 900010011100 + Int64(row), token: "fixture", title: "Watched origin row \(row)")
+                })
+            }
+        }
         if ProcessInfo.processInfo.environment["EH_FIXTURE_SEARCH_SCOPE"] == "1",
            let request = URLComponents(string: url) {
             let watched = request.path == "/watched"
