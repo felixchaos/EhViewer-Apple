@@ -19,6 +19,7 @@ import AppKit
 
 enum DownloadStatusFilter: String, CaseIterable, Identifiable {
     case all = "全部"
+    case active = "进行中"
     case downloading = "下载中"
     case waiting = "等待中"
     case paused = "已暂停"
@@ -26,6 +27,41 @@ enum DownloadStatusFilter: String, CaseIterable, Identifiable {
     case failed = "失败"
 
     var id: String { rawValue }
+
+    func includes(_ task: DownloadTask) -> Bool {
+        switch self {
+        case .all: return true
+        case .active: return task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait
+        case .downloading: return task.state == DownloadManager.stateDownload
+        case .waiting: return task.state == DownloadManager.stateWait
+        case .paused: return task.state == DownloadManager.stateNone
+        case .finished: return task.state == DownloadManager.stateFinish
+        case .failed: return task.state == DownloadManager.stateFailed
+        }
+    }
+}
+
+private extension DownloadListOrder.Key {
+    var title: String {
+        switch self {
+        case .queue: return "默认顺序"
+        case .galleryID: return "画廊编号"
+        case .created: return "创建时间"
+        case .rating: return "评分"
+        case .title: return "标题"
+        case .fileSize: return "占用空间"
+        }
+    }
+}
+
+private extension DownloadListCategory {
+    var title: String {
+        switch self {
+        case .all: return "全部分类"
+        case .known(let category): return category.displayName
+        case .unknown: return "未知分类"
+        }
+    }
 }
 
 struct DownloadsView: View {
@@ -41,15 +77,18 @@ struct DownloadsView: View {
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var statusFilter: DownloadStatusFilter = .all
+    @State private var categoryFilter: DownloadListCategory = .all
+    @State private var listOrder = DownloadListOrder()
 
     // MARK: - 批量操作
     @State private var isSelectMode = false
     @State private var selectedGids: Set<Int64> = []
     @State private var showBatchDeleteConfirm = false
+    @State private var pendingBatchDeletion: DeletionRequest?
     @State private var showClearFinishedConfirm = false
-    @State private var finishedDeletionRequest: FinishedDeletionRequest?
+    @State private var finishedDeletionRequest: DeletionRequest?
 
-    private struct FinishedDeletionRequest {
+    private struct DeletionRequest {
         let targets: [Int64: UUID]
         let root: URL
     }
@@ -87,16 +126,21 @@ struct DownloadsView: View {
     @State private var readingProgress: [Int64: Int] = [:]  // gid -> page index
 
     var body: some View {
+        let base = tasksMatchingLabelCategoryAndSearch
+        let visible = shownTasks(in: base)
+        let visibleGids = Set(visible.map(\.gallery.gid))
+        let selected = selectedGids.intersection(visibleGids)
+
         NavigationStack {
             VStack(spacing: 0) {
                 // 紧凑页头：标题与动作同一行，避免系统大标题那条空导航栏带
                 EhPageHeader(title: "下载") {
                     EhSearchToggleButton(isActive: $isSearching)
-                    mainToolbarMenu
+                    mainToolbarMenu(base: base, visibleGids: visibleGids, selected: selected)
                 }
 
                 // 标签选择栏
-                labelPicker
+                labelPicker(base: base)
 
                 // 存储空间概览
                 if !vm.tasks.isEmpty {
@@ -104,7 +148,7 @@ struct DownloadsView: View {
                 }
 
                 // 内容
-                if filteredTasks.isEmpty {
+                if visible.isEmpty {
                     EhStateView(kind: .empty(
                         symbol: "arrow.down.circle",
                         title: emptyTitle,
@@ -112,12 +156,12 @@ struct DownloadsView: View {
                     ))
                     .frame(maxHeight: .infinity)
                 } else {
-                    downloadList
+                    downloadList(visible)
                 }
 
                 // 批量操作底栏
                 if isSelectMode {
-                    batchActionBar
+                    batchActionBar(visibleGids: visibleGids, selected: selected)
                 }
             }
             .ehCompactHeader()
@@ -140,13 +184,10 @@ struct DownloadsView: View {
                 Button("重置", role: .destructive) { resetAllReadingProgress() }
                 Button("取消", role: .cancel) {}
             }
-            .confirmationDialog("确认删除 \(selectedGids.count) 个下载？", isPresented: $showBatchDeleteConfirm, titleVisibility: .visible) {
-                Button("仅删除记录", role: .destructive) {
-                    batchDelete(withFiles: false)
-                }
-                Button("删除记录和文件", role: .destructive) {
-                    batchDelete(withFiles: true)
-                }
+            .confirmationDialog("确认删除 \(pendingBatchDeletion?.targets.count ?? 0) 个下载？", isPresented: $showBatchDeleteConfirm, titleVisibility: .visible) {
+                Button("仅删除记录", role: .destructive) { batchDelete(withFiles: false) }
+                Button("删除记录和文件", role: .destructive) { batchDelete(withFiles: true) }
+                Button("取消", role: .cancel) { pendingBatchDeletion = nil }
             }
             .confirmationDialog(
                 "删除 \(finishedDeletionRequest?.targets.count ?? 0) 个已完成的下载？",
@@ -210,6 +251,15 @@ struct DownloadsView: View {
                         deleteLabel(label)
                     }
                 }
+            }
+        }
+        .onChange(of: visibleGids) { _, current in
+            // Bulk actions must never pick up hidden rows after a scope change.
+            selectedGids.formIntersection(current)
+        }
+        .onChange(of: listOrder.key) { _, key in
+            if key == .fileSize, gallerySizes.isEmpty {
+                Task { await calculateStorageSizes() }
             }
         }
         .onChange(of: selectedLabel) { _, newValue in
@@ -319,35 +369,34 @@ struct DownloadsView: View {
 
     // MARK: - 批量操作底栏
 
-    private var batchActionBar: some View {
+    private func batchActionBar(visibleGids: Set<Int64>, selected: Set<Int64>) -> some View {
         // 浮起玻璃条而非通栏工具栏：与底部导航条同一语言，
         // 且多选态下它是临时出现的，浮条更像「临时接管」而不是常驻结构
         HStack(spacing: 0) {
-            let allGids = Set(filteredTasks.map { $0.gallery.gid })
-            let isAll = !allGids.isEmpty && selectedGids == allGids
+            let isAll = !visibleGids.isEmpty && selected == visibleGids
 
             batchButton(
                 symbol: isAll ? "checkmark.circle.fill" : "checkmark.circle",
                 title: isAll ? "取消全选" : "全选",
-                enabled: !filteredTasks.isEmpty
+                enabled: !visibleGids.isEmpty
             ) {
-                selectedGids = isAll ? [] : allGids
+                selectedGids = isAll ? [] : visibleGids
             }
 
-            batchButton(symbol: "play.fill", title: "开始", enabled: !selectedGids.isEmpty) {
-                batchResume()
+            batchButton(symbol: "play.fill", title: "开始", enabled: !selected.isEmpty) {
+                batchResume(selected)
             }
-            batchButton(symbol: "pause.fill", title: "暂停", enabled: !selectedGids.isEmpty) {
-                batchPause()
+            batchButton(symbol: "pause.fill", title: "暂停", enabled: !selected.isEmpty) {
+                batchPause(selected)
             }
-            batchButton(symbol: "tag", title: "标签", enabled: !selectedGids.isEmpty) {
+            batchButton(symbol: "tag", title: "标签", enabled: !selected.isEmpty) {
                 showMoveLabelSheet = true
             }
             batchButton(
                 symbol: "trash", title: "删除",
-                enabled: !selectedGids.isEmpty, tint: EhColor.danger
+                enabled: !selected.isEmpty, tint: EhColor.danger
             ) {
-                showBatchDeleteConfirm = true
+                requestBatchDeletion(selected)
             }
         }
         .frame(height: EhSize.tabBarHeight)
@@ -445,8 +494,13 @@ struct DownloadsView: View {
         }
     }
 
-    private var filteredTasks: [DownloadTask] {
+    private var tasksMatchingLabelCategoryAndSearch: [DownloadTask] {
         var tasks = vm.tasks
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if let ids = EhOfflineUIFixture.downloadSortIDs {
+            tasks = tasks.filter { ids.contains($0.gallery.gid) }
+        }
+        #endif
 
         // 标签过滤
         if let label = selectedLabel {
@@ -458,19 +512,8 @@ struct DownloadsView: View {
             }
         }
 
-        // 状态过滤
-        switch statusFilter {
-        case .all: break
-        case .downloading:
-            tasks = tasks.filter { $0.state == DownloadManager.stateDownload }
-        case .waiting:
-            tasks = tasks.filter { $0.state == DownloadManager.stateWait }
-        case .paused:
-            tasks = tasks.filter { $0.state == DownloadManager.stateNone }
-        case .finished:
-            tasks = tasks.filter { $0.state == DownloadManager.stateFinish }
-        case .failed:
-            tasks = tasks.filter { $0.state == DownloadManager.stateFailed }
+        if categoryFilter != .all {
+            tasks = tasks.filter { categoryFilter.includes($0.gallery.category) }
         }
 
         // 搜索过滤 —— 标题 + 标签，多个词按 AND
@@ -495,15 +538,19 @@ struct DownloadsView: View {
         return tasks
     }
 
+    private func shownTasks(in base: [DownloadTask]) -> [DownloadTask] {
+        listOrder.apply(to: base.filter { statusFilter.includes($0) }, measuredSizes: gallerySizes)
+    }
+
     private var emptyTitle: String {
-        if selectedLabel != nil || statusFilter != .all || !searchText.isEmpty {
+        if selectedLabel != nil || statusFilter != .all || categoryFilter != .all || !searchText.isEmpty {
             return "无匹配下载"
         }
         return "暂无下载"
     }
 
     private var emptyDescription: String {
-        if selectedLabel != nil || statusFilter != .all || !searchText.isEmpty {
+        if selectedLabel != nil || statusFilter != .all || categoryFilter != .all || !searchText.isEmpty {
             return "试试更换筛选条件"
         }
         return "在画廊详情页点击下载按钮"
@@ -516,12 +563,12 @@ struct DownloadsView: View {
     /// 设计稿这一行是「全部 34 / 进行中 2 / 未读 5 / 收藏组」——带计数的状态过滤，
     /// 而不是只有标签。计数很重要：不点进去就能知道有没有正在跑的、有多少没读，
     /// 这正是打开下载页最常问的两个问题。
-    private var labelPicker: some View {
+    private func labelPicker(base: [DownloadTask]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                statusChip(.all, title: "全部", count: vm.tasks.count)
-                statusChip(.downloading, title: "进行中", count: activeTaskCount)
-                statusChip(.finished, title: "已完成", count: finishedTaskCount)
+                statusChip(.all, title: "全部", count: base.count)
+                statusChip(.active, title: "进行中", count: countForFilter(.active, in: base))
+                statusChip(.finished, title: "已完成", count: countForFilter(.finished, in: base))
 
                 if !labels.isEmpty || selectedLabel != nil {
                     Rectangle()
@@ -544,16 +591,6 @@ struct DownloadsView: View {
             .padding(.horizontal, EhSpacing.page)
         }
         .frame(height: 46)
-    }
-
-    private var activeTaskCount: Int {
-        vm.tasks.filter {
-            $0.state == DownloadManager.stateDownload || $0.state == DownloadManager.stateWait
-        }.count
-    }
-
-    private var finishedTaskCount: Int {
-        vm.tasks.filter { $0.state == DownloadManager.stateFinish }.count
     }
 
     private func statusChip(_ filter: DownloadStatusFilter, title: String, count: Int) -> some View {
@@ -597,83 +634,60 @@ struct DownloadsView: View {
         .buttonStyle(.plain)
     }
 
-    private func countForFilter(_ filter: DownloadStatusFilter) -> Int {
-        // 先用标签+搜索过滤，再按状态计数
-        var tasks = vm.tasks
-        if let label = selectedLabel {
-            if label.isEmpty {
-                tasks = tasks.filter { $0.label == nil || $0.label?.isEmpty == true }
-            } else {
-                tasks = tasks.filter { $0.label == label }
-            }
-        }
-        if !searchText.isEmpty {
-            tasks = tasks.filter { $0.gallery.bestTitle.localizedCaseInsensitiveContains(searchText) }
-        }
-
-        switch filter {
-        case .all: return tasks.count
-        case .downloading: return tasks.filter { $0.state == DownloadManager.stateDownload }.count
-        case .waiting: return tasks.filter { $0.state == DownloadManager.stateWait }.count
-        case .paused: return tasks.filter { $0.state == DownloadManager.stateNone }.count
-        case .finished: return tasks.filter { $0.state == DownloadManager.stateFinish }.count
-        case .failed: return tasks.filter { $0.state == DownloadManager.stateFailed }.count
+    private func countForFilter(_ filter: DownloadStatusFilter, in base: [DownloadTask]) -> Int {
+        base.reduce(into: 0) { count, task in
+            if filter.includes(task) { count += 1 }
         }
     }
 
     // MARK: - 主工具栏菜单
 
-    private var mainToolbarMenu: some View {
+    private func mainToolbarMenu(base: [DownloadTask], visibleGids: Set<Int64>, selected: Set<Int64>) -> some View {
         Menu {
             if isSelectMode {
                 // 选择模式工具
                 Button {
-                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
-                    if selectedGids == allGids {
-                        selectedGids.removeAll()
-                    } else {
-                        selectedGids = allGids
-                    }
+                    selectedGids = selected == visibleGids ? [] : visibleGids
                 } label: {
-                    let allGids = Set(filteredTasks.map { $0.gallery.gid })
-                    Label(selectedGids == allGids ? "取消全选" : "全选",
-                          systemImage: selectedGids == allGids ? "square" : "checkmark.square")
+                    let allSelected = !visibleGids.isEmpty && selected == visibleGids
+                    Label(allSelected ? "取消全选" : "全选", systemImage: allSelected ? "square" : "checkmark.square")
                 }
+                .disabled(visibleGids.isEmpty)
 
                 Divider()
 
                 Button {
-                    batchResume()
+                    batchResume(selected)
                 } label: {
-                    Label("批量开始 (\(selectedGids.count))", systemImage: "play")
+                    Label("批量开始 (\(selected.count))", systemImage: "play")
                 }
-                .disabled(selectedGids.isEmpty)
+                .disabled(selected.isEmpty)
 
                 Button {
-                    batchPause()
+                    batchPause(selected)
                 } label: {
-                    Label("批量暂停 (\(selectedGids.count))", systemImage: "pause")
+                    Label("批量暂停 (\(selected.count))", systemImage: "pause")
                 }
-                .disabled(selectedGids.isEmpty)
+                .disabled(selected.isEmpty)
 
                 // 移动标签
                 if !labels.isEmpty {
                     Button {
                         showMoveLabelSheet = true
                     } label: {
-                        Label("移动标签 (\(selectedGids.count))", systemImage: "tag")
+                        Label("移动标签 (\(selected.count))", systemImage: "tag")
                     }
-                    .disabled(selectedGids.isEmpty)
+                    .disabled(selected.isEmpty)
                 }
 
                 Divider()
 
                 Button(role: .destructive) {
-                    showBatchDeleteConfirm = true
+                    requestBatchDeletion(selected)
                 } label: {
-                    Label("批量删除 (\(selectedGids.count))", systemImage: "trash")
+                    Label("批量删除 (\(selected.count))", systemImage: "trash")
                 }
-                .disabled(selectedGids.isEmpty)
+                .disabled(selected.isEmpty)
 
                 Divider()
 
@@ -688,7 +702,7 @@ struct DownloadsView: View {
                 // 状态过滤 (对齐 Android DownloadsScene 状态筛选)
                 Picker("状态过滤", selection: $statusFilter) {
                     ForEach(DownloadStatusFilter.allCases) { filter in
-                        let count = countForFilter(filter)
+                        let count = countForFilter(filter, in: base)
                         if filter == .all {
                             Text(filter.rawValue).tag(filter)
                         } else {
@@ -696,6 +710,34 @@ struct DownloadsView: View {
                         }
                     }
                 }
+
+                Menu {
+                    Picker("画廊分类", selection: $categoryFilter) {
+                        ForEach(DownloadListCategory.options, id: \.self) { category in
+                            Text(category.title).tag(category)
+                        }
+                    }
+                } label: {
+                    Label("分类：\(categoryFilter.title)", systemImage: "square.grid.2x2")
+                }
+                .accessibilityIdentifier("downloads-category")
+
+                Menu {
+                    Picker("排序依据", selection: $listOrder.key) {
+                        ForEach(DownloadListOrder.Key.allCases, id: \.self) { key in
+                            Text(key.title).tag(key)
+                        }
+                    }
+                    if listOrder.key != .queue {
+                        Picker("方向", selection: $listOrder.ascending) {
+                            Text("升序").tag(true)
+                            Text("降序").tag(false)
+                        }
+                    }
+                } label: {
+                    Label("排序：\(listOrder.key.title)", systemImage: "arrow.up.arrow.down")
+                }
+                .accessibilityIdentifier("downloads-order")
 
                 Divider()
 
@@ -786,9 +828,9 @@ struct DownloadsView: View {
 
     // MARK: - 下载列表
 
-    private var downloadList: some View {
+    private func downloadList(_ visible: [DownloadTask]) -> some View {
         List {
-            ForEach(filteredTasks, id: \.gallery.gid) { task in
+            ForEach(visible, id: \.gallery.gid) { task in
                 if isSelectMode {
                     Button {
                         toggleSelection(gid: task.gallery.gid)
@@ -1059,9 +1101,9 @@ struct DownloadsView: View {
 
     // MARK: - 批量操作
 
-    private func batchPause() {
+    private func batchPause(_ targets: Set<Int64>) {
         Task {
-            for gid in selectedGids {
+            for gid in targets {
                 await DownloadManager.shared.pauseDownload(gid: gid)
             }
             await vm.loadTasks()
@@ -1069,9 +1111,9 @@ struct DownloadsView: View {
         }
     }
 
-    private func batchResume() {
+    private func batchResume(_ targets: Set<Int64>) {
         Task {
-            for gid in selectedGids {
+            for gid in targets {
                 await DownloadManager.shared.resumeDownload(gid: gid)
             }
             await vm.loadTasks()
@@ -1079,19 +1121,30 @@ struct DownloadsView: View {
         }
     }
 
+    private func requestBatchDeletion(_ selected: Set<Int64>) {
+        let targets = Dictionary(uniqueKeysWithValues: vm.tasks.compactMap { task in
+            selected.contains(task.gallery.gid) ? (task.gallery.gid, task.recordIdentity) : nil
+        })
+        guard !targets.isEmpty else { return }
+        pendingBatchDeletion = .init(targets: targets, root: DownloadManager.shared.finishedDeletionRoot)
+        showBatchDeleteConfirm = true
+    }
+
     private func batchDelete(withFiles: Bool) {
+        guard let request = pendingBatchDeletion else { return }
+        pendingBatchDeletion = nil
         Task {
-            for gid in selectedGids {
-                await DownloadManager.shared.deleteDownload(gid: gid, deleteFiles: withFiles)
-            }
+            await DownloadManager.shared.deleteConfirmedDownloads(matching: request.targets, in: request.root, withFiles: withFiles)
             await vm.loadTasks()
             exitSelectMode()
         }
     }
 
     private func batchChangeLabel(_ label: String?) {
+        let visibleGids = Set(shownTasks(in: tasksMatchingLabelCategoryAndSearch).map(\.gallery.gid))
+        let targets = selectedGids.intersection(visibleGids)
         Task {
-            await DownloadManager.shared.changeLabel(gids: Array(selectedGids), label: label)
+            await DownloadManager.shared.changeLabel(gids: Array(targets), label: label)
             await vm.loadTasks()
             exitSelectMode()
         }

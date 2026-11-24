@@ -3,7 +3,7 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false, clearFinished: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false, clearFinished: Bool = false, downloadSort: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
@@ -14,6 +14,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
         if historyTag { app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1" }
         if clearFinished { app.launchEnvironment["EH_FIXTURE_CLEAR_FINISHED"] = "1" }
+        if downloadSort { app.launchEnvironment["EH_FIXTURE_DOWNLOAD_SORT"] = "1" }
         app.launch()
         return app
     }
@@ -360,6 +361,61 @@ final class FavoritesOfflineUITests: XCTestCase {
         app.buttons["删除记录和文件"].firstMatch.tap()
         XCTAssertTrue(completed.waitForNonExistence(timeout: 8))
         XCTAssertTrue(paused.exists)
+    }
+
+    // Local written fixture recordings only. No destructive confirmation is accepted.
+    @MainActor func testDownloadCategoryAndTitleOrderScopeSelectAll() {
+        continueAfterFailure = false
+        let app = launch(cloud: "empty", localReader: true, downloadSort: true)
+        tab("下载", in: app)
+        let zebra = app.staticTexts["Sort Fixture Zebra"].firstMatch
+        let apple = app.staticTexts["Sort Fixture Apple"].firstMatch
+        XCTAssertTrue(zebra.waitForExistence(timeout: 8))
+        XCTAssertTrue(apple.exists)
+        let actions = app.buttons["downloads-actions"].firstMatch
+
+        func tapMenu(_ name: String) {
+            let action = app.buttons[name].firstMatch
+            if !action.waitForExistence(timeout: 4) {
+                attachHierarchy(app, note: "Missing downloads menu action: " + name)
+            }
+            XCTAssertTrue(action.exists)
+            action.tap()
+        }
+
+        actions.tap()
+        tapMenu("排序：默认顺序")
+        // Depending on the OS the picker is a submenu or its options are inlined.
+        let sortBy = app.buttons["排序依据"].firstMatch
+        if sortBy.exists { sortBy.tap() }
+        tapMenu("标题")
+        XCTAssertTrue(apple.waitForExistence(timeout: 6))
+        XCTAssertLessThan(apple.frame.minY, zebra.frame.minY)
+
+        actions.tap()
+        let category = app.buttons["downloads-category"].firstMatch
+        XCTAssertTrue(category.waitForExistence(timeout: 5))
+        category.tap()
+        let categoryOptions = app.buttons["画廊分类"].firstMatch
+        if categoryOptions.exists && categoryOptions.isHittable { categoryOptions.tap() }
+        tapMenu("Manga")
+        XCTAssertTrue(apple.waitForNonExistence(timeout: 6))
+        XCTAssertTrue(zebra.exists)
+        if app.buttons["Manga"].firstMatch.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.10)).tap()
+        }
+
+        actions.tap()
+        tapMenu("批量操作")
+        actions.tap()
+        tapMenu("全选")
+        actions.tap()
+        tapMenu("批量删除 (1)")
+        XCTAssertTrue(app.staticTexts["确认删除 1 个下载？"].firstMatch.waitForExistence(timeout: 5))
+        let cancel = app.buttons["取消"].firstMatch
+        if cancel.exists { cancel.tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.10, dy: 0.85)).tap() }
+        XCTAssertTrue(zebra.exists)
     }
 
     @MainActor func testDownloadedReaderPageJumpAndReopenRetainsProgress() {

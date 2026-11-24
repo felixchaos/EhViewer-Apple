@@ -225,14 +225,24 @@ public actor DownloadManager {
     /// Delete only the same completed tasks shown for confirmation. Rechecking
     /// and deleting happen on this actor without a suspension between them.
     public func deleteFinishedDownloads(matching identities: [Int64: UUID], in confirmedRoot: URL) {
+        deleteConfirmedDownloads(matching: identities, in: confirmedRoot, withFiles: true, onlyFinished: true)
+    }
+
+    /// A filter change or replacement with the same GID must not add a task
+    /// to an already-confirmed deletion.
+    public func deleteConfirmedDownloads(matching identities: [Int64: UUID], in confirmedRoot: URL, withFiles: Bool) {
+        deleteConfirmedDownloads(matching: identities, in: confirmedRoot, withFiles: withFiles, onlyFinished: false)
+    }
+
+    private func deleteConfirmedDownloads(matching identities: [Int64: UUID], in confirmedRoot: URL, withFiles: Bool, onlyFinished: Bool) {
         let currentRoot = finishedDeletionRoot
         guard confirmedRoot.isFileURL, confirmedRoot.path == currentRoot.path else { return }
         for gid in identities.keys.sorted() {
             guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }),
                   task.recordIdentity == identities[gid],
-                  getTaskState(gid: gid) == Self.stateFinish else { continue }
+                  !onlyFinished || getTaskState(gid: gid) == Self.stateFinish else { continue }
             let name = Self.galleryDirectoryName(gid: gid, title: task.gallery.bestTitle)
-            deleteDownload(gid: gid, deleteFiles: true, confirmedDirectory: currentRoot.appendingPathComponent(name))
+            deleteDownload(gid: gid, deleteFiles: withFiles, confirmedDirectory: currentRoot.appendingPathComponent(name))
         }
     }
 
@@ -656,6 +666,7 @@ public struct DownloadTask: Sendable {
     /// must not inherit an open confirmation. No persisted schema change.
     public let recordIdentity = UUID()
     public let gallery: GalleryInfo
+    public let createdAt: Date
     public var label: String?
     public var state: Int
     public var downloadedPages: Int
@@ -663,8 +674,9 @@ public struct DownloadTask: Sendable {
     public var speed: Int64
     public var spider: SpiderQueen?
 
-    public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait) {
+    public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait, createdAt: Date = .init()) {
         self.gallery = gallery
+        self.createdAt = createdAt
         self.label = label
         self.state = state
         self.downloadedPages = 0

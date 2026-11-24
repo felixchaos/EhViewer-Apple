@@ -58,6 +58,13 @@ struct GalleryDetailView: View {
     @State private var showResourceSheet = false
     @State private var showTorrents = false
     @State private var showCellularWarning = false
+    @State private var removalPrompt: DownloadRemovalPrompt?
+
+    private struct DownloadRemovalPrompt {
+        let gid: Int64
+        let identity: UUID
+        let root: URL
+    }
 
     /// 标签点击导航动作 — 在 Split/三栏布局中将标签列表推入左侧栏
     @Environment(\.tagNavigationAction) private var tagNavigationAction
@@ -219,6 +226,22 @@ struct GalleryDetailView: View {
             Text("这本共 \(vm.detail?.info.pages ?? gallery.pages) 页，下载会消耗蜂窝数据。可以在设置里关掉这个提醒。")
         }
         .sheet(isPresented: $showResourceSheet) { resourceSheet }
+        .alert("移除离线文件？", isPresented: Binding(
+            get: { removalPrompt != nil },
+            set: { if !$0 { removalPrompt = nil } }
+        ), presenting: removalPrompt) { prompt in
+            Button("取消", role: .cancel) {}
+            Button("移除下载文件", role: .destructive) {
+                Task {
+                    await DownloadManager.shared.deleteFinishedDownloads(
+                        matching: [prompt.gid: prompt.identity], in: prompt.root
+                    )
+                    vm.downloadState = await DownloadManager.shared.getTaskState(gid: prompt.gid)
+                }
+            }
+        } message: { _ in
+            Text("只移除这本画廊的离线下载，不会取消收藏或清除阅读进度。")
+        }
         .sheet(isPresented: $showArchive) {
             if let archiveUrl = vm.detail?.archiveUrl, !archiveUrl.isEmpty {
                 ArchiveDownloadView(gid: gallery.gid, token: gallery.token, archiveUrl: archiveUrl)
@@ -497,36 +520,7 @@ struct GalleryDetailView: View {
             // 对齐 Android: 长按收藏始终弹出收藏夹选择，即使已设默认
             .onLongPressGesture { showFavoritePicker = true }
 
-            let downloadAction = vm.downloadAction
-            EhSquareIconButton(symbol: downloadAction.detailSymbol) {
-                switch vm.downloadAction {
-                case .openReader:
-                    Haptics.tap()
-                    vm.readerLaunchItem = ReaderLaunchItem(
-                        gid: gallery.gid,
-                        token: gallery.token,
-                        pages: vm.detail?.info.pages ?? gallery.pages,
-                        previewSet: vm.detail?.previewSet,
-                        initialPage: nil
-                    )
-                case .enqueue, .resume, .retry:
-                    if GalleryActionService.shared.shouldWarnAboutCellular {
-                        // 仅当有实际的下载操作时才询问蜂窝网络。
-                        showCellularWarning = true
-                    } else {
-                        Haptics.impact()
-                        Task { await vm.startDownload(gallery: gallery) }
-                    }
-                case .queued, .downloading:
-                    break
-                }
-            }
-            .disabled(!downloadAction.isActionable)
-            .accessibilityLabel(Text(downloadAction.detailLabel))
-            .accessibilityIdentifier("gallery-detail-download")
-            #if os(macOS)
-            .help(Text(downloadAction.detailLabel))
-            #endif
+            detailDownloadControl
 
             // 归档与种子并进一个「资源下载」sheet：两者都不是每本都有，
             // 各占一个入口会让常用操作被挤窄，而它们的选择又需要成本对比
@@ -554,6 +548,60 @@ struct GalleryDetailView: View {
             )
             .presentationDetents([.medium])
         }
+    }
+
+    @ViewBuilder
+    private var detailDownloadControl: some View {
+        let action = vm.downloadAction
+        if action == .openReader {
+            Menu {
+                Button {
+                    Haptics.tap()
+                    vm.readerLaunchItem = ReaderLaunchItem(
+                        gid: gallery.gid, token: gallery.token,
+                        pages: vm.detail?.info.pages ?? gallery.pages,
+                        previewSet: vm.detail?.previewSet, initialPage: nil
+                    )
+                } label: { Label("离线阅读", systemImage: "book") }
+                Button(role: .destructive) {
+                    Task { await prepareDownloadedFileRemoval() }
+                } label: { Label("移除离线文件…", systemImage: "trash") }
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: EhSize.actionButtonHeight, height: EhSize.actionButtonHeight)
+                    .background(EhColor.fill, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("管理下载，已下载")
+            .accessibilityIdentifier("gallery-detail-download")
+        } else {
+            EhSquareIconButton(symbol: action.detailSymbol) {
+                guard [.enqueue, .resume, .retry].contains(vm.downloadAction) else { return }
+                if GalleryActionService.shared.shouldWarnAboutCellular {
+                    showCellularWarning = true
+                } else {
+                    Haptics.impact()
+                    Task { await vm.startDownload(gallery: gallery) }
+                }
+            }
+            .disabled(!action.isActionable)
+            .accessibilityLabel(Text(action.detailLabel))
+            .accessibilityIdentifier("gallery-detail-download")
+            #if os(macOS)
+            .help(Text(action.detailLabel))
+            #endif
+        }
+    }
+
+    private func prepareDownloadedFileRemoval() async {
+        let manager = DownloadManager.shared
+        let root = manager.finishedDeletionRoot
+        let tasks = await manager.getAllTasks()
+        guard let task = tasks.first(where: { $0.gallery.gid == gallery.gid }),
+              task.state == DownloadManager.stateFinish,
+              root.path == manager.finishedDeletionRoot.path else { return }
+        removalPrompt = DownloadRemovalPrompt(gid: task.gallery.gid, identity: task.recordIdentity, root: root)
     }
 
     private func actionButton(icon: String, title: String, action: @escaping () -> Void, longPressAction: (() -> Void)? = nil) -> some View {

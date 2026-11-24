@@ -18,6 +18,12 @@ enum EhOfflineUIFixture {
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
+    // Keep this UI test independent of other synthetic scenarios on a reused simulator.
+    static var downloadSortIDs: Set<Int64>? {
+        guard enabled, ProcessInfo.processInfo.environment["EH_FIXTURE_DOWNLOAD_SORT"] == "1" else { return nil }
+        return [900010000025, 900010000026]
+    }
+
     private static let historyTagFixtureEnabled =
         ProcessInfo.processInfo.environment["EH_FIXTURE_HISTORY_TAG"] == "1"
     private static let historyTag = "route fixture"
@@ -57,10 +63,15 @@ enum EhOfflineUIFixture {
         // Open the fixture UI only once all pages are available, so it cannot fall back to the network.
         let manager = DownloadManager.shared
         let clearFinished = ProcessInfo.processInfo.environment["EH_FIXTURE_CLEAR_FINISHED"] == "1"
-        let completed = clearFinished
-            ? GalleryInfo(gid: 900010000010, token: "fixture", title: "Synthetic cleared download", pages: 3)
-            : synthetic
-        let paused = GalleryInfo(gid: 900010000011, token: "fixture", title: "Synthetic preserved download", pages: 2)
+        let sort = ProcessInfo.processInfo.environment["EH_FIXTURE_DOWNLOAD_SORT"] == "1"
+        let completed = sort
+            ? GalleryInfo(gid: 900010000025, token: "fixture", title: "Sort Fixture Zebra", category: .manga, rating: 2, pages: 3)
+            : clearFinished
+                ? GalleryInfo(gid: 900010000010, token: "fixture", title: "Synthetic cleared download", pages: 3)
+                : synthetic
+        let paused = sort
+            ? GalleryInfo(gid: 900010000026, token: "fixture", title: "Sort Fixture Apple", category: .misc, rating: 4, pages: 2)
+            : GalleryInfo(gid: 900010000011, token: "fixture", title: "Synthetic preserved download", pages: 2)
         for page in 0..<completed.pages {
             let color: UIColor = [.systemRed, .systemBlue, .systemGreen][page]
             let renderer = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180))
@@ -73,7 +84,7 @@ enum EhOfflineUIFixture {
             }
             guard let bytes = image.pngData() else { return false }
             await manager.saveWhileReading(gallery: completed, pageIndex: page, data: bytes, extension: ".png")
-            if clearFinished, page == 0 {
+            if (clearFinished || sort), page == 0 {
                 await manager.saveWhileReading(gallery: paused, pageIndex: 0, data: bytes, extension: ".png")
             }
         }
