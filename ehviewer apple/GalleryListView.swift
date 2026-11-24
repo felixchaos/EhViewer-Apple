@@ -2379,15 +2379,16 @@ extension NSColor {
 
 // MARK: - Right Drawer Overlay (对齐 Android EhDrawerLayout 右侧抽屉)
 
-struct RightDrawerOverlay<DrawerContent: View>: View {
+private struct RightDrawerOverlay<DrawerContent: View>: View {
     @Binding var isOpen: Bool
+    @Binding var edgeDragProgress: CGFloat
     @ViewBuilder let drawerContent: () -> DrawerContent
 
     /// 实时拖拽偏移 (正值 = 向右拖, 负值 = 向左拖)
     @State private var dragOffset: CGFloat = 0
-    /// 边缘拖拽进度 (0 = 关闭, 1 = 完全打开)
-    @State private var edgeDragProgress: CGFloat = 0
+    #if os(macOS)
     private let edgeSwipeWidth: CGFloat = 30
+    #endif
 
     /// 抽屉实际偏移量 (0 = 完全打开, drawerWidth = 完全关闭)
     private func currentOffset(drawerWidth: CGFloat) -> CGFloat {
@@ -2466,6 +2467,7 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
                     : nil
                 )
 
+            #if os(macOS)
             // 右侧边缘滑动感应区 (关闭时: 从右向左滑动打开)
             if !isOpen {
                 HStack {
@@ -2495,6 +2497,7 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
                         )
                 }
             }
+            #endif
         }
         .onChange(of: isOpen) { _, newValue in
             dragOffset = 0
@@ -2503,12 +2506,91 @@ struct RightDrawerOverlay<DrawerContent: View>: View {
     }
 }
 
+private struct RightDrawerModifier<DrawerContent: View>: ViewModifier {
+    @Binding var isOpen: Bool
+    let drawerContent: () -> DrawerContent
+    @State private var edgeDragProgress: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            #if os(iOS)
+            // Attach to the list's ancestor, not a transparent hit-testing
+            // strip. A vertical drag at the trailing edge still belongs to List.
+            .gesture(RightDrawerEdgePan(enabled: !isOpen) { recognizer in
+                guard let view = recognizer.view else { return }
+                let width = ResponsiveLayout.quickSearchDrawerWidth(in: view.bounds.width)
+                let distance = max(0, -recognizer.translation(in: view).x)
+                switch recognizer.state {
+                case .began, .changed:
+                    edgeDragProgress = min(1, distance / max(1, width))
+                case .ended:
+                    let projected = distance - recognizer.velocity(in: view).x * 0.2
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        if distance > width * 0.3 || projected > 200 { isOpen = true }
+                        edgeDragProgress = 0
+                    }
+                case .cancelled, .failed:
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                        edgeDragProgress = 0
+                    }
+                default: break
+                }
+            })
+            #endif
+            .overlay {
+                RightDrawerOverlay(isOpen: $isOpen, edgeDragProgress: $edgeDragProgress,
+                                   drawerContent: drawerContent)
+            }
+    }
+}
+
+#if os(iOS)
+private struct RightDrawerEdgePan: UIGestureRecognizerRepresentable {
+    var enabled: Bool
+    let onChange: (UIPanGestureRecognizer) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        if recognizer.isEnabled != enabled { recognizer.isEnabled = enabled }
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        onChange(recognizer)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view = gestureRecognizer.view else { return false }
+            let point = touch.location(in: view)
+            return view.bounds.contains(point) && point.x >= view.bounds.maxX - 30
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let recognizer = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = recognizer.velocity(in: recognizer.view)
+            return -velocity.x > abs(velocity.y)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
+#endif
+
 extension View {
     /// 右侧抽屉修饰器 (对齐 Android EhDrawerLayout)
     func rightDrawer<Content: View>(isOpen: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) -> some View {
-        self.overlay {
-            RightDrawerOverlay(isOpen: isOpen, drawerContent: content)
-        }
+        modifier(RightDrawerModifier(isOpen: isOpen, drawerContent: content))
     }
 }
 
