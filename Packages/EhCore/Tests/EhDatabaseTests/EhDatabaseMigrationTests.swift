@@ -145,7 +145,9 @@ import Testing
             }
             let inspection = try DatabaseQueue(path: url.path)
             try inspection.read { db throws -> Void in
-                #expect(try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations") == ["v1", "v2", "v3"])
+                #expect(try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations") == ["v1", "v2", "v3", "v4"])
+                #expect(try db.columns(in: "quickSearch").contains { $0.name == "browseSnapshotVersion" && !$0.isNotNull })
+                #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM quickSearch WHERE browseSnapshotVersion IS NOT NULL") == 0)
                 #expect(try String.fetchOne(db, sql: "PRAGMA quick_check") == "ok")
                 if version == 2 {
                     #expect(try String.fetchOne(db, sql: "SELECT dirname FROM downloadDirname WHERE gid = 10")
