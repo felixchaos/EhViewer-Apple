@@ -813,11 +813,16 @@ struct GalleryListView: View {
     @State private var pendingDownload: GalleryInfo?
 
 
+    private var searchesSubscriptions: Bool {
+        if case .subscription = mode { return true }
+        return initialSavedSearch?.initialFilters.mode == .subscription
+    }
+
     private var searchBarView: some View {
         EhSearchBar(
             text: $searchFieldText,
             tokens: $searchTokens,
-            placeholder: "搜索标签或标题",
+            placeholder: searchesSubscriptions ? "搜索订阅" : "搜索标签或标题",
             showsClearForEmpty: initialSavedSearch?.query.isEmpty == true && initialSavedSearch?.explicitFilters != nil,
             isFocused: $isSearchFocused,
             // 右侧不再放小图标：15pt 的点按目标远低于 HIG 的 44pt，手机上按不中。
@@ -976,7 +981,8 @@ struct GalleryListView: View {
 
     @ViewBuilder private var advancedSearchSheet: some View {
         if let onSearchSubmit {
-            BrowseAdvancedSearchSheet(initialFilters: initialSavedSearch?.initialFilters ?? .init(),
+            BrowseAdvancedSearchSheet(initialFilters: initialSavedSearch?.initialFilters
+                                        ?? (searchesSubscriptions ? .subscriptionSearch : .init()),
                                       query: searchField.submittedQuery) { filters, query in
                 isSearchFocused = false
                 restoreAppliedSearchField()
@@ -993,6 +999,9 @@ struct GalleryListView: View {
         guard !query.isEmpty else { return .init(query: "") }
         if let filters = initialSavedSearch?.explicitFilters {
             return .init(query: query, applying: filters)
+        }
+        if searchesSubscriptions {
+            return .init(query: query, applying: .subscriptionSearch)
         }
         return .init(query: query,
               savedCategory: initialSavedSearch?.savedCategory == nil ? nil : advancedSearch.categoryValue,
@@ -1021,13 +1030,20 @@ struct GalleryListView: View {
         submitSearch(searchField.submittedQuery)
     }
 
-    private func submitSearch(_ query: String) {
+    private func submitSearch(_ query: String, fullSite: Bool = false) {
         isSearchFocused = false
         if let onSearchSubmit {
             // The retained source belongs to its prior editing state. The
             // results list will fill its field from the submitted snapshot.
             restoreAppliedSearchField()
-            onSearchSubmit(browseSearch(for: query))
+            if fullSite {
+                var filters = initialSavedSearch?.initialFilters ?? .init()
+                filters.mode = .normal
+                filters.cacheMode = 0
+                onSearchSubmit(GalleryBrowseSearch(query: query, applying: filters))
+            } else {
+                onSearchSubmit(browseSearch(for: query))
+            }
         } else {
             syncField(from: query)
             viewModel.performSearch(query: query, filters: advancedSearch.appliedListFilters)
@@ -1077,14 +1093,15 @@ struct GalleryListView: View {
                 onPickHistory: { term in
                     // Restore the selected query for editing, but submit the
                     // original term exactly once rather than rebuilding it.
-                    syncField(from: term)
-                    isSearchFocused = false
-                    viewModel.performSearch(query: term, filters: advancedSearch.appliedListFilters)
+                    submitSearch(term)
                 },
                 onOpenTagSelector: { showTagSelector = true },
                 onOpenAdvancedSearch: { showAdvancedSearch = true },
                 onOpenQuickSearch: { showQuickSearch = true },
-                isAdvancedActive: advancedSearch.isEnabled
+                isAdvancedActive: advancedSearch.isEnabled,
+                onSearchFullSite: searchesSubscriptions && onSearchSubmit != nil && !searchField.submittedQuery.isEmpty
+                    ? { submitSearch(searchField.submittedQuery, fullSite: true) }
+                    : nil
             )
             .transition(.opacity)
         }

@@ -157,6 +157,19 @@ enum EhOfflineUIFixture {
                 return GalleryListResult(galleries: [item], pages: 2, nextPage: 1)
             }
         }
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_SEARCH_SCOPE"] == "1",
+           let request = URLComponents(string: url) {
+            let watched = request.path == "/watched"
+            let term = request.queryItems?.first { $0.name == "f_search" }?.value
+            if term == "offlineparity" {
+                return GalleryListResult(galleries: [.init(gid: watched ? 900010009101 : 900010009102,
+                    token: "fixture", title: watched ? "Scoped fixture result" : "Global fixture result")])
+            }
+            if watched {
+                return GalleryListResult(galleries: [.init(gid: 900010009103,
+                    token: "fixture", title: "Synthetic subscription origin")])
+            }
+        }
         // Assert the actual submitted request, not merely a selected tab label.
         if let term = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "f_search" })?.value {
             if term == "offlineretap", ProcessInfo.processInfo.environment["EH_FIXTURE_HOME_RESELECT"] == "1" {

@@ -36,10 +36,16 @@ struct SearchFocusPanel: View {
     var onOpenAdvancedSearch: () -> Void
     var onOpenQuickSearch: () -> Void
     var isAdvancedActive: Bool
+    var onSearchFullSite: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let onSearchFullSite {
+                    entryRow(symbol: "globe", title: "搜全站", subtitle: "不限于订阅",
+                             action: onSearchFullSite)
+                        .accessibilityIdentifier("浏览-搜全站")
+                }
                 if !suggestions.isEmpty {
                     sectionHeader("标签建议", trailing: "EhTagDatabase")
                     ForEach(suggestions) { item in

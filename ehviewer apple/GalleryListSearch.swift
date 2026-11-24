@@ -142,7 +142,13 @@ nonisolated struct GalleryBrowseSearch: Equatable, Hashable {
 
     var hasSavedFilters: Bool { savedCategory != nil || savedMinimumRating != nil || explicitFilters != nil }
     var showsResults: Bool { !query.isEmpty || explicitFilters?.supportsKeywordlessSearch == true }
-    var clearingAppliedFilters: Self { .init(query: query) }
+    var clearingAppliedFilters: Self {
+        // Clearing advanced options must not silently broaden a subscription search.
+        if !query.isEmpty, initialFilters.mode == .subscription {
+            return .init(query: query, applying: .subscriptionSearch)
+        }
+        return .init(query: query)
+    }
 
     var initialFilters: GalleryListRequest.Filters {
         if let explicitFilters { return explicitFilters }
@@ -217,6 +223,8 @@ nonisolated struct GalleryListRequest: Sendable {
         var minRating = -1
         var pageFrom = -1
         var pageTo = -1
+
+        static let subscriptionSearch = Self(mode: .subscription, cacheMode: 1)
 
         var supportsKeywordlessSearch: Bool {
             if mode == .subscription { return true }
