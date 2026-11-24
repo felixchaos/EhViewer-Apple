@@ -43,6 +43,7 @@ struct BrowseHomeView: View {
     @Binding var route: BrowseHomeRoute
     @State private var toplistPeriod = 15
     @State private var search = GalleryBrowseSearch(query: "")
+    @State private var visitedOrigins: Set<BrowseSource> = []
 
     private var selection: Binding<BrowseSource> {
         Binding(get: { route.selection }, set: { route.select($0) })
@@ -52,17 +53,33 @@ struct BrowseHomeView: View {
         let origin = route.origin
         let isShowingSearch = route.isShowingSearch
         ZStack {
-            list(for: origin)
-                .id(OriginIdentity(source: origin, period: origin == .toplist ? toplistPeriod : 0))
-                .opacity(isShowingSearch ? 0 : 1)
-                .allowsHitTesting(!isShowingSearch)
-                .accessibilityHidden(isShowingSearch)
-                .ehSuspendTabBarDriver(isShowingSearch)
+            ForEach(BrowseSource.allCases.filter { source in
+                source != .search && (source == origin || visitedOrigins.contains(source))
+            }, id: \.self) { source in
+                let visible = source == origin && !isShowingSearch
+                list(for: source)
+                    .id(OriginIdentity(source: source, period: source == .toplist ? toplistPeriod : 0))
+                    .opacity(visible ? 1 : 0)
+                    .zIndex(visible ? 1 : 0)
+                    .allowsHitTesting(visible)
+                    .accessibilityHidden(!visible)
+                    .ehSuspendTabBarDriver(!visible)
+                    .environment(\.ehBrowseOriginIsCurrent, source == origin)
+            }
 
             if isShowingSearch {
                 list(for: .search)
                     .id(search)
+                    .zIndex(2)
             }
+        }
+        .onChange(of: origin, initial: true) { _, current in
+            visitedOrigins.insert(current)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
+            // Keeping an old site's rows would misrepresent the selected site.
+            // Reopen inactive sources lazily instead of requesting them all now.
+            visitedOrigins = [origin]
         }
     }
 
@@ -82,5 +99,17 @@ struct BrowseHomeView: View {
     private struct OriginIdentity: Hashable {
         let source: BrowseSource
         let period: Int
+    }
+}
+
+
+private struct EhBrowseOriginIsCurrentKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var ehBrowseOriginIsCurrent: Bool {
+        get { self[EhBrowseOriginIsCurrentKey.self] }
+        set { self[EhBrowseOriginIsCurrentKey.self] = newValue }
     }
 }

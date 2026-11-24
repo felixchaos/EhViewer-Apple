@@ -21,6 +21,7 @@ struct GalleryListView: View {
 
     typealias ListMode = GalleryListRequest.Source
 
+    @Environment(\.ehBrowseOriginIsCurrent) private var browseOriginIsCurrent
     @State private var viewModel = GalleryListViewModel()
     @State private var showQuickSearch = false
     @State private var showAdvancedSearch = false
@@ -270,6 +271,7 @@ struct GalleryListView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
+            guard browseOriginIsCurrent else { return }
             // 站点切换后清除缓存并重新加载 (对齐 Android: 切换站点 → 刷新列表)
             // 同样用 effectiveMode，否则切站点会把用户正在看的搜索结果换成首页
             viewModel.refresh(mode: effectiveMode)
