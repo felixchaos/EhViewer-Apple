@@ -366,10 +366,16 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "start_position") }
     }
 
-    @ObservationIgnored
     public var keepScreenOn: Bool {
-        get { _defaults.bool(forKey: "keep_screen_on") }
-        set { _defaults.set(newValue, forKey: "keep_screen_on") }
+        get {
+            access(keyPath: \.keepScreenOn)
+            return _defaults.bool(forKey: "keep_screen_on")
+        }
+        set {
+            withMutation(keyPath: \.keepScreenOn) {
+                _defaults.set(newValue, forKey: "keep_screen_on")
+            }
+        }
     }
 
     @ObservationIgnored

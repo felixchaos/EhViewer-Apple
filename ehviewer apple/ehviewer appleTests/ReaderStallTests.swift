@@ -1090,3 +1090,70 @@ struct ReaderSharedMemorySpreadTests {
     }
 
 }
+
+@MainActor
+struct ReaderIdleTimerOwnershipTests {
+    @MainActor private final class IdleFlag {
+        var value: Bool
+        var writes: [Bool] = []
+
+        init(_ value: Bool = false) { self.value = value }
+
+        func makeOwnership() -> ReaderIdleTimerOwnership {
+            ReaderIdleTimerOwnership(readFlag: { self.value }, writeFlag: {
+                self.writes.append($0)
+                self.value = $0
+            })
+        }
+    }
+
+    @Test func activeReaderTogglesLiveAndSuspendsInBackground() {
+        let flag = IdleFlag()
+        let ownership = flag.makeOwnership()
+        let reader = UUID()
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: false)
+        #expect(flag.writes.isEmpty)
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: false)
+        #expect(flag.writes == [true, false])
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.update(reader, isVisible: true, sceneIsActive: false, keepAwake: true)
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.remove(reader)
+        ownership.update(reader, isVisible: false, sceneIsActive: true, keepAwake: true)
+        #expect(flag.writes == [true, false, true, false, true, false])
+    }
+
+    @Test func lastActiveReaderReleasesTheFlag() {
+        let flag = IdleFlag()
+        let ownership = flag.makeOwnership()
+        let first = UUID()
+        let second = UUID()
+        ownership.update(first, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.update(second, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.remove(first)
+        #expect(flag.value)
+        #expect(flag.writes == [true])
+        ownership.update(second, isVisible: true, sceneIsActive: false, keepAwake: true)
+        ownership.remove(second)
+        #expect(flag.writes == [true, false])
+    }
+
+    @Test func preservesAnAlreadyTrueFlagWithoutRedundantWrites() {
+        let flag = IdleFlag(true)
+        let ownership = flag.makeOwnership()
+        let reader = UUID()
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.remove(reader)
+        #expect(flag.value)
+        #expect(flag.writes.isEmpty)
+
+        // First owner of a later cycle captures a fresh baseline.
+        flag.value = false
+        ownership.update(reader, isVisible: true, sceneIsActive: true, keepAwake: true)
+        ownership.remove(reader)
+        #expect(!flag.value)
+        #expect(flag.writes == [true, false])
+    }
+}

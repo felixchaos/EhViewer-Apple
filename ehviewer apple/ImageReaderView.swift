@@ -38,6 +38,15 @@ struct ImageReaderView: View {
     @State private var vm: ReaderViewModel
     @State private var showOverlay = true
     @State private var showSettings = false
+    #if os(iOS)
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var idleTimerReaderID = UUID()
+    @State private var isReaderVisible = false
+
+    private var wantsIdleTimerDisabled: Bool {
+        isReaderVisible && scenePhase == .active && AppSettings.shared.keepScreenOn
+    }
+    #endif
     /// 页面网格（对齐 Android 阅读器的「目录」）——
     /// 此前跳页只有底部那条 slider，200 页的本子要靠手感拖
     @State private var showPageGrid = false
@@ -172,6 +181,9 @@ struct ImageReaderView: View {
             }
         }
         #if os(iOS)
+        .onChange(of: wantsIdleTimerDisabled) { _, _ in
+            updateIdleTimerOwnership()
+        }
         .statusBarHidden(AppSettings.shared.readingFullscreen)
         .persistentSystemOverlays(AppSettings.shared.readingFullscreen ? .hidden : .automatic)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -368,9 +380,8 @@ struct ImageReaderView: View {
         verticalPageInterval = AppSettings.shared.showPageInterval
 
         #if os(iOS)
-        if AppSettings.shared.keepScreenOn {
-            UIApplication.shared.isIdleTimerDisabled = true
-        }
+        isReaderVisible = true
+        updateIdleTimerOwnership()
         UIDevice.current.isBatteryMonitoringEnabled = true
         if AppSettings.shared.customScreenLightness {
             setScreenBrightness(CGFloat(AppSettings.shared.screenLightness) / 100.0)
@@ -408,9 +419,18 @@ struct ImageReaderView: View {
         }
     }
 
+    #if os(iOS)
+    private func updateIdleTimerOwnership() {
+        ReaderIdleTimerOwnership.shared.update(idleTimerReaderID, isVisible: isReaderVisible,
+                                               sceneIsActive: scenePhase == .active,
+                                               keepAwake: AppSettings.shared.keepScreenOn)
+    }
+    #endif
+
     private func cleanupReader() {
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = false
+        isReaderVisible = false
+        ReaderIdleTimerOwnership.shared.remove(idleTimerReaderID)
         UIDevice.current.isBatteryMonitoringEnabled = false
         volumePageTurner.stop()
         vm.discardSpreadComposition()
