@@ -123,8 +123,88 @@ public actor DownloadManager {
 
     // MARK: - 公共接口
 
+    /// Imports a flat image folder as a completed, offline-only gallery.
+    /// Copying occurs outside the queue actor; registration is synchronous and serialized.
+    public func importImageFolder(_ folder: URL) async throws -> GalleryInfo {
+        try await importOfflineGallery { try OfflineGalleryFolderImport.stage(folder: folder, under: $0) }
+    }
+
+    public func importImageArchive(_ archive: URL) async throws -> GalleryInfo {
+        try await importOfflineGallery { try OfflineGalleryFolderImport.stage(archive: archive, under: $0) }
+    }
+
+    private func importOfflineGallery(
+        stage: @escaping @Sendable (URL) throws -> OfflineGalleryFolderImport.Stage
+    ) async throws -> GalleryInfo {
+        guard !database.isDegraded else { throw OfflineGalleryImportError.unavailable }
+        let root = finishedDeletionRoot
+        let worker = Task.detached(priority: .userInitiated) { try stage(root) }
+        let staged = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        try Task.checkCancellation()
+        guard staged.root == finishedDeletionRoot else { throw OfflineGalleryImportError.unavailable }
+
+        let fm = FileManager.default
+        var galleryID: Int64?
+        for _ in 0..<4 {
+            let gid = Int64.random(in: (Int64.min + 1)...(-1))
+            guard try database.getDownload(gid: gid) == nil,
+                  !downloadQueue.contains(where: { $0.gallery.gid == gid }),
+                  !fm.fileExists(atPath: staged.root.appendingPathComponent(
+                    Self.galleryDirectoryName(gid: gid, title: staged.title)
+                  ).path) else { continue }
+            galleryID = gid
+            break
+        }
+        guard let galleryID else { throw OfflineGalleryImportError.failed }
+
+        let gallery = GalleryInfo(gid: galleryID, token: OfflineGallery.token,
+                                  title: staged.title, pages: staged.pages)
+        let target = staged.root.appendingPathComponent(
+            Self.galleryDirectoryName(gid: gallery.gid, title: gallery.bestTitle), isDirectory: true
+        )
+        var task = DownloadTask(gallery: gallery, label: nil, state: Self.stateFinish)
+        task.downloadedPages = staged.pages
+        try SpiderInfoFile.write(SpiderInfo(gid: gallery.gid, token: gallery.token, pages: gallery.pages),
+                                 to: staged.directory)
+        // Same-volume move publishes a complete folder. It does not replace an existing destination.
+        try fm.moveItem(at: staged.directory, to: target)
+        do {
+            try database.insertDownload(DownloadTaskPersistence.record(for: task))
+        } catch {
+            try? fm.removeItem(at: target)
+            throw error
+        }
+        downloadQueue.insert(task, at: 0)
+        return gallery
+    }
+
+    /// Re-registers an imported copy after the user retained its files.
+    public func restoreOfflineGallery(_ info: SpiderInfo, from directory: URL) throws -> Bool {
+        guard !database.isDegraded else { throw OfflineGalleryImportError.unavailable }
+        let parent = directory.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+        guard parent.path == finishedDeletionRoot.path, OfflineGallery.canRestore(info, from: directory),
+              try database.getDownload(gid: info.gid) == nil,
+              !downloadQueue.contains(where: { $0.gallery.gid == info.gid })
+        else { return false }
+        let title = String(directory.lastPathComponent.dropFirst("\(info.gid)-".count))
+        guard !title.isEmpty, directory.lastPathComponent == Self.galleryDirectoryName(gid: info.gid, title: title)
+        else { return false }
+        let gallery = GalleryInfo(gid: info.gid, token: info.token, title: title, pages: info.pages)
+        var task = DownloadTask(gallery: gallery, label: nil, state: Self.stateFinish)
+        task.downloadedPages = info.pages
+        try database.insertDownload(DownloadTaskPersistence.record(for: task))
+        downloadQueue.insert(task, at: 0)
+        return true
+    }
+
     /// 添加下载任务 (Fix A-1: 已有 failed/none 状态时自动恢复而非静默忽略)
     public func startDownload(gallery: GalleryInfo, label: String? = nil) async {
+        guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token) else { return }
         // 检查是否已在队列中
         if let existingIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }) {
             let existingState = downloadQueue[existingIndex].state
@@ -150,6 +230,9 @@ public actor DownloadManager {
 
     /// 暂停下载
     public func pauseDownload(gid: Int64) {
+        guard !downloadQueue.contains(where: {
+            $0.gallery.gid == gid && OfflineGallery.isImported(gid: gid, token: $0.gallery.token)
+        }) else { return }
         let wasActive = activeAttempt?.gid == gid
         if wasActive { retireActiveAttempt() }
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
@@ -178,7 +261,8 @@ public actor DownloadManager {
 
     /// 恢复下载
     public func resumeDownload(gid: Int64) {
-        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
+        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
+           !OfflineGallery.isImported(gid: gid, token: downloadQueue[index].gallery.token) {
             downloadQueue[index].state = Self.stateWait
             try? database.updateDownloadState(gid: gid, state: Self.stateWait)
             processQueue()
@@ -347,7 +431,9 @@ public actor DownloadManager {
 
     private func processQueue() {
         guard activeAttempt == nil else { return }
-        guard let index = downloadQueue.firstIndex(where: { $0.state == Self.stateWait }) else { return }
+        guard let index = downloadQueue.firstIndex(where: {
+            $0.state == Self.stateWait && !OfflineGallery.isImported(gid: $0.gallery.gid, token: $0.gallery.token)
+        }) else { return }
         guard runner == nil else {
             startQueueAfterDrain = true
             return
@@ -577,7 +663,8 @@ public actor DownloadManager {
     public func saveWhileReading(
         gallery: GalleryInfo, pageIndex: Int, data: Data, extension ext: String
     ) -> Bool {
-        guard !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
+        guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
+              !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
               pendingFileDeletion?.gid != gallery.gid else { return false }
 
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)

@@ -96,6 +96,14 @@ enum EhOfflineUIFixture {
                                                  tags: [.init(groupName: "artist", tags: [historyTag])]))
             GalleryCache.shared.putDetail(.init(info: historyTagResult))
         }
+        if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMAGE_FOLDER"],
+           UUID(uuidString: identifier) != nil {
+            seedImageFolder(identifier: identifier)
+        }
+        if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMAGE_ARCHIVE"],
+           UUID(uuidString: identifier) != nil {
+            seedImageArchive(identifier: identifier)
+        }
         if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMPORT"],
            UUID(uuidString: identifier) != nil {
             seedImportScenario(identifier: identifier)
@@ -155,6 +163,44 @@ enum EhOfflineUIFixture {
     private static func importURL(identifier: String) -> URL? {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
             .appendingPathComponent("offline-regression-\(identifier).db")
+    }
+
+    // Reused simulator fixtures can otherwise scroll the unique input out of
+    // the Files provider's accessibility realization window on later runs.
+    private static func removeOldImageFixtures(in documents: URL, prefix: String, extension suffix: String) {
+        let manager = FileManager.default
+        for item in (try? manager.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? [] {
+            let name = item.deletingPathExtension().lastPathComponent
+            guard item.pathExtension == suffix, name.hasPrefix(prefix),
+                  UUID(uuidString: String(name.dropFirst(prefix.count))) != nil else { continue }
+            try? manager.removeItem(at: item)
+        }
+    }
+
+    private static func seedImageFolder(identifier: String) {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        removeOldImageFixtures(in: documents, prefix: "folder-fixture-", extension: "")
+        let folder = documents.appendingPathComponent("folder-fixture-" + identifier, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for index in 1...2 {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 90, height: 140)).image { ctx in
+                (index == 1 ? UIColor.systemBlue : .systemGreen).setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 90, height: 140))
+                String(index).draw(at: CGPoint(x: 22, y: 35), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 43), .foregroundColor: UIColor.white
+                ])
+            }
+            try? image.pngData()?.write(to: folder.appendingPathComponent("\(index).png"), options: .atomic)
+        }
+    }
+
+    private static func seedImageArchive(identifier: String) {
+        guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+              let archive = Data(base64Encoded: "UEsDBBQAAAAIAAAAIVgx0+jTUgAAAF8AAAAGAAAAMTAucG5n6wzwc+flkuJiYGDg9fRwCQLSEkCswsEEJGXW5lYCKTVPF8eQijnJDyZFO4geMci6sMJxMVuvlAkSw8OQg6Hh7WL5DKH0RUAdDJ6ufi7rnBKaAFBLAwQUAAAACAAAACFYdmUcWVMAAABfAAAABQAAADIucG5n6wzwc+flkuJiYGDg9fRwCQLSEkCswsEEJGXW5lYCKTVPF8eQijnJN9SXO4oeMci6sMJxMVuvlAkSw8OQg0F8Zu66Gc7RV4A6GDxd/VzWOSU0AQBQSwECFAMUAAAACAAAACFYMdPo01IAAABfAAAABgAAAAAAAAAAAAAAgAEAAAAAMTAucG5nUEsBAhQDFAAAAAgAAAAhWHZlHFlTAAAAXwAAAAUAAAAAAAAAAAAAAIABdgAAADIucG5nUEsFBgAAAAACAAIAZwAAAOwAAAAAAA==") else { return }
+        removeOldImageFixtures(in: directory, prefix: "image-fixture-", extension: "cbz")
+        // Two tiny synthetic PNGs stored as normal ZIP DEFLATE members.
+        try? archive.write(to: directory.appendingPathComponent("image-fixture-" + identifier + ".cbz"),
+                           options: .atomic)
     }
 
     private static func seedImportScenario(identifier: String) {

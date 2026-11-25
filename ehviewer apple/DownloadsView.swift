@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 import EhModels
 import EhDownload
 import EhDatabase
@@ -103,6 +104,20 @@ struct DownloadsView: View {
     @State private var deletingTaskGid: Int64? = nil
     @State private var showSingleDeleteConfirm = false
     // 分享 (issue #2)
+    @State private var showOfflineImportPicker = false
+    @State private var offlineImportMode: OfflineImportMode = .folder
+    @State private var isImportingOfflineImages = false
+    @State private var offlineImportError: String?
+    private enum OfflineImportMode {
+        case folder, archive
+
+        var types: [UTType] {
+            switch self {
+            case .folder: [.folder]
+            case .archive: [UTType.zip] + [UTType(filenameExtension: "cbz")].compactMap { $0 }
+            }
+        }
+    }
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var exportedZip: ExportedArchive?
@@ -261,6 +276,17 @@ struct DownloadsView: View {
             if key == .fileSize, gallerySizes.isEmpty {
                 Task { await calculateStorageSizes() }
             }
+        }
+        .fileImporter(isPresented: $showOfflineImportPicker, allowedContentTypes: offlineImportMode.types) { result in
+            importOfflineImages(result, fromArchive: offlineImportMode == .archive)
+        }
+        .alert("无法导入图片", isPresented: Binding(
+            get: { offlineImportError != nil },
+            set: { if !$0 { offlineImportError = nil } }
+        )) {
+            Button("好", role: .cancel) { offlineImportError = nil }
+        } message: {
+            Text(offlineImportError ?? "")
         }
         .onChange(of: selectedLabel) { _, newValue in
             AppSettings.shared.recentDownloadLabel = newValue
@@ -640,6 +666,36 @@ struct DownloadsView: View {
         }
     }
 
+    private func importOfflineImages(_ result: Result<URL, Error>, fromArchive: Bool) {
+        guard !isImportingOfflineImages else { return }
+        switch result {
+        case .failure(let error):
+            offlineImportError = error.localizedDescription
+        case .success(let folder):
+            isImportingOfflineImages = true
+            Task {
+                defer { isImportingOfflineImages = false }
+                do {
+                    let gallery = if fromArchive {
+                        try await DownloadManager.shared.importImageArchive(folder)
+                    } else {
+                        try await DownloadManager.shared.importImageFolder(folder)
+                    }
+                    await vm.loadTasks()
+                    selectedLabel = nil
+                    statusFilter = .all
+                    searchText = ""
+                    isSearching = false
+                    EhToast.success("已导入 \(gallery.pages) 页图片")
+                } catch is CancellationError {
+                    return
+                } catch {
+                    offlineImportError = error.localizedDescription
+                }
+            }
+        }
+    }
+
     // MARK: - 主工具栏菜单
 
     private func mainToolbarMenu(base: [DownloadTask], visibleGids: Set<Int64>, selected: Set<Int64>) -> some View {
@@ -747,6 +803,23 @@ struct DownloadsView: View {
                 } label: {
                     Label("批量操作", systemImage: "checkmark.circle")
                 }
+
+                Button {
+                    offlineImportMode = .folder
+                    showOfflineImportPicker = true
+                } label: {
+                    Label(isImportingOfflineImages ? "正在导入图片…" : "导入图片文件夹",
+                          systemImage: "folder.badge.plus")
+                }
+                .disabled(isImportingOfflineImages)
+
+                Button {
+                    offlineImportMode = .archive
+                    showOfflineImportPicker = true
+                } label: {
+                    Label("导入 ZIP / CBZ", systemImage: "archivebox")
+                }
+                .disabled(isImportingOfflineImages)
 
                 // 默认下载标签：随时可改，不必等到下一次下载时用「记住」勾选。
                 // 对齐 Android DownloadsScene 抽屉里的 action_default_download_label。

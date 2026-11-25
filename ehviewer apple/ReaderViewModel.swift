@@ -678,7 +678,7 @@ class ReaderViewModel {
             if let previewSet {
                 extractPTokens(from: previewSet)
             }
-            if totalPages == 0 {
+            if totalPages == 0, !OfflineGallery.isImported(gid: gid, token: token) {
                 await fetchGalleryInfo()
             }
             guard !Task.isCancelled, totalPages > 0 else { return }
@@ -1447,6 +1447,12 @@ class ReaderViewModel {
            let localURL = SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: index) {
             imageURLs[index] = localURL.absoluteString
             errorPages.remove(index)
+            return
+        }
+
+        if OfflineGallery.isImported(gid: context.gid, token: token) {
+            errorPages.insert(index)
+            errorMessages[index] = "找不到本地图片。请确认离线画廊的文件仍在下载库中。"
             return
         }
 

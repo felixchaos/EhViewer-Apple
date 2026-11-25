@@ -1999,10 +1999,19 @@ class SettingsViewModel {
                 // 只要头部字段 —— 这里会遍历整个下载目录，逐本解析上万条 pToken 纯属浪费
                 // (对齐上游 2026-08-21「添加读取画廊信息头的功能」)
                 guard let spiderInfo = SpiderInfoFile.readHeader(from: dir) else { continue }
-                guard spiderInfo.gid > 0, !spiderInfo.token.isEmpty else { continue }
-
                 // 跳过已在数据库中的
                 if existingGids.contains(spiderInfo.gid) { continue }
+                if OfflineGallery.isImported(gid: spiderInfo.gid, token: spiderInfo.token) {
+                    do {
+                        if try await DownloadManager.shared.restoreOfflineGallery(spiderInfo, from: dir) {
+                            restoredCount += 1
+                        }
+                    } catch {
+                        errorCount += 1
+                    }
+                    continue
+                }
+                guard spiderInfo.gid > 0, !spiderInfo.token.isEmpty else { continue }
 
                 // 从目录名提取标题: 格式为 "gid-title"
                 let dirName = dir.lastPathComponent

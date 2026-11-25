@@ -7,6 +7,7 @@
 
 import SwiftUI
 import EhModels
+import EhDownload
 import EhDatabase
 import EhSettings
 
@@ -165,6 +166,12 @@ struct HistoryView: View {
                 pages: item.pages, initialPage: item.initialPage
             )
         }
+        #else
+        .sheet(item: $resumeItem) { item in
+            ImageReaderView(gid: item.gid, token: item.token,
+                            pages: item.pages, initialPage: item.initialPage)
+                .frame(minWidth: 800, minHeight: 600)
+        }
         #endif
     }
 
@@ -172,59 +179,69 @@ struct HistoryView: View {
     private func historyRows(_ records: [HistoryRecord]) -> some View {
         Group {
             ForEach(records, id: \.gid) { record in
-                // 零透明链接垫底，避免 List 给 NavigationLink 自动补 disclosure 箭头
-                ZStack {
-                    NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
-                        .opacity(0)
-
-                    EhGalleryRow(
-                        gallery: record.toGalleryInfo(),
-                        // 历史页的第二行放「什么时候看的」而不是上传者——
-                        // 这一页是按时间组织的，上传者在这里没有导航价值
-                        subtitleOverride: formattedTime(record.date),
-                        // 历史页最主要的动作就是接着上次读，
-                        // 让它有个独立落点而不是只能整行点进详情
-                        accessory: AnyView(
-                            EhRowActionButton(symbol: "play.fill") {
-                                resumeItem = ReaderLaunchItem(
-                                    gid: record.gid, token: record.token,
-                                    pages: record.pages, previewSet: nil,
-                                    initialPage: UserDefaults.standard.object(
-                                        forKey: "reading_progress_\(record.gid)"
-                                    ) as? Int
-                                )
-                            }
-                        )
-                    )
-                }
-                .overlay(alignment: .bottom) { EhHairline() }
-                .contextMenu {
-                    // 对齐 Android HistoryScene 长按菜单
-                    Button {
-                        Task { await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo()) }
-                    } label: {
-                        Label("下载", systemImage: "arrow.down.circle")
+                if OfflineGallery.isImported(gid: record.gid, token: record.token) {
+                    Button { resumeReading(record) } label: {
+                        EhGalleryRow(gallery: record.toGalleryInfo(),
+                                     subtitleOverride: "本地图片 · \(formattedTime(record.date))")
                     }
-
-                    Button {
-                        // 没设默认收藏夹时要弹选择器——此前这里丢掉了返回值，
-                        // 历史页长按「收藏」和列表页一样毫无反应
-                        let gallery = record.toGalleryInfo()
-                        Task {
-                            if await GalleryActionService.shared.quickFavorite(gallery: gallery) == .needsPicker {
-                                pendingFavorite = gallery
-                            }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) { EhHairline() }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            vm.deleteByGid(record.gid)
+                        } label: {
+                            Label("删除阅读记录", systemImage: "trash")
                         }
-                    } label: {
-                        Label("收藏", systemImage: "heart")
                     }
+                } else {
+                    // 零透明链接垫底，避免 List 给 NavigationLink 自动补 disclosure 箭头
+                    ZStack {
+                        NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
+                            .opacity(0)
 
-                    Divider()
+                        EhGalleryRow(
+                            gallery: record.toGalleryInfo(),
+                            // 历史页的第二行放「什么时候看的」而不是上传者——
+                            // 这一页是按时间组织的，上传者在这里没有导航价值
+                            subtitleOverride: formattedTime(record.date),
+                            // 历史页最主要的动作就是接着上次读，
+                            // 让它有个独立落点而不是只能整行点进详情
+                            accessory: AnyView(
+                                EhRowActionButton(symbol: "play.fill") {
+                                    resumeReading(record)
+                                }
+                            )
+                        )
+                    }
+                    .overlay(alignment: .bottom) { EhHairline() }
+                    .contextMenu {
+                        // 对齐 Android HistoryScene 长按菜单
+                        Button {
+                            Task { await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo()) }
+                        } label: {
+                            Label("下载", systemImage: "arrow.down.circle")
+                        }
 
-                    Button(role: .destructive) {
-                        vm.deleteByGid(record.gid)
-                    } label: {
-                        Label("删除", systemImage: "trash")
+                        Button {
+                            // 没设默认收藏夹时要弹选择器——此前这里丢掉了返回值，
+                            // 历史页长按「收藏」和列表页一样毫无反应
+                            let gallery = record.toGalleryInfo()
+                            Task {
+                                if await GalleryActionService.shared.quickFavorite(gallery: gallery) == .needsPicker {
+                                    pendingFavorite = gallery
+                                }
+                            }
+                        } label: {
+                            Label("收藏", systemImage: "heart")
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            vm.deleteByGid(record.gid)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -234,6 +251,13 @@ struct HistoryView: View {
                 for gid in gids { vm.deleteByGid(gid) }
             }
         }
+    }
+
+    private func resumeReading(_ record: HistoryRecord) {
+        resumeItem = ReaderLaunchItem(
+            gid: record.gid, token: record.token, pages: record.pages, previewSet: nil,
+            initialPage: UserDefaults.standard.object(forKey: "reading_progress_\(record.gid)") as? Int
+        )
     }
 
     /// 0...1 的阅读进度；没读过或页数未知则不显示
