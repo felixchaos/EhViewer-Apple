@@ -141,6 +141,7 @@ enum EhOfflineUIFixture {
     }
 
     static func seedReaderFiles() async -> Bool {
+        if encodedExportFixture { AppSettings.shared.volumePage = false }
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
         let progressKey = "reading_progress_\(synthetic.gid)"
         if readerLoadingMode?.hasPrefix("spread") == true || ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {

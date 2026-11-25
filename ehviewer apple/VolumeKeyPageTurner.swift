@@ -66,8 +66,11 @@ final class VolumeKeyPageTurner {
 
     /// 停止监听并还原
     func stop() {
-        observation?.invalidate()
-        observation = nil
+        // Closing a reader that never enabled volume-key paging must not
+        // deactivate the app-wide audio session.
+        guard let observation else { return }
+        observation.invalidate()
+        self.observation = nil
         volumeView?.removeFromSuperview()
         volumeView = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
