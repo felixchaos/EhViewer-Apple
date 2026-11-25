@@ -32,41 +32,18 @@ public actor EhAPI {
     /// 最大重试次数 (超时/连接错误时自动重试)
     private static let maxRetries = 1
 
-    /// 手动代理字典。没配置完整时返回 nil —— 让系统按自己的规则走。
-    ///
-    /// 只给 HTTP/HTTPS 两组键：URLSession 支持的就这些。
-    nonisolated static func manualProxyDictionary() -> [AnyHashable: Any]? {
-        let settings = AppSettings.shared
-        guard settings.manualProxyIsUsable else { return nil }
-        let host = settings.proxyHost
-        let port = settings.proxyPort
-        return [
-            kCFNetworkProxiesHTTPEnable as String: 1,
-            kCFNetworkProxiesHTTPProxy as String: host,
-            kCFNetworkProxiesHTTPPort as String: port,
-            "HTTPSEnable": 1,
-            "HTTPSProxy": host,
-            "HTTPSPort": port,
-        ]
-    }
-
-    /// 代理设置改了之后重建会话。
-    ///
-    /// URLSessionConfiguration 是在创建会话时拷贝的，改设置不会影响已建好的
-    /// 会话——不重建的话用户改完代理要重启 App 才生效。
-    /// 已经在飞的请求仍走旧会话，让它们自己跑完。
-    public func applyProxySettings() {
+    /// 新请求使用已验证的配置；在途请求留在旧会话直至结束。
+    public func applyProxySettings(_ draft: ProxySettings) throws {
+        try AppSettings.shared.applyProxy(draft)
         let old = session
         let oldImage = imageSession
-        rebuildProxiedSessions()
-        // 旧会话等在途请求结束后自行释放，不要 invalidateAndCancel：
-        // 那会把用户正在看的那一页也打断
+        rebuildProxiedSessions(AppSettings.shared.appliedProxy)
         old.finishTasksAndInvalidate()
         oldImage.finishTasksAndInvalidate()
     }
 
-    private func rebuildProxiedSessions() {
-        let proxy = Self.manualProxyDictionary()
+    private func rebuildProxiedSessions(_ applied: ProxySettings) {
+        let proxy = applied.connectionProxyDictionary
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -109,7 +86,8 @@ public actor EhAPI {
         // 手动代理（对齐 Android 的 proxy 设置）。没配就保持 nil，
         // 让系统按自己的规则走 VPN / 系统代理 —— 这正是原来那条
         // 「不设置 connectionProxyDictionary」注释想保住的行为。
-        config.connectionProxyDictionary = Self.manualProxyDictionary()
+        let proxy = AppSettings.shared.appliedProxy.connectionProxyDictionary
+        config.connectionProxyDictionary = proxy
         // 不使用 waitsForConnectivity — 立即尝试，快速失败后交由域名前置回退
         session = URLSession(configuration: config)
 
@@ -120,7 +98,7 @@ public actor EhAPI {
         imgConfig.httpCookieStorage = .shared
         imgConfig.urlCache = sharedCache
         imgConfig.allowsCellularAccess = true
-        imgConfig.connectionProxyDictionary = Self.manualProxyDictionary()
+        imgConfig.connectionProxyDictionary = proxy
         imageSession = URLSession(configuration: imgConfig, delegate: RedirectBlockDelegate(), delegateQueue: nil)
 
         // === 域名前置回退 Session (对应 Android OkHttp Dns 接口内置域名解析) ===
@@ -158,7 +136,7 @@ public actor EhAPI {
     /// 在发送请求前清洁 Cookie，先走系统代理/VPN，失败后回退到域名前置直连
     /// 离线时回退到 URLCache 缓存数据 (避免已浏览内容在断网时不可用)
     /// 对应 Android: OkHttp 默认使用内置 DNS，iOS 需手动实现回退逻辑
-    private func sanitizedData(for request: URLRequest) async throws -> (Data, URLResponse) {
+    private func sanitizedData(for request: URLRequest, allowsOfflineFallback: Bool = true) async throws -> (Data, URLResponse) {
         if let url = request.url {
             EhCookieManager.shared.sanitizeCookiesForRequest(url: url)
         }
@@ -176,14 +154,14 @@ public actor EhAPI {
                 return try await attemptDomainFronting(for: request, using: directSession, originalError: error)
             } catch {
                 // 域名前置也失败 → 最后尝试离线缓存回退
-                if let cachedResponse = Self.offlineCacheFallback(for: request) {
+                if allowsOfflineFallback, let cachedResponse = Self.offlineCacheFallback(for: request) {
                     return cachedResponse
                 }
                 throw error
             }
         } catch let error as URLError where error.code == .notConnectedToInternet {
             // 明确离线 → 直接查缓存
-            if let cachedResponse = Self.offlineCacheFallback(for: request) {
+            if allowsOfflineFallback, let cachedResponse = Self.offlineCacheFallback(for: request) {
                 return cachedResponse
             }
             throw error
@@ -1079,31 +1057,53 @@ public actor EhAPI {
 
     /// 获取用户资料 (对应 Android getProfile)
     /// 先访问论坛主页提取 profile URL，再访问 profile 页面解析
-    public func getProfile() async throws -> ProfileResult {
+    public func getProfile(expectedMemberID: String? = nil) async throws -> ProfileResult {
         // Step 1: 访问论坛主页
         guard let forumsUrl = URL(string: EhURL.forumsUrl) else {
             throw EhError.invalidUrl
         }
-        let forumsRequest = EhRequestBuilder.buildGetRequest(url: forumsUrl)
-        let (forumsData, forumsResponse) = try await sanitizedData(for: forumsRequest)
+        let forumsRequest = Self.accountProfileRequest(forumsUrl)
+        let (forumsData, forumsResponse) = try await sanitizedData(for: forumsRequest, allowsOfflineFallback: false)
         try checkResponse(forumsResponse, data: forumsData)
 
         let forumsBody = String(data: forumsData, encoding: .utf8) ?? ""
         let profileUrl = try ForumsParser.parseProfileUrl(forumsBody)
 
         // Step 2: 访问 profile 页面
-        guard let profileRequestUrl = URL(string: profileUrl) else {
-            throw EhError.invalidUrl
-        }
-        let profileRequest = EhRequestBuilder.buildGetRequest(
-            url: profileRequestUrl,
-            referer: EhURL.forumsUrl
-        )
-        let (profileData, profileResponse) = try await sanitizedData(for: profileRequest)
+        let profileRequestUrl = try Self.forumProfileURL(profileUrl, relativeTo: forumsUrl,
+                                                         expectedMemberID: expectedMemberID)
+        let profileRequest = Self.accountProfileRequest(profileRequestUrl, referer: EhURL.forumsUrl)
+        let (profileData, profileResponse) = try await sanitizedData(for: profileRequest, allowsOfflineFallback: false)
         try checkResponse(profileResponse, data: profileData)
 
+        if let expectedMemberID {
+            guard let responseURL = profileResponse.url else { throw EhError.invalidUrl }
+            _ = try Self.forumProfileURL(responseURL.absoluteString, relativeTo: forumsUrl,
+                                         expectedMemberID: expectedMemberID)
+        }
         let profileBody = String(data: profileData, encoding: .utf8) ?? ""
         return try ProfileParser.parse(profileBody)
+    }
+
+    static func accountProfileRequest(_ url: URL, referer: String? = nil) -> URLRequest {
+        var request = EhRequestBuilder.buildGetRequest(url: url, referer: referer)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
+    static func forumProfileURL(_ location: String, relativeTo base: URL, expectedMemberID: String?) throws -> URL {
+        guard let url = URL(string: location, relativeTo: base)?.absoluteURL,
+              url.scheme?.lowercased() == "https", url.host?.lowercased() == base.host?.lowercased(),
+              url.user == nil, url.password == nil, url.port == nil || url.port == 443
+        else { throw EhError.invalidUrl }
+
+        if let expectedMemberID {
+            let ids = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.filter { $0.name.lowercased() == "showuser" }.map(\.value)
+            guard ids == [expectedMemberID] else { throw EhError.invalidUrl }
+        }
+        return url
     }
 
     // MARK: - 配额 API (对应 Android getHomeDetail / resetLimit)

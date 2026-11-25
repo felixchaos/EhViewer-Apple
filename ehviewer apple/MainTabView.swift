@@ -9,33 +9,213 @@ import SwiftUI
 import EhModels
 import EhSettings
 
+private struct EhWorkspaceBatchSelectionKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
+extension View {
+    func ehWorkspaceBatchSelection(_ selecting: Bool) -> some View {
+        preference(key: EhWorkspaceBatchSelectionKey.self, value: selecting)
+    }
+}
+
+/// Window-local stack. A push keeps the previous shell mounted with the
+/// same identity so it can restore its exact tab, scroll and detail state.
 struct MainTabView: View {
-    #if os(macOS)
-    @State private var navigation = MainTabNavigation(
-        launchPage: AppSettings.shared.launchPage, usesHomeBrowseContainer: false
-    )
-    #else
-    @State private var navigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage)
-    @State private var homeReselect: UUID?
+    typealias Tab = MainTab
+    @State private var workspaces = [WorkspaceLayer()]
+    @State private var outgoingLayer: UUID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var active: WorkspaceLayer { workspaces.last! }
+
+    var body: some View {
+        GeometryReader { geometry in
+            #if os(iOS)
+            let compact = !ResponsiveLayout.usesTabSidebar(width: geometry.size.width)
+            #else
+            let compact = false
+            #endif
+            let distance = compact && !reduceMotion ? geometry.size.width : 0
+            ZStack {
+                ForEach(workspaces) { workspace in
+                    let current = workspace.id == active.id
+                    VStack(spacing: 0) {
+                        if let route = workspace.route {
+                            if current || outgoingLayer == workspace.id {
+                                workspaceHeader(route,
+                                                depth: workspaces.firstIndex { $0.id == workspace.id } ?? 0,
+                                                canGoBack: current && workspace.canGoBack)
+                                    .accessibilityHidden(!current)
+                            } else {
+                                // Match the visible header's layout to keep the
+                                // retained list at the same viewport/scroll anchor.
+                                Color.clear.frame(height: 44)
+                                Divider().hidden()
+                            }
+                        }
+                        MainTabWorkspace(workspace: workspace)
+                    }
+                    .background(EhColor.background)
+                    .offset(x: current ? 0 : -distance * 0.26)
+                    .opacity(current || outgoingLayer == workspace.id ? 1 : 0)
+                    .zIndex(Double(workspaces.firstIndex { $0.id == workspace.id } ?? 0))
+                    .allowsHitTesting(current)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityHidden(!current)
+                    .ehSuspendTabBarDriver(!current)
+                    .environment(\.ehWorkspaceIsActive, current)
+                    .environment(\.ehTagWorkspaceNavigation, TagWorkspaceNavigation { route in
+                        guard active.id == workspace.id else { return }
+                        push(route)
+                    })
+                    .transition(distance > 0 ? .offset(x: distance) : .opacity)
+                }
+            }
+            .clipped()
+            #if os(iOS)
+            // One stable chrome instance; only the workspace layers above it move.
+            .ehFloatingTabBar(
+                items: MainTab.bottomTabs.map {
+                    .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
+                },
+                selection: Binding(get: { active.navigation.selection }, set: { active.navigation.select($0) }),
+                isEnabled: compact,
+                onReselect: { tab in
+                    if tab == .home { active.homeReselect = UUID() }
+                }
+            )
+            #endif
+        }
+    }
+
+    private func push(_ route: TagWorkspaceRoute) {
+        if reduceMotion {
+            workspaces.append(WorkspaceLayer(route: route))
+            return
+        }
+        let departing = active.id
+        outgoingLayer = departing
+        withAnimation(.easeInOut(duration: 0.28), completionCriteria: .logicallyComplete) {
+            workspaces.append(WorkspaceLayer(route: route))
+        } completion: {
+            if outgoingLayer == departing { outgoingLayer = nil }
+        }
+    }
+
+    private func transition(_ action: () -> Void) {
+        if reduceMotion { action() }
+        else { withAnimation(.easeInOut(duration: 0.28), action) }
+    }
+
+    private func workspaceHeader(_ route: TagWorkspaceRoute, depth: Int, canGoBack: Bool) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if canGoBack {
+                    Button {
+                        guard workspaces.count > 1, active.canGoBack else { return }
+                        transition { workspaces.removeLast() }
+                    } label: {
+                        Image(systemName: "chevron.backward")
+                            .font(.headline)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("返回上一工作区")
+                    .accessibilityIdentifier("workspace-back")
+                } else {
+                    // An inactive shell or one displaying an inner detail
+                    // must not advertise a second, non-actionable AX Back.
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(route.title).font(.subheadline.weight(.semibold))
+                    Text(route.tags.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("workspace-tags")
+                }
+                Spacer(minLength: 8)
+                Text("\(depth + 1)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("工作区第 \(depth + 1) 层")
+                    .accessibilityIdentifier("workspace-depth")
+            }
+            .padding(.trailing, 16)
+            Divider()
+        }
+        .background(EhColor.background)
+    }
+}
+
+@MainActor @Observable
+private final class WorkspaceLayer: Identifiable {
+    let id = UUID()
+    let route: TagWorkspaceRoute?
+    let entryTab: MainTab?
+    var navigation: MainTabNavigation
+    var canGoBack = true
+    #if os(iOS)
+    var homeReselect: UUID?
     #endif
+
+    init(route: TagWorkspaceRoute? = nil) {
+        self.route = route
+        #if os(macOS)
+        var initialNavigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage, usesHomeBrowseContainer: false)
+        #else
+        var initialNavigation = MainTabNavigation(launchPage: AppSettings.shared.launchPage)
+        #endif
+        if let route {
+            let initial: MainTab
+            switch route.origin.scope {
+            case .cloudFavorites, .localFavorites, .allFavorites: initial = .favorites
+            case .history: initial = .history
+            case .downloads: initial = .downloads
+            case .watched: initial = .subscription
+            case .loadedPopular: initial = .popular
+            case .loadedToplist: initial = .toplist
+            case .browse: initial = .home
+            }
+            initialNavigation.select(initial)
+            entryTab = initialNavigation.selection
+        } else {
+            entryTab = nil
+        }
+        navigation = initialNavigation
+    }
+}
+
+private struct MainTabWorkspace: View {
+    @Bindable var workspace: WorkspaceLayer
+    @Environment(\.ehWorkspaceIsActive) private var workspaceIsActive
+    @State private var isBatchSelecting = false
     /// 剪贴板打开画廊 (iOS sheet 展示)
     @State private var clipboardGallery: GalleryInfo?
     #if os(macOS)
-    @State private var selectedGallery: GalleryInfo?
-    /// 标签导航路径 — 支持从 Detail 列点击标签推入新画廊列表到 Content 列
-    @State private var contentPath = NavigationPath()
+    @State private var selectedGalleries: [Tab: GalleryInfo] = [:]
+    @State private var selectedGalleryOrigins: [Tab: WorkspaceGalleryDestination] = [:]
+    @State private var mountedMacTabs: Set<Tab> = []
     #endif
 
     typealias Tab = MainTab
 
-    private var selectedTab: Tab { navigation.selection }
+    private var selectedTab: Tab { workspace.navigation.selection }
 
     private var tabSelection: Binding<Tab> {
-        Binding(get: { navigation.selection }, set: { navigation.select($0) })
+        Binding(get: { workspace.navigation.selection }, set: { workspace.navigation.select($0) })
     }
 
     #if os(iOS)
     @State private var directReaderGallery: GalleryInfo?
+    @State private var mountedTabs: Set<Tab> = []
+    @State private var nestedNavigation = false
     #endif
 
     var body: some View {
@@ -49,52 +229,66 @@ struct MainTabView: View {
                 Label(tab.rawValue, systemImage: tab.icon)
             }
             .navigationTitle("EhViewer")
+            .disabled(isBatchSelecting)
+            .accessibilityHidden(isBatchSelecting)
             .navigationSplitViewColumnWidth(min: 160, ideal: 180)
         } content: {
-            NavigationStack(path: $contentPath) {
-                macOSContentView(for: selectedTab)
-                    .navigationDestination(for: TagSearchDestination.self) { dest in
-                        // 标签点击推入的画廊列表 (对齐 Android: onTagClick → GalleryListScene)
-                        GalleryListView(mode: .tag(keyword: dest.tag), selection: $selectedGallery)
+            ZStack {
+                ForEach(macTabs, id: \.self) { tab in
+                    macLayer(tab) {
+                        NavigationStack { macOSContentView(for: tab) }
                     }
-            }
-            .id(selectedTab)
-            .navigationSplitViewColumnWidth(min: 350, ideal: 480)
-        } detail: {
-            NavigationStack {
-                if let gallery = selectedGallery {
-                    GalleryDetailView(gallery: gallery)
-                        .id(gallery.gid)
-                } else {
-                    ContentUnavailableView("选择画廊", systemImage: "photo.stack", description: Text("从列表选择一个画廊"))
                 }
             }
-            .environment(\.tagNavigationAction, TagNavigationAction { tag in
-                contentPath.append(TagSearchDestination(tag: tag))
-            })
+            .navigationSplitViewColumnWidth(min: 350, ideal: 480)
+        } detail: {
+            ZStack {
+                ForEach(macTabs, id: \.self) { tab in
+                    macLayer(tab) {
+                        NavigationStack {
+                            if let gallery = selectedGalleries[tab] {
+                                if let origin = selectedGalleryOrigins[tab], origin.gallery.gid == gallery.gid {
+                                    origin.view()
+                                } else {
+                                    GalleryDetailView(gallery: gallery).id(gallery.gid)
+                                }
+                            } else {
+                                ContentUnavailableView("选择画廊", systemImage: "photo.stack",
+                                                       description: Text("从列表选择一个画廊"))
+                            }
+                        }
+                    }
+                }
+            }
         }
-        .onChange(of: selectedTab) { _, newTab in
-            selectedGallery = nil
-            contentPath = NavigationPath()
+        .onPreferenceChange(EhWorkspaceBatchSelectionKey.self) { isBatchSelecting = $0 }
+        .onChange(of: isBatchSelecting) { _, selecting in workspace.canGoBack = !selecting }
+        .onChange(of: selectedTab, initial: true) { _, tab in
+            mountedMacTabs.insert(tab)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHome)) { _ in
-            navigation.select(.home)
+            guard workspaceIsActive, !isBatchSelecting else { return }
+            workspace.navigation.select(.home)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToPopular)) { _ in
-            navigation.select(.popular)
+            guard workspaceIsActive, !isBatchSelecting else { return }
+            workspace.navigation.select(.popular)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToTopList)) { _ in
-            navigation.select(.toplist)
+            guard workspaceIsActive, !isBatchSelecting else { return }
+            workspace.navigation.select(.toplist)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToFavorites)) { _ in
-            navigation.select(.favorites)
+            guard workspaceIsActive, !isBatchSelecting else { return }
+            workspace.navigation.select(.favorites)
         }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
-            guard let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
-            selectedGallery = gallery
+            guard workspaceIsActive, !isBatchSelecting, let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
+            selectedGalleryOrigins[selectedTab] = nil
+            selectedGalleries[selectedTab] = gallery
         }
         #else
         GeometryReader { geometry in
@@ -102,30 +296,39 @@ struct MainTabView: View {
             HStack(spacing: 0) {
                 if showsSidebar {
                     adaptiveSidebar
+                        .disabled(isBatchSelecting)
+                        .accessibilityHidden(isBatchSelecting)
                     Divider()
                 }
 
                 // Keep the same stacks and their state when the navigation controls move.
                 ZStack {
-                    ForEach(navigation.retainedTabs, id: \.self) { tab in
+                    ForEach(workspace.navigation.retainedTabs.filter { mountedTabs.contains($0) || $0 == selectedTab }, id: \.self) { tab in
                         tabLayer(tab) { tabContent(tab) }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .environment(\.ehHomeReselect, homeReselect)
-                .ehFloatingTabBar(
-                    items: Tab.bottomTabs.map {
-                        .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
-                    },
-                    selection: tabSelection,
-                    isEnabled: !showsSidebar,
-                    onReselect: { tab in
-                        if tab == .home { homeReselect = UUID() }
-                    }
-                )
+                .environment(\.ehHomeReselect, workspace.homeReselect)
+                .onPreferenceChange(EhWorkspaceBatchSelectionKey.self) { isBatchSelecting = $0 }
+                .onChange(of: selectedTab, initial: true) { _, tab in mountedTabs.insert(tab) }
             }
-            .allowsHitTesting(directReaderGallery == nil)
-            .accessibilityHidden(directReaderGallery != nil)
+            .allowsHitTesting(directReaderGallery == nil && clipboardGallery == nil)
+            .accessibilityHidden(directReaderGallery != nil || clipboardGallery != nil)
+            .ehSuspendTabBarDriver(directReaderGallery != nil || clipboardGallery != nil)
+            .overlay {
+                if let gallery = clipboardGallery {
+                    NavigationStack {
+                        GalleryDetailView(gallery: gallery)
+                            .id(gallery.gid)
+                            .overlay(alignment: .topTrailing) {
+                                Button("关闭") { clipboardGallery = nil }
+                                    .padding(12)
+                            }
+                            .ehWorkspaceGalleryDestination()
+                    }
+                    .background(EhColor.background)
+                }
+            }
             .overlay {
                 if let gallery = directReaderGallery {
                     // Stay in the owning root so closing native context UI and opening
@@ -140,43 +343,59 @@ struct MainTabView: View {
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
+        .onPreferenceChange(EhHidesTabBarKey.self) { nestedNavigation = $0 }
+        .onChange(of: !nestedNavigation && !isBatchSelecting && directReaderGallery == nil && clipboardGallery == nil,
+                  initial: true) { _, canGoBack in workspace.canGoBack = canGoBack }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
-            guard let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
+            guard workspaceIsActive, !isBatchSelecting,
+                  let gallery = MainTabNavigation.clipboardGallery(from: notification) else { return }
             clipboardGallery = gallery
-        }
-        .sheet(item: $clipboardGallery) { gallery in
-            NavigationStack {
-                GalleryDetailView(gallery: gallery)
-                    .id(gallery.gid)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("关闭") { clipboardGallery = nil }
-                        }
-                    }
-                    .navigationDestination(for: GalleryInfo.self) { result in
-                        GalleryDetailView(gallery: result)
-                            .id(result.gid)
-                    }
-                    .ehPushedTagSearchDestination()
-            }
         }
         #endif
     }
 
     #if os(macOS)
+    private var macTabs: [Tab] {
+        Tab.sidebarTabs.filter { $0 == selectedTab || mountedMacTabs.contains($0) }
+    }
+
+    private func macLayer<Content: View>(_ tab: Tab, @ViewBuilder content: () -> Content) -> some View {
+        let active = selectedTab == tab
+        return content()
+            .opacity(active ? 1 : 0)
+            .allowsHitTesting(active)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!active)
+            .environment(\.ehWorkspaceIsActive, workspaceIsActive && active)
+            .transformPreference(EhWorkspaceBatchSelectionKey.self) { if !active { $0 = false } }
+    }
+
     @ViewBuilder
     private func macOSContentView(for tab: Tab) -> some View {
+        let selection = Binding<GalleryInfo?>(get: { selectedGalleries[tab] }, set: { selectedGalleries[tab] = $0 })
+        let selectOrigin: (WorkspaceGalleryDestination) -> Void = { selectedGalleryOrigins[tab] = $0 }
+        if let route = workspace.route, workspace.entryTab == tab {
+            if tab == .favorites {
+                FavoritesView(workspaceRoute: route, selection: selection, selectedOrigin: selectOrigin)
+            } else if tab == .history {
+                HistoryView(workspaceRoute: route)
+            } else if tab == .downloads {
+                DownloadsView(workspaceRoute: route)
+            } else {
+                GalleryListView(workspace: route, selection: selection, selectedOrigin: selectOrigin)
+            }
+        } else {
         switch tab {
         case .home:
-            GalleryListView(mode: .home, selection: $selectedGallery)
+            GalleryListView(mode: .home, selection: selection, selectedOrigin: selectOrigin)
         case .subscription:
-            GalleryListView(mode: .subscription, selection: $selectedGallery)
+            GalleryListView(mode: .subscription, selection: selection, selectedOrigin: selectOrigin)
         case .popular:
-            GalleryListView(mode: .popular, selection: $selectedGallery)
+            GalleryListView(mode: .popular, selection: selection, selectedOrigin: selectOrigin)
         case .toplist:
-            GalleryListView(mode: .toplist(period: 15), selection: $selectedGallery)
+            GalleryListView(mode: .toplist(period: 15), selection: selection, selectedOrigin: selectOrigin)
         case .favorites:
-            FavoritesView(selection: $selectedGallery)
+            FavoritesView(selection: selection, selectedOrigin: selectOrigin)
         case .downloads:
             DownloadsView()
         case .history:
@@ -191,16 +410,17 @@ struct MainTabView: View {
             // macOS 不使用 "更多" 标签，不应出现
             EmptyView()
         }
+        }
     }
     #endif
 
     #if os(iOS)
     private var adaptiveSidebar: some View {
-        let sidebarSelection = navigation.sidebarSelection
+        let sidebarSelection = workspace.navigation.sidebarSelection
         return List {
             ForEach(Tab.sidebarTabs, id: \.self) { tab in
                 Button {
-                    navigation.selectFromSidebar(tab)
+                    workspace.navigation.selectFromSidebar(tab)
                 } label: {
                     Label(tab.rawValue, systemImage: tab.icon)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -226,20 +446,40 @@ struct MainTabView: View {
             .opacity(selectedTab == tab ? 1 : 0)
             .allowsHitTesting(selectedTab == tab)
             .accessibilityHidden(selectedTab != tab)
+            .environment(\.ehWorkspaceIsActive, workspaceIsActive && selectedTab == tab)
             .ehTabBarDriver(active: selectedTab == tab)
+            .transformPreference(EhWorkspaceBatchSelectionKey.self) { selecting in
+                if selectedTab != tab { selecting = false }
+            }
     }
 
     #endif
 
     @ViewBuilder
     private func tabContent(_ tab: Tab) -> some View {
+        if let route = workspace.route, workspace.entryTab == tab {
+            if tab == .favorites {
+                FavoritesView(workspaceRoute: route)
+            } else if tab == .history {
+                HistoryView(workspaceRoute: route)
+            } else if tab == .downloads {
+                DownloadsView(workspaceRoute: route)
+            } else {
+                #if os(iOS)
+                BrowseHomeView(route: $workspace.navigation.browse, workspaceRoute: route,
+                               onRequestDirectRead: { directReaderGallery = $0 })
+                #else
+                BrowseHomeView(route: $workspace.navigation.browse, workspaceRoute: route)
+                #endif
+            }
+        } else {
         switch tab {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
             #if os(iOS)
-            BrowseHomeView(route: $navigation.browse, onRequestDirectRead: { directReaderGallery = $0 })
+            BrowseHomeView(route: $workspace.navigation.browse, onRequestDirectRead: { directReaderGallery = $0 })
             #else
-            BrowseHomeView(route: $navigation.browse)
+            BrowseHomeView(route: $workspace.navigation.browse)
             #endif
         case .subscription, .popular, .toplist:
             // These sidebar shortcuts are aliases of the retained Home stack on iOS.
@@ -254,9 +494,10 @@ struct MainTabView: View {
             SettingsView()
         case .more:
             // 保留给 iPad/macOS 侧边栏的兼容路径；iPhone 底部栏已改用 .profile
-            MoreTabView(onNavigate: { tab in navigation.select(tab) })
+            MoreTabView(onNavigate: { tab in workspace.navigation.select(tab) })
         case .profile:
             ProfileHomeView()
+        }
         }
     }
 }

@@ -22,7 +22,7 @@ struct QuickSearchView: View {
                 if vm.searches.isEmpty {
                     ContentUnavailableView("暂无快速搜索",
                         systemImage: "magnifyingglass",
-                        description: Text("点击右上角添加常用搜索词"))
+                        description: Text("可从右上角新增快速搜索"))
                 } else {
                     searchList
                 }
@@ -229,7 +229,7 @@ struct QuickSearchDrawerContent: View {
                     if vm.addSearch(currentSearch) {
                         Haptics.success()
                     } else {
-                        EhToast.failure("无法保存快速搜索")
+                        EhToast.failure("快速搜索保存失败")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -259,10 +259,10 @@ struct QuickSearchDrawerContent: View {
             if vm.searches.isEmpty {
                 EhStateView(kind: .empty(
                     symbol: "bookmark",
-                    title: "还没有快速搜索",
+                    title: "无快速搜索",
                     message: currentSearch == nil
-                        ? "先搜一次，再回到这里把条件存下来"
-                        : "点右上角 + 把当前搜索条件存下来"
+                        ? "执行搜索后可保存搜索条件"
+                        : "使用右上角的添加按钮保存当前搜索条件"
                 ))
             } else {
                 List {
@@ -379,7 +379,7 @@ struct AddQuickSearchSheet: View {
                         if save() {
                             dismiss()
                         } else {
-                            EhToast.failure("无法保存快速搜索")
+                            EhToast.failure("快速搜索保存失败")
                         }
                     }
                     .disabled(keyword.isEmpty)

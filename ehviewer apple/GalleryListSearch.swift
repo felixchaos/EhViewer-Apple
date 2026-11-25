@@ -1,5 +1,7 @@
 import Foundation
 import EhModels
+import EhSettings
+import EhDownload
 
 /// Query syntax shared by browsing interfaces. Focus, token appearance and the
 /// decision to submit stay with the caller.
@@ -71,7 +73,7 @@ nonisolated enum GallerySearchQuery {
         }
     }
 
-    private static func firstTerm(in text: Substring) -> (end: String.Index, complete: Bool) {
+    fileprivate static func firstTerm(in text: Substring) -> (end: String.Index, complete: Bool) {
         var inQuotes = false
         var end = text.startIndex
         while end < text.endIndex {
@@ -83,7 +85,7 @@ nonisolated enum GallerySearchQuery {
         return (end, !inQuotes)
     }
 
-    private static func containsTerm(_ tag: String, in query: String) -> Bool {
+    fileprivate static func containsTerm(_ tag: String, in query: String) -> Bool {
         var rest = query[...]
         while !rest.isEmpty {
             let (end, _) = firstTerm(in: rest)
@@ -258,11 +260,13 @@ nonisolated struct GalleryListRequest: Sendable {
     let source: Source
     let filters: Filters
     let favoriteKeyword: String?
+    let scopedFavorite: Bool
 
-    init(source: Source, filters: Filters = .init(), favoriteKeyword: String? = nil) {
+    init(source: Source, filters: Filters = .init(), favoriteKeyword: String? = nil, scopedFavorite: Bool = false) {
         self.source = source
         self.filters = filters
         self.favoriteKeyword = favoriteKeyword
+        self.scopedFavorite = scopedFavorite
     }
 
     func pageURL(_ page: Int, site: EhSite) -> String {
@@ -288,6 +292,7 @@ nonisolated struct GalleryListRequest: Sendable {
 
     func jumpBaseURL(site: EhSite) -> String {
         if case .favorites(let slot) = source {
+            if scopedFavorite { return buildFavoritesURL(slot: slot, parameter: "", site: site) }
             // Existing jumps without a server cursor omit the favorites search.
             let baseURL = EhURL.favoritesUrl(for: site)
             return slot < 0 ? baseURL : "\(baseURL)?favcat=\(slot)"
@@ -315,7 +320,7 @@ nonisolated struct GalleryListRequest: Sendable {
         case .toplist(let period): return "toplist:\(period):\(page)"
         case .search(let keyword): return "search:\(keyword):\(filters.cacheSignature):\(page)"
         case .tag(let keyword): return "tag:\(keyword):\(page)"
-        case .favorites(let slot): return "fav:\(slot):\(favoriteKeyword ?? ""):\(page)"
+        case .favorites(let slot): return "fav:\(slot):\(favoriteKeyword ?? ""):\(page):\(scopedFavorite)"
         }
     }
 
@@ -336,6 +341,21 @@ nonisolated struct GalleryListRequest: Sendable {
 
     private func buildFavoritesURL(slot: Int, parameter: String, site: EhSite) -> String {
         let baseURL = EhURL.favoritesUrl(for: site)
+        if scopedFavorite, var components = URLComponents(string: baseURL) {
+            var items = slot < 0 ? [] : [URLQueryItem(name: "favcat", value: String(slot))]
+            if let equals = parameter.firstIndex(of: "=") {
+                items.append(URLQueryItem(name: String(parameter[..<equals]),
+                                          value: String(parameter[parameter.index(after: equals)...])))
+            }
+            if let favoriteKeyword, !favoriteKeyword.isEmpty {
+                items.append(URLQueryItem(name: "f_search", value: favoriteKeyword))
+                items += ["sn", "st", "sf"].map { URLQueryItem(name: $0, value: "on") }
+            }
+            components.queryItems = items
+            // Favorite endpoints decode '+' as a space even when it is literal.
+            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            return components.url?.absoluteString ?? baseURL
+        }
         var url = slot < 0 ? "\(baseURL)?\(parameter)" : "\(baseURL)?favcat=\(slot)&\(parameter)"
         if let keyword = favoriteKeyword, !keyword.isEmpty {
             let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
@@ -351,5 +371,203 @@ extension GalleryListRequest.Source {
     nonisolated static func tagRoute(source: Self, submittedQuery: String?) -> Self {
         guard let submittedQuery else { return source }
         return submittedQuery.isEmpty ? .home : .search(keyword: submittedQuery)
+    }
+}
+
+// MARK: - In-app tag workspaces
+
+/// A frozen source for a new workspace. Browsing state is private to the new
+/// shell, while actual downloads, favorites and history continue to share data.
+nonisolated struct TagWorkspaceOrigin: Hashable {
+    nonisolated enum Scope: Hashable {
+        case browse
+        case watched
+        case cloudFavorites(Int)
+        case localFavorites
+        case allFavorites
+        case history
+        case downloads
+        case loadedPopular
+        case loadedToplist
+
+        var title: String {
+            switch self {
+            case .browse: "浏览"
+            case .watched: "订阅"
+            case .cloudFavorites(let slot): slot < 0 ? "云端收藏" : "收藏夹 \(slot + 1)"
+            case .localFavorites: "本地收藏"
+            case .allFavorites: "全部收藏"
+            case .history: "阅读历史"
+            case .downloads: "下载"
+            case .loadedPopular: "已加载的热门"
+            case .loadedToplist: "已加载的排行"
+            }
+        }
+    }
+
+    nonisolated struct DownloadControls: Hashable {
+        let label: String?
+        let status: String
+        let category: DownloadListCategory
+        let order: String
+        let ascending: Bool
+    }
+
+    let scope: Scope
+    var query = ""
+    var filters = GalleryListRequest.Filters()
+    var candidates: [GalleryInfo] = []
+    var downloadControls: DownloadControls? = nil
+    var toplistPeriod: Int? = nil
+
+    static let browse = Self(scope: .browse)
+
+    func withGallery(_ gallery: GalleryInfo, tagGroups: [GalleryTagGroup]) -> Self {
+        guard !tagGroups.isEmpty, let index = candidates.firstIndex(where: { $0.gid == gallery.gid })
+        else { return self }
+        var updated = self
+        updated.candidates[index].simpleTags = tagGroups.flatMap { group in
+            group.tags.map { "\(group.groupName):\($0)" }
+        }
+        return updated
+    }
+
+    func selecting(_ tag: String) -> TagWorkspaceRoute {
+        .init(origin: self, tags: [tag])
+    }
+
+    var cloudSlot: Int? {
+        switch scope {
+        case .cloudFavorites(let slot): slot
+        case .allFavorites: -1
+        default: nil
+        }
+    }
+
+    var isLocal: Bool {
+        switch scope {
+        case .browse, .watched, .cloudFavorites, .allFavorites: false
+        default: true
+        }
+    }
+}
+
+nonisolated struct TagWorkspaceRoute: Hashable {
+    let origin: TagWorkspaceOrigin
+    let tags: [String]
+
+    var title: String { origin.scope.title }
+
+    /// Additional terms are editable within this layer. Its inherited terms,
+    /// scope and clicked tags cannot be removed by clearing the editor.
+    func query(adding extra: String = "") -> String {
+        var result = ListUrlBuilder.sanitizeKeyword(origin.query + " " + extra)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        for tag in tags {
+            let exact = GallerySearchQuery.exactTag(tag)
+            if !GallerySearchQuery.containsTerm(exact, in: result) {
+                result = result.isEmpty ? exact : result + " " + exact
+            }
+        }
+        return result
+    }
+
+    func descending(into tag: String, extra: String, filters: GalleryListRequest.Filters) -> Self {
+        var source = origin
+        source.query = query(adding: extra)
+        if origin.isLocal || origin.scope == .allFavorites {
+            source.candidates = localList(extra: extra, filters: filters).galleries
+        }
+        source.filters = filters
+        return .init(origin: source, tags: tags.contains(tag) ? tags : tags + [tag])
+    }
+
+    func retargeted(to scope: TagWorkspaceOrigin.Scope, candidates: [GalleryInfo] = []) -> Self {
+        .init(origin: .init(scope: scope, query: origin.query, filters: origin.filters, candidates: candidates,
+                            downloadControls: origin.downloadControls, toplistPeriod: origin.toplistPeriod),
+              tags: tags)
+    }
+
+    func request(extra: String, filters: GalleryListRequest.Filters) -> GalleryListRequest {
+        let keyword = query(adding: extra)
+        var filters = filters
+        if let slot = origin.cloudSlot {
+            return .init(source: .favorites(slot: slot), favoriteKeyword: keyword, scopedFavorite: true)
+        }
+        if origin.scope == .watched {
+            filters.mode = .subscription
+            filters.cacheMode = 1
+        }
+        if origin.scope == .browse, tags.count == 1, origin.query.isEmpty, extra.isEmpty,
+           filters == .init(), let tag = tags.first {
+            // Preserve the established canonical endpoint for an unconstrained
+            // first drill-down; any inherited/additional option uses f_search.
+            return .init(source: .tag(keyword: tag))
+        }
+        return .init(source: .search(keyword: keyword), filters: filters)
+    }
+
+    /// A server cursor is pagination data, not permission to drop the source
+    /// or query. Reattach only navigation parameters to the pinned request.
+    func preservingScope(of url: String, extra: String, filters: GalleryListRequest.Filters, site: EhSite) -> String {
+        let descriptor = request(extra: extra, filters: filters)
+        let pinned = descriptor.pageURL(0, site: site)
+        guard var target = URLComponents(string: pinned),
+              let supplied = URLComponents(string: url) else { return pinned }
+        if case .tag = descriptor.source,
+           supplied.path.hasPrefix(target.path + "/"),
+           let page = Int(supplied.path.dropFirst(target.path.count + 1)), page > 0 {
+            target.path += "/\(page)"
+        }
+        let names = Set(["page", "next", "prev", "seek", "jump"])
+        let nav = supplied.queryItems?.filter { names.contains($0.name) } ?? []
+        var items = (target.queryItems ?? []).filter { existing in
+            !nav.contains { $0.name == existing.name }
+                && !(existing.name == "page" && nav.contains { $0.name != "page" })
+        }
+        items += nav
+        if !items.isEmpty { target.queryItems = items }
+        target.percentEncodedQuery = target.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return target.url?.absoluteString ?? pinned
+    }
+
+    func localList(extra: String, filters: GalleryListRequest.Filters) -> GalleryListResult {
+        let extraTerms = Self.terms(in: origin.query + " " + extra)
+        let results = origin.candidates.filter { gallery in
+            let rawTags = gallery.simpleTags ?? []
+            let canonicalTags = Set(rawTags.map(Self.canonicalTag))
+            guard tags.allSatisfy({ canonicalTags.contains(Self.canonicalTag($0)) }) else { return false }
+            if filters.category > 0, filters.category & gallery.category.rawValue == 0 { return false }
+            if filters.minRating >= 2, gallery.rating < Float(filters.minRating) { return false }
+            if filters.pageFrom > 0, gallery.pages < filters.pageFrom { return false }
+            if filters.pageTo > 0, gallery.pages > filters.pageTo { return false }
+            let names = [gallery.title, gallery.titleJpn, gallery.uploader].compactMap { $0 }
+            return extraTerms.allSatisfy { word in
+                let unquoted = word.replacingOccurrences(of: "\"", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "$"))
+                if unquoted.contains(":") { return canonicalTags.contains(Self.canonicalTag(unquoted)) }
+                return (names + rawTags).contains { $0.localizedCaseInsensitiveContains(unquoted) }
+            }
+        }
+        return GalleryListResult(galleries: results)
+    }
+
+    private static func terms(in query: String) -> [String] {
+        var terms: [String] = []
+        var tail = query[...].drop(while: \.isWhitespace)
+        while !tail.isEmpty {
+            let (end, _) = GallerySearchQuery.firstTerm(in: tail)
+            terms.append(String(tail[..<end]))
+            tail = tail[end...].drop(while: \.isWhitespace)
+        }
+        return terms
+    }
+
+    private static func canonicalTag(_ tag: String) -> String {
+        let lower = tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let split = lower.firstIndex(of: ":") else { return lower }
+        let prefix = String(lower[...split])
+        let value = lower[lower.index(after: split)...]
+        return "\(EhTagDatabase.prefixToNamespace[prefix] ?? String(prefix.dropLast())):\(value)"
     }
 }

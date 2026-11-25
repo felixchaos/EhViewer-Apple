@@ -24,6 +24,9 @@ struct SettingsView: View {
     @State private var showSettingsBackupImportPicker = false
     @State private var settingsBackupImportMessage: String?
     @Environment(\.openURL) private var openURL
+    @Environment(AppState.self) private var inheritedAppState: AppState?
+    @State private var standaloneAppState = AppState()
+    private var profile: AccountProfileStore { .shared }
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
@@ -71,13 +74,17 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        if isPushed {
-            settingsInnerContent
-        } else {
-            NavigationStack {
+        Group {
+            if isPushed {
                 settingsInnerContent
+            } else {
+                NavigationStack {
+                    settingsInnerContent
+                }
             }
         }
+        .onAppear { vm.reloadProxyDraft() }
+        .onDisappear { vm.reloadProxyDraft() }
     }
 
     private var settingsInnerContent: some View {
@@ -221,51 +228,20 @@ struct SettingsView: View {
 
     private var accountSection: some View {
         Section("账号") {
-            if vm.isLoggedIn {
+            if let memberID = profile.memberID {
                 HStack(spacing: 12) {
-                    // 用户头像 (对齐 Android: 从论坛资料页获取)
-                    if let avatarURL = vm.avatarURL {
-                        AsyncImage(url: avatarURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 40, height: 40)
-                                    .clipShape(Circle())
-                            case .failure:
-                                Image(systemName: "person.circle.fill")
-                                    .font(.system(size: 36))
-                                    .foregroundStyle(Color.accentColor)
-                            default:
-                                ProgressView()
-                                    .frame(width: 40, height: 40)
-                            }
-                        }
-                    } else {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(Color.accentColor)
-                    }
+                    LocalAccountAvatar(bytes: profile.avatar, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
-                        if let name = vm.displayName, !name.isEmpty {
-                            Text(name)
-                                .font(.subheadline.bold())
-                        } else {
-                            Text("已登录")
-                                .font(.subheadline.bold())
-                        }
-                        HStack(spacing: 8) {
-                            if let uid = vm.userId, !uid.isEmpty {
-                                Text("UID: \(uid)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(vm.hasExAccess ? "ExHentai 可用" : "仅 E-Hentai (未登录)")
-                                .font(.caption)
-                                .foregroundStyle(vm.hasExAccess ? Color.green : .secondary)
-                        }
+                        Text(profile.displayTitle).font(.subheadline.bold())
+                        Text("UID \(memberID)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                }
+                LocalAccountAvatarEditor(memberID: memberID)
+                    .id(memberID)
+                if case .failed = profile.nameState {
+                    Button("重试读取用户名") { Task { await profile.refreshName(force: true) } }
                 }
 
                 // 身份 Cookies (对齐 Android: identity_cookie)
@@ -284,11 +260,22 @@ struct SettingsView: View {
         }
         .confirmationDialog("确认注销？", isPresented: $vm.showLogoutConfirm, titleVisibility: .visible) {
             Button("注销", role: .destructive) {
-                vm.logout()
+                Task { await vm.logout() }
             }
         }
         .sheet(isPresented: $vm.showLogin) {
             LoginView()
+                .environment(inheritedAppState ?? standaloneAppState)
+        }
+        .onChange(of: profile.memberID) { _, memberID in
+            vm.checkLoginState()
+            if memberID != nil { vm.showLogin = false }
+        }
+        .task(id: profile.memberID) {
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            if EhOfflineUIFixture.enabled { return }
+            #endif
+            await profile.refreshName()
         }
     }
 
@@ -433,7 +420,7 @@ struct SettingsView: View {
         } header: {
             Text("搜索过滤")
         } footer: {
-            Text("保存在 E-Hentai 账号的服务端配置里，对网页端同样生效。")
+            Text("保存至 E-Hentai 账号，同时适用于网页端。")
         }
     }
 
@@ -441,44 +428,52 @@ struct SettingsView: View {
 
     private var networkSection: some View {
         Section("网络") {
-            // App 内代理 (对齐 Android advanced_settings.xml 的 ProxyPreference)。
-            // 此前只能被动显示系统代理，没法给 App 单独指一个。
-            Picker("代理", selection: $vm.proxyMode) {
-                Text("跟随系统").tag(0)
-                Text("手动 HTTP").tag(1)
-            }
-            .pickerStyle(.segmented)
-
-            if vm.proxyMode == 1 {
-                HStack {
-                    Text("地址")
-                    TextField("127.0.0.1", text: $vm.proxyHost)
-                        .multilineTextAlignment(.trailing)
-                        .autocorrectionDisabled()
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
+            Group {
+                Picker("代理", selection: $vm.proxyMode) {
+                    Text("跟随系统").tag(0)
+                    Text("手动 HTTP").tag(1)
                 }
-                HStack {
-                    Text("端口")
-                    TextField("7890", value: $vm.proxyPort, format: .number.grouping(.never))
-                        .multilineTextAlignment(.trailing)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        #endif
+                .pickerStyle(.segmented)
+
+                if vm.proxyMode == 1 {
+                    HStack {
+                        Text("地址")
+                        TextField("127.0.0.1", text: $vm.proxyHost)
+                            .multilineTextAlignment(.trailing)
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            #endif
+                    }
+                    HStack {
+                        Text("端口")
+                        TextField("7890", text: $vm.proxyPortText)
+                            .multilineTextAlignment(.trailing)
+                            #if os(iOS)
+                            .keyboardType(.numberPad)
+                            #endif
+                    }
+                    Text("支持 HTTP/HTTPS 代理，不支持 SOCKS。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Button("应用代理设置") {
-                    Task { await EhAPI.shared.applyProxySettings() }
-                    EhToast.success(AppSettings.shared.manualProxyIsUsable
-                                    ? "已切换到 \(AppSettings.shared.proxyHost):\(AppSettings.shared.proxyPort)"
-                                    : "地址或端口不完整，仍按跟随系统处理")
+                    Task {
+                        guard !vm.isApplyingProxy else { return }
+                        do {
+                            try await vm.applyProxyDraft()
+                            EhToast.success("代理设置已应用。")
+                        } catch {
+                            EhToast.failure("手动代理需要有效地址和 1–65535 范围内的端口。")
+                        }
+                    }
                 }
-                Text("只支持 HTTP/HTTPS 代理。URLSession 不支持 SOCKS，"
-                     + "所以这里没有 SOCKS 选项——给一个点了没用的开关更糟。"
-                     + "地址或端口填不全时按「跟随系统」处理，不会把网络配死。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .disabled(!vm.hasUnappliedProxyChanges)
+                if vm.hasUnappliedProxyChanges {
+                    Button("取消修改") { vm.reloadProxyDraft() }
+                }
             }
+            .disabled(vm.isApplyingProxy)
 
             Toggle("域名前置", isOn: $vm.domainFronting)
 
@@ -864,9 +859,7 @@ struct SettingsView: View {
             // 这行字此前写的是「顺手存进下载目录」，读起来像一种缓存优化，
             // 但它的实际后果是每翻一本都进下载列表、占用永久空间、不受缓存
             // 上限约束。开关的名字和说明都要把这件事讲清楚。
-            Text("每看过一页就存进下载目录，画廊会出现在下载列表里，"
-                 + "占用的是永久空间，不受下面的阅读缓存上限约束。"
-                 + "只想省流量的话不需要开——阅读缓存已经会自动复用看过的图。")
+            Text("已读图片写入下载目录，画廊列入下载列表。所占空间不受阅读缓存上限限制。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -954,8 +947,7 @@ struct SettingsView: View {
                 Text("640 MB").tag(640)
             }
 
-            Text("看过的图片会存进阅读缓存，同一本再看不必重新下载。"
-                 + "超出上限时自动淘汰最旧的，系统空间紧张时也会整体回收。")
+            Text("再次阅读时复用缓存。超出上限时优先清除最旧图片；系统存储不足时可清除缓存。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -999,8 +991,7 @@ struct SettingsView: View {
                 get: { AppSettings.shared.enableSecureScreen },
                 set: { AppSettings.shared.enableSecureScreen = $0 }
             ))
-            Text("离开 App 时立刻盖住界面，这样 App 切换器里的预览图不会露出正在看的内容。"
-                 + "iOS 不允许 App 禁止截屏，所以这一项挡不住主动截屏。")
+            Text("隐藏应用切换器中的内容预览，不阻止截屏。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1105,14 +1096,14 @@ struct SettingsView: View {
                 message = "没有可恢复的设置，未更改现有设置。"
             }
             if report.skippedObsoleteMediaScan {
-                message += "\n已跳过旧版媒体扫描设置，Apple 端没有对应功能。"
+                message += "\n已跳过 Apple 端不支持的媒体扫描设置。"
             }
             if report.skippedUnknownCount > 0 {
                 message += "\n已跳过 \(report.skippedUnknownCount) 个无法识别的字段。"
             }
             settingsBackupImportMessage = message
         } catch SettingsBackup.RestoreError.invalidValue(_) {
-            settingsBackupImportMessage = "备份里有设置值格式不正确，未更改任何设置。"
+            settingsBackupImportMessage = "备份含无效设置值。现有设置未更改。"
         } catch {
             settingsBackupImportMessage = "无法读取有效的 Apple 设置备份，未更改任何设置。"
         }
@@ -1125,9 +1116,7 @@ struct SettingsView: View {
             // 免责声明（对齐 Android about_settings.xml 的 declaration）。
             // 这条是法律意义上的声明，不是装饰：这个 App 不是 E-Hentai 官方的，
             // 用户该知道自己在用谁做的东西。
-            Text("本应用与 E-Hentai.org 无任何隶属或合作关系，"
-                 + "是基于公开网页接口的第三方客户端。内容全部来自 E-Hentai，"
-                 + "本应用不托管、不生产任何内容。")
+            Text("本应用是基于公开网页接口的第三方客户端，与 E-Hentai.org 无隶属或合作关系。内容来自 E-Hentai，本应用不生产或托管内容。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1258,7 +1247,7 @@ limitations under the License.
                 VStack(alignment: .leading, spacing: 4) {
                     Text("EhViewer_CN_SXJ")
                         .font(.subheadline.bold())
-                    Text("EhViewer 中文分支，本项目参考了其 UI 设计与功能逻辑")
+                    Text("EhViewer 中文分支，为本项目提供界面和功能参考。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1588,11 +1577,6 @@ SOFTWARE.
 @Observable
 class SettingsViewModel {
     var isLoggedIn = false
-    var hasExAccess = false
-    var displayName: String?
-    var userId: String?
-    var avatarURL: URL?
-    var isFetchingProfile = false
     var showLogoutConfirm = false
     var showLogin = false
 
@@ -1649,17 +1633,34 @@ class SettingsViewModel {
     /// 代理三项走 ViewModel 而不是直接读 AppSettings：
     /// AppSettings 的这些属性是 @ObservationIgnored 的，直接在 body 里读，
     /// 改了不会触发重绘——切到「手动 HTTP」之后地址/端口输入框不会出现。
-    var proxyMode: Int = 0 {
-        didSet {
-            AppSettings.shared.proxyMode = proxyMode
-            Task { await EhAPI.shared.applyProxySettings() }
-        }
+    var proxyMode: Int = 0
+    var proxyHost: String = ""
+    var proxyPortText: String = ""
+    private(set) var isApplyingProxy = false
+
+    private var proxyDraft: ProxySettings {
+        let port = Int(proxyPortText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        return ProxySettings(mode: proxyMode, host: proxyHost, port: port)
     }
-    var proxyHost: String = "" {
-        didSet { AppSettings.shared.proxyHost = proxyHost }
+
+    var hasUnappliedProxyChanges: Bool {
+        let applied = AppSettings.shared.appliedProxy
+        return proxyMode != applied.mode || proxyHost != applied.host ||
+            proxyPortText != (applied.port == 0 ? "" : String(applied.port))
     }
-    var proxyPort: Int = 0 {
-        didSet { AppSettings.shared.proxyPort = proxyPort }
+
+    func reloadProxyDraft() {
+        let applied = AppSettings.shared.appliedProxy
+        proxyMode = applied.mode
+        proxyHost = applied.host
+        proxyPortText = applied.port == 0 ? "" : String(applied.port)
+    }
+
+    func applyProxyDraft() async throws {
+        isApplyingProxy = true
+        defer { isApplyingProxy = false }
+        try await EhAPI.shared.applyProxySettings(proxyDraft)
+        reloadProxyDraft()
     }
 
     var domainFronting: Bool = false {
@@ -1756,9 +1757,7 @@ class SettingsViewModel {
         listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
-        proxyMode = AppSettings.shared.proxyMode
-        proxyHost = AppSettings.shared.proxyHost
-        proxyPort = AppSettings.shared.proxyPort
+        reloadProxyDraft()
         domainFronting = AppSettings.shared.domainFronting
         dnsOverHttps = AppSettings.shared.dnsOverHttps
         builtInHosts = AppSettings.shared.builtInHosts
@@ -1775,87 +1774,23 @@ class SettingsViewModel {
     }
 
     func checkLoginState() {
-        let ehCookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
-        isLoggedIn = ehCookies.contains { $0.name == "ipb_member_id" }
-
-        // ExH 访问权限: 只要已登录(有 memberId + passHash)就允许切换到 ExHentai
-        // igneous Cookie 只有首次访问 exhentai.org 后才会被种下
-        // Android 端同样允许已登录用户自由切换站点
-        let exCookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://exhentai.org")!) ?? []
-        let hasIgneous = exCookies.contains { $0.name == "igneous" && !$0.value.isEmpty && $0.value != "mystery" }
-        hasExAccess = isLoggedIn || hasIgneous
-
-        // 加载保存的用户信息
-        displayName = AppSettings.shared.displayName
-        userId = AppSettings.shared.userId
-        if let avatarStr = AppSettings.shared.avatar, let url = URL(string: avatarStr) {
-            avatarURL = url
-        }
-
-        // 如果没有保存 UID，尝试从 Cookie 读取
-        if userId == nil || userId?.isEmpty == true {
-            if let memberId = ehCookies.first(where: { $0.name == "ipb_member_id" })?.value {
-                userId = memberId
-                AppSettings.shared.userId = memberId
-            }
-        }
-
-        // 如果已登录但没有头像/用户名，异步获取
-        if isLoggedIn && (avatarURL == nil || displayName == nil || displayName?.isEmpty == true) {
-            fetchProfileIfNeeded()
-        }
+        let profile = AccountProfileStore.shared
+        profile.synchronize()
+        isLoggedIn = profile.isSignedIn
     }
 
-    /// 异步获取用户资料 (displayName + avatar)
-    func fetchProfileIfNeeded() {
-        guard !isFetchingProfile else { return }
-        isFetchingProfile = true
-        Task {
-            do {
-                let profile = try await EhAPI.shared.getProfile()
-                await MainActor.run {
-                    if let name = profile.displayName, !name.isEmpty {
-                        self.displayName = name
-                        AppSettings.shared.displayName = name
-                    }
-                    if let avatar = profile.avatar, let url = URL(string: avatar) {
-                        self.avatarURL = url
-                        AppSettings.shared.avatar = avatar
-                    }
-                    self.isFetchingProfile = false
-                }
-            } catch {
-                debugLog("[SettingsVM] 获取用户资料失败: \(error)")
-                await MainActor.run {
-                    self.isFetchingProfile = false
-                }
-            }
-        }
-    }
-
-    func logout() {
-        // 走 EhCookieManager.signOut，而不是自己再抄一遍清 Cookie 的逻辑。
-        //
-        // 这里原来是手写的：只删 HTTPCookieStorage 里的 Cookie，不碰钥匙串。
-        // 认证凭据改存钥匙串之后，这等于「注销只在本次运行有效」——
-        // 重启 App，EhCookieManager.init 从钥匙串把凭据恢复回来，用户又登录了。
-        // 借出去的设备上这是实打实的隐私泄漏。
-        // This settings flow clears credentials without changing RootView's AppState.
-        // Invalidate in-flight cloud favorite effects before ending the account session.
+    func logout() async {
         GalleryStatusCache.shared.resetCloudState()
         GalleryCache.shared.clearAccountSnapshots()
-        EhCookieManager.shared.signOut()
-        isLoggedIn = false
-        hasExAccess = false
-        displayName = nil
-        userId = nil
-        avatarURL = nil
+        await EhCookieManager.shared.signOutAndWait()
+        AccountProfileStore.shared.signOut()
         AppSettings.shared.isLogin = false
         AppSettings.shared.displayName = nil
         AppSettings.shared.userId = nil
         AppSettings.shared.avatar = nil
+        checkLoginState()
     }
-    
+
     /// 网络诊断
     func runNetworkDiagnostics() {
         guard !isDiagnosing else { return }
@@ -2192,9 +2127,7 @@ class SettingsViewModel {
         listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
-        proxyMode = AppSettings.shared.proxyMode
-        proxyHost = AppSettings.shared.proxyHost
-        proxyPort = AppSettings.shared.proxyPort
+        reloadProxyDraft()
         domainFronting = AppSettings.shared.domainFronting
         dnsOverHttps = AppSettings.shared.dnsOverHttps
         builtInHosts = AppSettings.shared.builtInHosts

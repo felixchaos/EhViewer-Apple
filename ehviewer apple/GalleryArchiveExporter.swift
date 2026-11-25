@@ -21,31 +21,39 @@ enum GalleryArchiveExporter {
 
         var errorDescription: String? {
             switch self {
-            case .notDownloaded: return "这本还没有下载到本地"
-            case .empty:         return "下载目录里没有图片"
+            case .notDownloaded: return "画廊未下载"
+            case .empty:         return "下载目录无图片"
             case .zipFailed(let m): return "打包失败：\(m)"
             }
         }
     }
 
-    /// 打包指定画廊，返回临时 zip 的位置
-    ///
-    /// - Note: 结果放在临时目录，分享完由系统回收；同一本重复导出会覆盖上一次的文件。
+    /// Retain independent snapshots even when their suggested filenames match.
     static func exportZip(for gallery: GalleryInfo) async throws -> URL {
         guard let dir = await DownloadManager.shared.localGalleryDirectory(gid: gallery.gid) else {
             throw ExportError.notDownloaded
         }
+        return try await exportZip(from: dir, title: gallery.bestTitle)
+    }
 
-        let images = imageCount(in: dir)
-        guard images > 0 else { throw ExportError.empty }
+    static func exportZip(
+        from dir: URL, title: String,
+        stagingRoot: URL = FileManager.default.temporaryDirectory.appendingPathComponent("EhViewerArchiveShare", isDirectory: true)
+    ) async throws -> URL {
+        guard imageCount(in: dir) > 0 else { throw ExportError.empty }
+        try Task.checkCancellation()
 
-        let name = DownloadManager.sanitizeFilename(gallery.bestTitle)
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(name).zip")
-        try? FileManager.default.removeItem(at: destination)
+        let folder = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = DownloadManager.sanitizeFilename(title)
+        let destination = folder.appendingPathComponent("\(name).zip", isDirectory: false)
+        var keepSnapshot = false
+        defer {
+            if !keepSnapshot { try? FileManager.default.removeItem(at: folder) }
+        }
 
         // NSFileCoordinator 的打包是同步阻塞的，挪到后台线程
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var coordinatorError: NSError?
                 var thrown: Error?
@@ -68,10 +76,13 @@ enum GalleryArchiveExporter {
                 } else if let thrown {
                     continuation.resume(throwing: ExportError.zipFailed(thrown.localizedDescription))
                 } else {
-                    continuation.resume(returning: destination)
+                    continuation.resume()
                 }
             }
         }
+        try Task.checkCancellation()
+        keepSnapshot = true
+        return destination
     }
 
     /// 目录里的图片数量 (只数支持的扩展名)

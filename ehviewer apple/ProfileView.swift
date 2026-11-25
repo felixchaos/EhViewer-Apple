@@ -16,7 +16,7 @@ import EhCookie
 import EhSettings
 
 struct ProfileView: View {
-    @State private var profile: ProfileResult?
+    private var profile: AccountProfileStore { .shared }
     @State private var quota: HomeDetail?
     @State private var isLoading = true
     @State private var isResetting = false
@@ -46,52 +46,31 @@ struct ProfileView: View {
 
     // MARK: - 账号
 
-    /// 账号名。取不到昵称时按真实登录状态给话，不要说成未登录。
-    private var displayNameText: String {
-        if let name = profile?.displayName ?? AppSettings.shared.displayName, !name.isEmpty {
-            return name
-        }
-        return EhCookieManager.shared.isSignedIn ? "已登录" : "未登录"
-    }
-
     private var accountSection: some View {
-        Section {
+        Section("账号") {
             HStack(spacing: 14) {
-                avatar
+                LocalAccountAvatar(bytes: profile.avatar, size: 52)
                 VStack(alignment: .leading, spacing: 3) {
-                    // 拿不到昵称不等于没登录。
-                    //
-                    // 昵称只能从 forums.e-hentai.org 取，而论坛在 Cloudflare 的
-                    // JS 挑战后面，纯 URLSession 过不去（实测 403 "Just a moment..."）。
-                    // 这里原本一律回落到「未登录」——用户明明登录着，却被告知
-                    // 没登录，然后去反复排查登录问题。
-                    Text(displayNameText)
+                    Text(profile.displayTitle)
                         .font(.headline)
-                    if let uid = AppSettings.shared.userId, !uid.isEmpty {
-                        Text("UID \(uid)")
+                    if let memberID = profile.memberID {
+                        Text("UID \(memberID)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
-                if isLoading { ProgressView().controlSize(.small) }
+                if case .loading = profile.nameState { ProgressView().controlSize(.small) }
             }
             .padding(.vertical, 4)
+            if let memberID = profile.memberID {
+                LocalAccountAvatarEditor(memberID: memberID)
+                    .id(memberID)
+                if case .failed = profile.nameState {
+                    Button("重试读取用户名") { Task { await profile.refreshName(force: true) } }
+                }
+            }
         }
-    }
-
-    @ViewBuilder
-    private var avatar: some View {
-        let url = profile?.avatar ?? AppSettings.shared.avatar
-        CachedAsyncImage(url: URL(string: url ?? "")) { image in
-            image.resizable().aspectRatio(contentMode: .fill)
-        } placeholder: {
-            Image(systemName: "person.crop.circle.fill")
-                .resizable()
-                .foregroundStyle(.tertiary)
-        }
-        .frame(width: 52, height: 52)
-        .clipShape(Circle())
     }
 
     // MARK: - 图片配额
@@ -173,8 +152,8 @@ struct ProfileView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("当前无配额限制", systemImage: "checkmark.circle")
                         .foregroundStyle(EhColor.success)
-                    Text("你的账号使用基于 IP 的限制，E-Hentai 不提供具体数值。"
-                         + "购买 Bronze Star 或 More Pages 后配额会与账号绑定，这里才会显示用量。")
+                    Text("该账号按 IP 限额。E-Hentai 不提供具体用量。"
+                         + "Bronze Star 或 More Pages 可将配额与账号绑定，并显示用量。")
                         .font(EhFont.caption)
                         .foregroundStyle(EhColor.secondaryLabel)
                 }
@@ -185,7 +164,7 @@ struct ProfileView: View {
         } header: {
             Text("图片配额")
         } footer: {
-            Text("浏览图片会消耗配额，用完会出现 509 错误。配额每天自动恢复，也可以花 GP 立即重置。")
+            Text("浏览图片消耗配额。配额耗尽时返回 509。配额每日恢复，也可消耗 GP 重置。")
         }
     }
 
@@ -196,20 +175,29 @@ struct ProfileView: View {
         errorMessage = nil
         resetResult = nil
 
-        async let profileTask = try? await EhAPI.shared.getProfile()
-        async let quotaTask = try? await EhAPI.shared.getHomeDetail()
-        let (p, q) = await (profileTask, quotaTask)
-
-        profile = p
-        quota = q
-
-        // 顺手把最新头像/昵称写回设置，其它界面共用
-        if let name = p?.displayName, !name.isEmpty { AppSettings.shared.displayName = name }
-        if let avatar = p?.avatar, !avatar.isEmpty { AppSettings.shared.avatar = avatar }
-
-        if p == nil && q == nil {
-            errorMessage = "请求失败，检查网络或登录状态。"
+        profile.synchronize()
+        let member = profile.memberID
+        guard let member else {
+            quota = nil
+            isLoading = false
+            return
         }
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled {
+            await profile.refreshName()
+            isLoading = false
+            return
+        }
+        #endif
+        async let name: Void = profile.refreshName()
+        let result = try? await EhAPI.shared.getHomeDetail()
+        await name
+        guard profile.memberID == member, !Task.isCancelled else {
+            isLoading = false
+            return
+        }
+        quota = result
+        if result == nil { errorMessage = "无法读取图片配额。" }
         isLoading = false
     }
 

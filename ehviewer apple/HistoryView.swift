@@ -12,6 +12,8 @@ import EhDatabase
 import EhSettings
 
 struct HistoryView: View {
+    @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    private let workspaceRoute: TagWorkspaceRoute?
     @State private var vm = HistoryViewModel()
     @State private var searchText = ""
     /// 搜索以按钮形态存在，点开才展开输入框——设计稿的默认状态没有搜索栏
@@ -20,12 +22,14 @@ struct HistoryView: View {
     @State private var resumeItem: ReaderLaunchItem?
     /// 待选收藏夹的画廊（没设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
+    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
 
-    init(isPushed: Bool = false) {
+    init(isPushed: Bool = false, workspaceRoute: TagWorkspaceRoute? = nil) {
         self.isPushed = isPushed
+        self.workspaceRoute = workspaceRoute
     }
 
     var body: some View {
@@ -39,12 +43,12 @@ struct HistoryView: View {
                             GalleryDetailView(gallery: gallery)
                                 .id(gallery.gid)
                         }
-                        #if os(iOS)
+                        .ehWorkspaceGalleryDestination()
                         .ehPushedTagSearchDestination()
-                        #endif
                 }
             }
         }
+        .downloadNetworkPrompt($downloadNetworkConfirmation)
         .task {
             vm.loadHistory()
         }
@@ -75,14 +79,14 @@ struct HistoryView: View {
                     if searchText.isEmpty {
                         EhStateView(kind: .empty(
                             symbol: "clock",
-                            title: "还没有阅读记录",
-                            message: "浏览过的画廊会出现在这里"
+                            title: "无阅读记录",
+                            message: "此处显示已阅读的画廊"
                         ))
                     } else {
                         EhStateView(kind: .empty(
                             symbol: "magnifyingglass",
-                            title: "没有匹配的记录",
-                            message: "换个关键词，或清空搜索看全部历史"
+                            title: "无匹配记录",
+                            message: "更改关键词，或清空搜索以查看全部记录"
                         ))
                     }
                 } else {
@@ -102,6 +106,20 @@ struct HistoryView: View {
     }
 
     private var filteredRecords: [HistoryRecord] {
+        if let workspaceRoute {
+            let candidates = vm.records.map { record -> GalleryInfo in
+                var gallery = record.toGalleryInfo()
+                if let detail = GalleryCache.shared.getDetail(gid: gallery.gid), !detail.tags.isEmpty {
+                    gallery.simpleTags = detail.tags.flatMap { group in
+                        group.tags.map { "\(group.groupName):\($0)" }
+                    }
+                }
+                return gallery
+            }
+            let route = workspaceRoute.retargeted(to: .history, candidates: candidates)
+            let gids = Set(route.localList(extra: searchText, filters: route.origin.filters).galleries.map(\.gid))
+            return vm.records.filter { gids.contains($0.gid) }
+        }
         if searchText.isEmpty {
             return vm.records
         }
@@ -176,14 +194,30 @@ struct HistoryView: View {
         #endif
     }
 
+    private var historyTagOrigin: TagWorkspaceOrigin {
+        .init(scope: .history, query: workspaceRoute?.origin.query ?? searchText,
+              candidates: filteredRecords.map { $0.toGalleryInfo() })
+    }
+
     @ViewBuilder
     private func historyRows(_ records: [HistoryRecord]) -> some View {
+        // One frozen source per rendered group, not a fresh full history
+        // projection for each row in the group.
+        let origin = historyTagOrigin
+        let route = workspaceRoute?.retargeted(to: .history, candidates: origin.candidates)
+        let filters = route?.origin.filters ?? .init()
+        let tagTap: ((String) -> Void)? = workspaceNavigation.map { navigation in
+            { tag in
+                navigation.open(route?.descending(into: tag, extra: searchText, filters: filters)
+                                ?? origin.selecting(tag))
+            }
+        }
         Group {
             ForEach(records, id: \.gid) { record in
                 if OfflineGallery.isImported(gid: record.gid, token: record.token) {
                     Button { resumeReading(record) } label: {
                         EhGalleryRow(gallery: record.toGalleryInfo(),
-                                     subtitleOverride: "本地图片 · \(formattedTime(record.date))")
+                                     subtitleOverride: "本地图片 · \(formattedTime(record.date))", onTagTap: tagTap)
                     }
                     .buttonStyle(.plain)
                     .overlay(alignment: .bottom) { EhHairline() }
@@ -197,7 +231,9 @@ struct HistoryView: View {
                 } else {
                     // 零透明链接垫底，避免 List 给 NavigationLink 自动补 disclosure 箭头
                     ZStack {
-                        NavigationLink(value: record.toGalleryInfo()) { EmptyView() }
+                        NavigationLink(value: WorkspaceGalleryDestination(
+                            gallery: record.toGalleryInfo(), origin: origin, route: route, extra: searchText, filters: filters
+                        )) { EmptyView() }
                             .opacity(0)
 
                         EhGalleryRow(
@@ -211,14 +247,18 @@ struct HistoryView: View {
                                 EhRowActionButton(symbol: "play.fill") {
                                     resumeReading(record)
                                 }
-                            )
+                            ),
+                            onTagTap: tagTap
                         )
                     }
                     .overlay(alignment: .bottom) { EhHairline() }
                     .contextMenu {
                         // 对齐 Android HistoryScene 长按菜单
                         Button {
-                            Task { await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo()) }
+                            let gallery = record.toGalleryInfo()
+                            DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
+                                Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+                            }
                         } label: {
                             Label("下载", systemImage: "arrow.down.circle")
                         }

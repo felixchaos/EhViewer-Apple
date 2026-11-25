@@ -1,6 +1,6 @@
 /// Presentation of existing reader controls. Recognition stays in the reader views.
 struct ReaderGestureGuidance {
-    enum Input { case touch, pointer }
+    enum Input: Equatable { case touch, pointer }
 
     let direction: ReadingDirection
 
@@ -14,7 +14,9 @@ struct ReaderGestureGuidance {
 
     var leftPageTitle: String { direction == .rightToLeft ? "下一页" : "上一页" }
     var rightPageTitle: String { direction == .rightToLeft ? "上一页" : "下一页" }
-    var showsDoubleTapZoom: Bool { direction != .topToBottom }
+    func showsDoubleTapZoom(for input: Input) -> Bool {
+        direction != .topToBottom || input == .touch
+    }
 
     func motionTitle(for input: Input) -> String {
         if direction == .topToBottom { return "上下滚动阅读" }

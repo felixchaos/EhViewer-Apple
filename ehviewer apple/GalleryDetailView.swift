@@ -45,8 +45,61 @@ extension EnvironmentValues {
     }
 }
 
+struct TagWorkspaceNavigation {
+    let open: (TagWorkspaceRoute) -> Void
+}
+
+private struct TagWorkspaceNavigationKey: EnvironmentKey {
+    static let defaultValue: TagWorkspaceNavigation? = nil
+}
+
+private struct WorkspaceIsActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var ehTagWorkspaceNavigation: TagWorkspaceNavigation? {
+        get { self[TagWorkspaceNavigationKey.self] }
+        set { self[TagWorkspaceNavigationKey.self] = newValue }
+    }
+
+    var ehWorkspaceIsActive: Bool {
+        get { self[WorkspaceIsActiveKey.self] }
+        set { self[WorkspaceIsActiveKey.self] = newValue }
+    }
+}
+
+/// Carries provenance from a row into its detail without making it depend on
+/// a different tab's current selection or on a globally published query.
+struct WorkspaceGalleryDestination: Hashable {
+    let gallery: GalleryInfo
+    let origin: TagWorkspaceOrigin
+    var route: TagWorkspaceRoute? = nil
+    var extra: String = ""
+    var filters = GalleryListRequest.Filters()
+
+    @MainActor func view() -> some View {
+        GalleryDetailView(gallery: gallery, tagOrigin: origin, tagRoute: route,
+                          tagExtra: extra, tagFilters: filters)
+            .id(gallery.gid)
+    }
+}
+
+extension View {
+    func ehWorkspaceGalleryDestination() -> some View {
+        navigationDestination(for: WorkspaceGalleryDestination.self) { $0.view() }
+    }
+}
+
 struct GalleryDetailView: View {
     let gallery: GalleryInfo
+    var tagOrigin: TagWorkspaceOrigin = .browse
+    var tagRoute: TagWorkspaceRoute? = nil
+    var tagExtra: String = ""
+    var tagFilters = GalleryListRequest.Filters()
+
+    @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    @Environment(\.ehWorkspaceIsActive) private var workspaceIsActive
 
     @State private var vm = GalleryDetailViewModel()
     @State private var showAllTags = false
@@ -57,7 +110,7 @@ struct GalleryDetailView: View {
     /// 归档与种子合并后的资源入口 sheet
     @State private var showResourceSheet = false
     @State private var showTorrents = false
-    @State private var showCellularWarning = false
+    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
     @State private var removalPrompt: DownloadRemovalPrompt?
 
     private struct DownloadRemovalPrompt {
@@ -187,9 +240,11 @@ struct GalleryDetailView: View {
         }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: .downloadGallery)) { _ in
-            Task { await vm.startDownload(gallery: gallery) }
+            guard workspaceIsActive else { return }
+            requestDownload()
         }
         .onReceive(NotificationCenter.default.publisher(for: .favoriteGallery)) { _ in
+            guard workspaceIsActive else { return }
             if vm.isFavorited {
                 Task { await vm.removeFavorite(gid: gallery.gid, token: gallery.token) }
             } else {
@@ -213,19 +268,7 @@ struct GalleryDetailView: View {
             )
             .presentationDetents([.height(200)])
         }
-        .confirmationDialog(
-            "当前是移动网络",
-            isPresented: $showCellularWarning,
-            titleVisibility: .visible
-        ) {
-            Button("仍然下载") {
-                Haptics.impact()
-                Task { await vm.startDownload(gallery: gallery) }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这本共 \(vm.detail?.info.pages ?? gallery.pages) 页，下载会消耗蜂窝数据。可以在设置里关掉这个提醒。")
-        }
+        .downloadNetworkPrompt($downloadNetworkConfirmation)
         .sheet(isPresented: $showResourceSheet) { resourceSheet }
         .alert("移除离线文件？", isPresented: Binding(
             get: { removalPrompt != nil },
@@ -241,7 +284,7 @@ struct GalleryDetailView: View {
                 }
             }
         } message: { _ in
-            Text("只移除这本画廊的离线下载，不会取消收藏或清除阅读进度。")
+            Text("仅删除离线下载。收藏和阅读进度不变。")
         }
         .sheet(isPresented: $showArchive) {
             if let archiveUrl = vm.detail?.archiveUrl, !archiveUrl.isEmpty {
@@ -405,7 +448,7 @@ struct GalleryDetailView: View {
                     resourceEntry(
                         symbol: "archivebox",
                         title: "归档 / H@H",
-                        subtitle: "消耗图片配额",
+                        subtitle: "查看下载规格和要求",
                         tint: EhColor.warning
                     ) {
                         showResourceSheet = false
@@ -413,7 +456,7 @@ struct GalleryDetailView: View {
                     }
                 }
 
-                Text("种子由其他用户做种，不消耗你的图片配额，但可用性取决于是否有人在线；归档与 H@H 派发由官方提供，稳定但会按图片数量扣除配额。")
+                Text("种子可用性取决于做种状态，不消耗图片配额。归档费用和 H@H 要求以下载页面为准。")
                     .font(EhFont.caption)
                     .foregroundStyle(EhColor.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)
@@ -552,6 +595,14 @@ struct GalleryDetailView: View {
         }
     }
 
+    private func requestDownload() {
+        guard [.enqueue, .resume, .retry].contains(vm.downloadAction) else { return }
+        DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
+            Haptics.impact()
+            Task { await vm.startDownload(gallery: gallery) }
+        }
+    }
+
     @ViewBuilder
     private var detailDownloadControl: some View {
         let action = vm.downloadAction
@@ -579,13 +630,7 @@ struct GalleryDetailView: View {
             .accessibilityIdentifier("gallery-detail-download")
         } else {
             EhSquareIconButton(symbol: action.detailSymbol) {
-                guard [.enqueue, .resume, .retry].contains(vm.downloadAction) else { return }
-                if GalleryActionService.shared.shouldWarnAboutCellular {
-                    showCellularWarning = true
-                } else {
-                    Haptics.impact()
-                    Task { await vm.startDownload(gallery: gallery) }
-                }
+                requestDownload()
             }
             .disabled(!action.isActionable)
             .accessibilityLabel(Text(action.detailLabel))
@@ -666,7 +711,7 @@ struct GalleryDetailView: View {
             
             // 调试信息：提示用户下载标签数据库
             if showTranslations && !tagDb.isLoaded {
-                Text("请在设置中更新标签翻译数据库")
+                Text("在设置中更新标签翻译数据库。")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.horizontal)
@@ -679,7 +724,21 @@ struct GalleryDetailView: View {
     @ViewBuilder
     private func tagButton(label: String, fullTag: String) -> some View {
         Group {
-            if let tagNav = tagNavigationAction {
+            if let workspaceNavigation {
+                Button {
+                    var source = tagOrigin.withGallery(gallery, tagGroups: vm.tags)
+                    if var route = tagRoute {
+                        source = route.origin.withGallery(gallery, tagGroups: vm.tags)
+                        route = TagWorkspaceRoute(origin: source, tags: route.tags)
+                        workspaceNavigation.open(route.descending(into: fullTag, extra: tagExtra, filters: tagFilters))
+                    } else {
+                        workspaceNavigation.open(source.selecting(fullTag))
+                    }
+                } label: {
+                    tagLabel(label)
+                }
+                .buttonStyle(.plain)
+            } else if let tagNav = tagNavigationAction {
                 // iPad/macOS Split 布局: 用 Button 推入左侧 content/sidebar 列的 NavigationStack
                 Button {
                     tagNav.navigate(fullTag)
@@ -1587,7 +1646,7 @@ struct FavoriteSlotPicker: View {
                         Toggle("记住这个收藏夹，下次不再询问", isOn: $remember)
                             .tint(EhColor.accentFill)
                     } footer: {
-                        Text("之后收藏会直接放进所选收藏夹。可在「我的」页的设置区打开「收藏」，改回「每次询问」。")
+                        Text("后续收藏将加入所选收藏夹。可在「我的 → 设置 → 收藏」恢复「每次询问」。")
                     }
                 }
             }

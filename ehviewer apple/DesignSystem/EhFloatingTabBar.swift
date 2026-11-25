@@ -122,6 +122,8 @@ struct EhFloatingTabBar<Tab: Hashable>: View {
         .ehGlass(cornerRadius: EhSize.tabBarRadius)
         .padding(.horizontal, EhSize.tabBarSideInset)
         .padding(.bottom, EhSize.tabBarBottomInset)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("workspace-floating-tabs")
     }
 }
 

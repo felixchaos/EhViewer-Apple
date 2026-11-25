@@ -25,6 +25,7 @@ struct ProfileHomeView: View {
     @State private var isLoadingQuota = false
     @State private var showLogin = false
     private var updateChecker: AppUpdateChecker { .shared }
+    private var profile: AccountProfileStore { .shared }
 
     var body: some View {
         NavigationStack {
@@ -60,11 +61,19 @@ struct ProfileHomeView: View {
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery).id(gallery.gid)
             }
+            .onChange(of: profile.memberID) { _, member in
+                if member != nil { showLogin = false }
+                quota = nil
+            }
             .sheet(isPresented: $showLogin) {
                 LoginView()
                     .environment(appState)
             }
+            .task(id: profile.memberID) {
+                await profile.refreshName()
+            }
             .task {
+                profile.synchronize()
                 await loadSummary()
                 #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
                 if EhOfflineUIFixture.enabled { return }
@@ -80,15 +89,10 @@ struct ProfileHomeView: View {
     private var accountCard: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                // 头像用昵称首字母，避免为一个装饰性元素引入一次网络请求
-                Text(initial)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(EhColor.accent)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(EhColor.fill))
+                LocalAccountAvatar(bytes: profile.avatar, size: 44)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(displayName)
+                    Text(profile.displayTitle)
                         .font(EhFont.title)
                         .foregroundStyle(EhColor.label)
                     Text(siteStatusText)
@@ -100,7 +104,7 @@ struct ProfileHomeView: View {
 
                 // 未登录（含访客）时这里必须是「登录」并真的能进登录页——
                 // 此前不论登录与否都指向账号资料页，访客点进去是一片空白
-                if appState.isSignedIn {
+                if profile.isSignedIn {
                     NavigationLink(value: ProfileRoute.account) {
                         capsuleLabel("账号", filled: false)
                     }
@@ -278,21 +282,8 @@ struct ProfileHomeView: View {
             }
     }
 
-    private var displayName: String {
-        if appState.isSignedIn {
-            return AppSettings.shared.displayName ?? "已登录"
-        }
-        return appState.isGuest ? "访客" : "未登录"
-    }
-
-    private var initial: String {
-        String(displayName.prefix(1)).uppercased()
-    }
-
     private var siteStatusText: String {
-        let site = AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
-        if appState.isSignedIn { return "\(site) · 已登录" }
-        return "\(site) · 可本地收藏，登录后使用云端收藏与配额"
+        AppSettings.shared.gallerySite == .exHentai ? "ExHentai" : "E-Hentai"
     }
 
     private var quotaValueText: String {
@@ -312,10 +303,12 @@ struct ProfileHomeView: View {
 
     private func loadSummary() async {
         // 配额只在已登录时有意义，未登录请求会白跑一次网络
-        if appState.isSignedIn {
-            isLoadingQuota = true
-            quota = try? await EhAPI.shared.getHomeDetail()
-            isLoadingQuota = false
+        if let member = profile.memberID {
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            if !EhOfflineUIFixture.enabled { await loadQuota(for: member) }
+            #else
+            await loadQuota(for: member)
+            #endif
         }
         // 目录遍历是同步 IO，放到后台线程，别卡住这一屏的首次渲染
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -327,6 +320,13 @@ struct ProfileHomeView: View {
         }.value
         cacheBytes = sizes.cache
         downloadBytes = sizes.downloads
+    }
+
+    private func loadQuota(for member: String) async {
+        isLoadingQuota = true
+        defer { isLoadingQuota = false }
+        let result = try? await EhAPI.shared.getHomeDetail()
+        if !Task.isCancelled, profile.memberID == member { quota = result }
     }
 
     private static func directorySize(_ url: URL?) -> Int64 {

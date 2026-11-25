@@ -52,16 +52,16 @@ struct AndroidLibraryImportControl: View {
             NavigationStack {
                 Form {
                     Section {
-                        Text("只导入安卓端本地收藏和阅读历史，不覆盖 Apple 端已有记录。不导入书签、下载文件或账号资料。")
+                        Text("仅导入安卓本地收藏和阅读历史。不覆盖已有记录，不导入书签、下载文件或账号资料。")
                     }
                     Section("导入预览") {
                         LabeledContent("本地收藏", value: Self.describe(candidate.summary.favorites))
                         LabeledContent("阅读历史", value: Self.describe(candidate.summary.history))
                         if candidate.summary.history.overHistoryLimit > 0 {
-                            Text("有 \(candidate.summary.history.overHistoryLimit) 条历史超出当前上限（\(candidate.historyLimit) 条），本次不会导入。可先在高级设置调高上限。")
+                            Text("\(candidate.summary.history.overHistoryLimit) 条记录超出上限（\(candidate.historyLimit) 条），本次跳过。可在高级设置调整上限。")
                                 .foregroundStyle(.secondary)
                         }
-                        Text("导入不会清理已有历史；之后正常阅读仍遵循历史记录上限。")
+                        Text("导入不清除已有历史。之后新增记录仍受上限限制。")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -130,7 +130,7 @@ struct AndroidLibraryImportControl: View {
                 if summary.history.new > 0 {
                     NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
                 }
-                outcomeTitle = summary.importableCount > 0 ? "导入完成" : "没有新增记录"
+                outcomeTitle = summary.importableCount > 0 ? "导入完成" : "无新增记录"
                 outcomeBody = "本地收藏：\(Self.describe(summary.favorites))\n阅读历史：\(Self.describe(summary.history))"
                 if summary.history.overHistoryLimit > 0 {
                     outcomeBody += "\n另有 \(summary.history.overHistoryLimit) 条历史超出上限，未导入。"

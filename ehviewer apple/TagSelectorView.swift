@@ -34,8 +34,8 @@ struct TagSelectorView: View {
                 if namespaces.isEmpty {
                     EhStateView(kind: .empty(
                         symbol: "tag.slash",
-                        title: "标签数据库还没下载",
-                        message: "到「设置 → 更新标签翻译数据库」下载后即可使用。"
+                        title: "标签数据库未下载",
+                        message: "在「设置 → 更新标签翻译数据库」下载。"
                     ))
                 } else {
                     namespacePicker
@@ -129,7 +129,7 @@ struct TagSelectorView: View {
     private var tagGrid: some View {
         ScrollView {
             if tags.isEmpty {
-                Text(filter.isEmpty ? "这一组暂时没有标签" : "没有匹配的标签")
+                Text(filter.isEmpty ? "本组无标签" : "无匹配标签")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)

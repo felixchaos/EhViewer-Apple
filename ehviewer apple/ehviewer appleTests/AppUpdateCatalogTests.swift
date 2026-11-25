@@ -65,7 +65,8 @@ struct AppUpdateCatalogTests {
         #expect(lower.version == "1.3.8")
         #expect(higher.version == "1.3.10")
         #expect(higher.downloadURL.pathExtension == "ipa")
-        #expect(AppUpdatePlatform.iOS.installationHint.contains("自行重签"))
+        #expect(AppUpdatePlatform.iOS.installationHint.contains("IPA"))
+        #expect(AppUpdatePlatform.iOS.installationHint.contains("重新签名"))
         #expect(!AppUpdatePlatform.macOS.installationHint.contains("SideStore"))
     }
 

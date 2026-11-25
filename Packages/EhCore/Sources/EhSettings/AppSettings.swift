@@ -664,35 +664,26 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "secure_screen") }
     }
 
-    // MARK: - 代理 (对齐 Android Settings.getProxyType/Ip/Port)
-
-    /// 代理模式：0 = 跟随系统，1 = 手动 HTTP 代理。
-    ///
-    /// Android 的代理设置还支持 SOCKS，iOS 这边只做 HTTP(S)：
-    /// URLSession 的 connectionProxyDictionary 只有 HTTP/HTTPS 那组键是
-    /// 受支持的，SOCKS 相关键属于 CFStream 时代的遗留，对 URLSession 不生效。
-    /// 与其做一个点了没用的 SOCKS 选项，不如不给。
-    @ObservationIgnored
-    public var proxyMode: Int {
-        get { _defaults.integer(forKey: "proxy_mode") }
-        set { _defaults.set(newValue, forKey: "proxy_mode") }
-    }
+    // MARK: - 代理
 
     @ObservationIgnored
-    public var proxyHost: String {
-        get { _defaults.string(forKey: "proxy_host") ?? "" }
-        set { _defaults.set(newValue, forKey: "proxy_host") }
+    public var appliedProxy: ProxySettings {
+        // Older installations stored three independent fields. Until the
+        // first explicit Apply, keep their previous effective configuration.
+        if let saved = _defaults.dictionary(forKey: "applied_proxy") {
+            return ProxySettings(mode: saved["mode"] as? Int ?? 0,
+                                 host: saved["host"] as? String ?? "",
+                                 port: saved["port"] as? Int ?? 0)
+        }
+        return ProxySettings(mode: _defaults.integer(forKey: "proxy_mode"),
+                             host: _defaults.string(forKey: "proxy_host") ?? "",
+                             port: _defaults.integer(forKey: "proxy_port"))
     }
 
-    @ObservationIgnored
-    public var proxyPort: Int {
-        get { _defaults.integer(forKey: "proxy_port") }
-        set { _defaults.set(newValue, forKey: "proxy_port") }
-    }
-
-    /// 手动代理是否配置完整。不完整就当没配，绝不能半配着把网络搞挂。
-    public var manualProxyIsUsable: Bool {
-        proxyMode == 1 && !proxyHost.isEmpty && proxyPort > 0 && proxyPort <= 65535
+    public func applyProxy(_ draft: ProxySettings) throws {
+        let settings = try draft.validated()
+        _defaults.set(["mode": settings.mode, "host": settings.host, "port": settings.port],
+                      forKey: "applied_proxy")
     }
 
     // media_scan 与 apply_nav_bar_theme_color 两项已移除：

@@ -12,6 +12,9 @@ import EhDatabase
 import EhDownload
 
 struct FavoritesView: View {
+    @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    private let workspaceRoute: TagWorkspaceRoute?
+    private var selectedOrigin: ((WorkspaceGalleryDestination) -> Void)?
     /// selectedSlot: -2 = 本地收藏, -1 = 全部, 0-9 = 云收藏夹
     /// 当前收藏夹。-2 本地 / -1 全部 / 0–9 云端收藏夹。
     ///
@@ -42,17 +45,23 @@ struct FavoritesView: View {
     @State private var showMoveSheet = false
     @State private var showDeleteConfirm = false
     @State private var isBatchProcessing = false
+    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
 
     /// 外部选择绑定（嵌入模式）
     private var externalSelection: Binding<GalleryInfo?>?
     private var isEmbedded: Bool { externalSelection != nil }
 
-    init() {
-        self.externalSelection = nil
-    }
-
-    init(selection: Binding<GalleryInfo?>) {
+    init(workspaceRoute: TagWorkspaceRoute? = nil, selection: Binding<GalleryInfo?>? = nil,
+         selectedOrigin: ((WorkspaceGalleryDestination) -> Void)? = nil) {
+        self.workspaceRoute = workspaceRoute
         self.externalSelection = selection
+        self.selectedOrigin = selectedOrigin
+        if let workspaceRoute {
+            switch workspaceRoute.origin.scope {
+            case .localFavorites: _selectedSlot = State(initialValue: -2)
+            default: _selectedSlot = State(initialValue: workspaceRoute.origin.cloudSlot ?? -1)
+            }
+        }
     }
 
     private var favoriteNames: [String] {
@@ -60,6 +69,10 @@ struct FavoritesView: View {
     }
 
     var body: some View {
+        favoritesContent.downloadNetworkPrompt($downloadNetworkConfirmation)
+    }
+
+    @ViewBuilder private var favoritesContent: some View {
         if isEmbedded {
             VStack(spacing: 0) {
                 slotPicker
@@ -70,7 +83,7 @@ struct FavoritesView: View {
                     // "全部": 合并本地收藏 + 在线收藏 (对齐 Android: 全部包含所有来源)
                     allFavoritesContent(embedded: true)
                 } else {
-                    GalleryListView(mode: .favorites(slot: selectedSlot), selection: externalSelection!, searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true)
+                    cloudFavoritesList(slot: selectedSlot)
                         .id(selectedSlot)
                 }
             }
@@ -91,16 +104,17 @@ struct FavoritesView: View {
                         subtitle: selectedSlot >= 0 ? syncStatusText : nil
                     ) {
                         EhSearchToggleButton(isActive: $isSearching)
-                        if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty {
+                        if (selectedSlot == -2 || selectedSlot == -1) && !localFavorites.isEmpty && !isSelectMode {
                             localBatchToolbar
                         }
                         // 云端收藏夹的批量操作（对齐 Android FavoritesScene 的
                         // 长按多选 + 次级 FAB：批量下载 / 移出收藏 / 换收藏夹）。
                         // 此前只有本地收藏有批量操作，云端收藏夹连多选都没有。
-                        if selectedSlot >= 0 {
+                        if selectedSlot >= 0 && !isCloudSelecting {
                             cloudBatchToolbar
                         }
                     }
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("favorites-page-header")
 
                     slotPicker
@@ -111,23 +125,25 @@ struct FavoritesView: View {
                         // "全部": 合并本地收藏 + 在线收藏
                         allFavoritesContent(embedded: false)
                     } else {
-                        GalleryListView(
-                            mode: .favorites(slot: selectedSlot),
-                            searchKeyword: searchText.isEmpty ? nil : searchText,
-                            hidesOwnSearchBar: true,
-                            embeddedFavorites: true,
-                            isSelecting: $isCloudSelecting,
-                            selectedGids: $cloudSelection,
-                            visibleGalleries: $cloudGalleries
-                        )
+                        cloudFavoritesList(slot: selectedSlot)
                         .id(selectedSlot)
                     }
+                    #if os(iOS)
+                    if isSelectMode || isCloudSelecting {
+                        favoriteSelectionBar
+                    }
+                    #endif
                 }
+                #if os(iOS)
+                .ehHidesTabBar(isSelectMode || isCloudSelecting)
+                #endif
+                .ehWorkspaceBatchSelection(isSelectMode || isCloudSelecting)
                 .ehPageSearch(isActive: $isSearching, text: $searchText, placeholder: "搜索收藏")
                 .ehCompactHeader()
                 .navigationDestination(for: GalleryInfo.self) { gallery in
                     GalleryDetailView(gallery: gallery).id(gallery.gid)
                 }
+                .ehWorkspaceGalleryDestination()
                 .navigationDestination(for: TagSearchDestination.self) { destination in
                     GalleryListView(mode: .tag(keyword: destination.tag), isPushed: true)
                 }
@@ -203,18 +219,20 @@ struct FavoritesView: View {
         } label: {
             Image(systemName: isCloudSelecting ? "checkmark.circle.fill" : "ellipsis.circle")
         }
+        .accessibilityIdentifier("cloud-favorite-actions")
     }
 
     /// 批量下载选中的云端收藏
     private func batchDownloadCloud() {
-        let gids = cloudSelection
-        guard !gids.isEmpty else { return }
-        Task {
-            for info in cloudGalleries where gids.contains(info.gid) {
-                await GalleryActionService.shared.startDownload(gallery: info)
+        let selected = cloudGalleries.filter { cloudSelection.contains($0.gid) }
+        DownloadNetworkPrompt.request(galleryCount: selected.count, in: $downloadNetworkConfirmation) {
+            Task {
+                for info in selected {
+                    await GalleryActionService.shared.startDownload(gallery: info)
+                }
+                isCloudSelecting = false
+                cloudSelection.removeAll()
             }
-            isCloudSelecting = false
-            cloudSelection.removeAll()
         }
     }
 
@@ -308,6 +326,7 @@ struct FavoritesView: View {
         } label: {
             Image(systemName: isSelectMode ? "checkmark.circle.fill" : "ellipsis.circle")
         }
+        .accessibilityIdentifier("local-favorite-actions")
         .sheet(isPresented: $showMoveSheet) {
             FavoriteSlotPicker(
                 onSelect: { slot in
@@ -330,7 +349,8 @@ struct FavoritesView: View {
     // MARK: - 本地收藏内容 (对齐 Android FAV_CAT_LOCAL)
 
     private var localFavoritesContent: some View {
-        Group {
+        let origin = localTagOrigin
+        return Group {
             if isLoadingLocal && localFavorites.isEmpty {
                 ProgressView("加载中...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -338,7 +358,7 @@ struct FavoritesView: View {
                 EhStateView(kind: .empty(
                     symbol: "heart.slash",
                     title: "还没有本地收藏",
-                    message: "在画廊详情页点 ♡ 即可加入本地收藏，不需要登录"
+                    message: "可从画廊详情添加本地收藏，无需登录。"
                 ))
             } else {
                 List {
@@ -360,12 +380,7 @@ struct FavoritesView: View {
                             }
                             .buttonStyle(.plain)
                         } else {
-                            NavigationLink {
-                                GalleryDetailView(gallery: record.toGalleryInfo())
-                                    .id(record.gid)
-                            } label: {
-                                localFavoriteRow(record)
-                            }
+                            localFavoriteLink(record, origin: origin)
                         }
                     }
                     .onDelete { indexSet in
@@ -404,6 +419,7 @@ struct FavoritesView: View {
 
     @ViewBuilder
     private func allFavoritesContent(embedded: Bool) -> some View {
+        let origin = localTagOrigin
         VStack(spacing: 0) {
             // 本地收藏区块 (折叠式, 对齐 Android: 全部分类下显示所有来源)
             if !localFavorites.isEmpty {
@@ -424,14 +440,8 @@ struct FavoritesView: View {
                     .padding(.bottom, 8)
 
                     ForEach(localFavorites.prefix(5), id: \.gid) { record in
-                        NavigationLink {
-                            GalleryDetailView(gallery: record.toGalleryInfo())
-                                .id(record.gid)
-                        } label: {
-                            localFavoriteRow(record)
-                                .padding(.horizontal, 16)
-                        }
-                        .buttonStyle(.plain)
+                        localFavoriteLink(record, origin: origin)
+                            .padding(.horizontal, 16)
                         Divider().padding(.leading, 104)
                     }
 
@@ -455,17 +465,7 @@ struct FavoritesView: View {
             // 在线收藏。
             // 已经有本地收藏时不让它再画一次空状态：没登录的用户会在
             // 自己的收藏列表下面永远看到一句「这个收藏夹是空的」。
-            if embedded, let sel = externalSelection {
-                GalleryListView(mode: .favorites(slot: -1), selection: sel,
-                                searchKeyword: searchText.isEmpty ? nil : searchText,
-                                hidesOwnSearchBar: true,
-                                hidesEmptyState: !localFavorites.isEmpty)
-            } else {
-                GalleryListView(mode: .favorites(slot: -1),
-                                searchKeyword: searchText.isEmpty ? nil : searchText,
-                                hidesOwnSearchBar: true,
-                                hidesEmptyState: !localFavorites.isEmpty, embeddedFavorites: true)
-            }
+            cloudFavoritesList(slot: -1)
         }
         .onAppear { loadLocalFavorites() }
         // 在别处加/取消收藏后要跟着变——此前只有 onAppear 会重新读库，
@@ -474,6 +474,98 @@ struct FavoritesView: View {
             loadLocalFavorites()
         }
     }
+
+    @ViewBuilder
+    private func cloudFavoritesList(slot: Int) -> some View {
+        let hiddenEmpty = slot == -1 && !localFavorites.isEmpty
+        let unifiedSource: TagWorkspaceOrigin? = slot == -1 ? localTagOrigin : nil
+        if let workspaceRoute {
+            GalleryListView(workspace: workspaceRoute.retargeted(to: .cloudFavorites(slot)),
+                            selection: externalSelection, selectedOrigin: selectedOrigin,
+                            externalQuery: searchText, embeddedFavorites: !isEmbedded,
+                            hidesEmptyState: hiddenEmpty,
+                            isSelecting: $isCloudSelecting, selectedGids: $cloudSelection,
+                            visibleGalleries: $cloudGalleries, tagOriginOverride: unifiedSource)
+        } else if let sel = externalSelection {
+            GalleryListView(mode: .favorites(slot: slot), selection: sel,
+                            searchKeyword: searchText.isEmpty ? nil : searchText, hidesOwnSearchBar: true,
+                            hidesEmptyState: hiddenEmpty, selectedOrigin: selectedOrigin,
+                            tagOriginOverride: unifiedSource)
+        } else {
+            GalleryListView(mode: .favorites(slot: slot), searchKeyword: searchText.isEmpty ? nil : searchText,
+                            hidesOwnSearchBar: true, hidesEmptyState: hiddenEmpty, embeddedFavorites: true,
+                            isSelecting: $isCloudSelecting, selectedGids: $cloudSelection,
+                            visibleGalleries: $cloudGalleries, tagOriginOverride: unifiedSource)
+        }
+    }
+
+    private var localTagOrigin: TagWorkspaceOrigin {
+        .init(scope: selectedSlot == -1 ? .allFavorites : .localFavorites,
+              query: workspaceRoute?.origin.query ?? searchText,
+              candidates: localFavorites.map { $0.toGalleryInfo() })
+    }
+
+    @ViewBuilder
+    private func localFavoriteLink(_ record: LocalFavoriteRecord, origin: TagWorkspaceOrigin) -> some View {
+        let gallery = record.toGalleryInfo()
+        let route = workspaceRoute?.retargeted(to: origin.scope, candidates: origin.candidates)
+        let filters = route?.origin.filters ?? .init()
+        let destination = WorkspaceGalleryDestination(gallery: gallery, origin: origin,
+                                                      route: route, extra: searchText, filters: filters)
+        let row = EhGalleryRow(gallery: gallery, onTagTap: workspaceNavigation.map { navigation in
+            { tag in
+                navigation.open(route?.descending(into: tag, extra: searchText, filters: filters)
+                                ?? origin.selecting(tag))
+            }
+        })
+        if let externalSelection {
+            row.onTapGesture {
+                selectedOrigin?(destination)
+                externalSelection.wrappedValue = gallery
+            }
+            .accessibilityAction(named: Text("打开画廊")) {
+                selectedOrigin?(destination)
+                externalSelection.wrappedValue = gallery
+            }
+        } else {
+            ZStack {
+                NavigationLink(value: destination) { EmptyView() }
+                    .opacity(0)
+                row
+            }
+        }
+    }
+
+    #if os(iOS)
+    private var favoriteSelectionBar: some View {
+        HStack {
+            Button("完成") {
+                isSelectMode = false
+                isCloudSelecting = false
+                selectedGids.removeAll()
+                cloudSelection.removeAll()
+            }
+            .accessibilityIdentifier("favorites-selection-done")
+            Spacer()
+            if isCloudSelecting {
+                Button("全选") { cloudSelection = Set(cloudGalleries.map(\.gid)) }
+                Spacer()
+                cloudBatchToolbar
+            } else {
+                Button("全选") { selectedGids = Set(localFavorites.map(\.gid)) }
+                Spacer()
+                localBatchToolbar
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: EhSize.tabBarHeight)
+        .ehGlass(cornerRadius: EhSize.tabBarRadius)
+        .padding(.horizontal, EhSize.tabBarSideInset)
+        .padding(.bottom, EhSize.tabBarBottomInset)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("favorites-selection-bar")
+    }
+    #endif
 
     private func localFavoriteRow(_ record: LocalFavoriteRecord) -> some View {
         // 与首页、下载、历史共用同一个入口：字段由组件铺开，
@@ -486,7 +578,21 @@ struct FavoritesView: View {
         Task {
             do {
                 let records: [LocalFavoriteRecord]
-                if searchText.isEmpty {
+                if let workspaceRoute {
+                    let all = try EhDatabase.shared.getAllLocalFavorites()
+                    let items = all.map { record -> GalleryInfo in
+                        var item = record.toGalleryInfo()
+                        if let cached = GalleryCache.shared.getDetail(gid: item.gid), !cached.tags.isEmpty {
+                            item.simpleTags = cached.tags.flatMap { group in
+                                group.tags.map { "\(group.groupName):\($0)" }
+                            }
+                        }
+                        return item
+                    }
+                    let filter = workspaceRoute.retargeted(to: .localFavorites, candidates: items)
+                    let ids = Set(filter.localList(extra: searchText, filters: filter.origin.filters).galleries.map(\.gid))
+                    records = all.filter { ids.contains($0.gid) }
+                } else if searchText.isEmpty {
                     records = try EhDatabase.shared.getAllLocalFavorites()
                 } else {
                     records = try EhDatabase.shared.searchLocalFavorites(query: searchText)
@@ -506,14 +612,16 @@ struct FavoritesView: View {
     // MARK: - 批量操作 (对齐 Android FavoritesScene)
 
     private func batchDownloadSelected() {
-        let selected = localFavorites.filter { selectedGids.contains($0.gid) }
-        Task {
-            for record in selected {
-                await GalleryActionService.shared.startDownload(gallery: record.toGalleryInfo())
+        let selected = localFavorites.filter { selectedGids.contains($0.gid) }.map { $0.toGalleryInfo() }
+        DownloadNetworkPrompt.request(galleryCount: selected.count, in: $downloadNetworkConfirmation) {
+            Task {
+                for gallery in selected {
+                    await GalleryActionService.shared.startDownload(gallery: gallery)
+                }
             }
+            isSelectMode = false
+            selectedGids.removeAll()
         }
-        isSelectMode = false
-        selectedGids.removeAll()
     }
 
     private func batchMoveToCloud(slot: Int) {
@@ -615,6 +723,8 @@ struct FavoritesView: View {
             .background { Capsule().fill(isSelected ? EhColor.accentFill : EhColor.fill) }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("favorites-slot-\(slot)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// 上次同步时间。没同步过就不说「刚刚」——那是错的。

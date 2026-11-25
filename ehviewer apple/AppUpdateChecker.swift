@@ -60,7 +60,7 @@ enum AppUpdatePlatform {
 
     var installationHint: String {
         switch self {
-        case .iOS: "可通过 AltStore / SideStore 更新，或下载 IPA 后自行重签安装。"
+        case .iOS: "可通过 AltStore 或 SideStore 更新，也可下载 IPA 后重新签名安装。"
         case .macOS: "可下载适用于 Mac 的安装包。"
         }
     }

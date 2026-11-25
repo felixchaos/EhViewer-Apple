@@ -31,12 +31,12 @@ struct SelectSiteView: View {
                 }
                 .padding(.bottom, 18)
 
-            Text("欢迎使用 EhViewer")
+            Text("默认站点")
                 .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(EhColor.label)
                 .padding(.bottom, 6)
 
-            Text("先选一个默认站点，之后可以随时切换")
+            Text("可在设置中切换站点")
                 .font(EhFont.caption)
                 .foregroundStyle(EhColor.secondaryLabel)
                 .padding(.bottom, 32)
@@ -51,7 +51,7 @@ struct SelectSiteView: View {
                 siteOption(
                     site: .exHentai,
                     title: "ExHentai",
-                    description: "内容更全，需要账号且账号需具备访问权限",
+                    description: "需要具备访问权限的账号",
                     icon: "globe.badge.chevron.backward"
                 )
             }
@@ -63,7 +63,7 @@ struct SelectSiteView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(EhColor.warning)
-                    Text("账号若不具备 ExHentai 权限，登录后会自动退回 E-Hentai。")
+                    Text("账号无 ExHentai 权限时，登录后使用 E-Hentai。")
                         .font(EhFont.footnote)
                         .foregroundStyle(EhColor.secondaryLabel)
                         .fixedSize(horizontal: false, vertical: true)

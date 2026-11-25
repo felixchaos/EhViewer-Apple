@@ -1540,7 +1540,7 @@ class ReaderViewModel {
 
         if OfflineGallery.isImported(gid: context.gid, token: token) {
             errorPages.insert(index)
-            errorMessages[index] = "找不到本地图片。请确认离线画廊的文件仍在下载库中。"
+            errorMessages[index] = "未找到本地图片。检查下载库中的画廊文件。"
             return
         }
 

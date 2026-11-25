@@ -84,7 +84,7 @@ struct ArchiveDownloadView: View {
             // 访客看到的是两块空壳，得说清楚为什么
             if !AppSettings.shared.isLogin {
                 Section {
-                    Label("归档与 H@H 都需要登录账号后才能使用。", systemImage: "person.crop.circle.badge.exclamationmark")
+                    Label("归档和 H@H 需要登录。", systemImage: "person.crop.circle.badge.exclamationmark")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -93,8 +93,8 @@ struct ArchiveDownloadView: View {
             Section {
                 if resolutions.isEmpty {
                     Text(AppSettings.shared.isLogin
-                         ? "这本没有可用的 H@H 规格"
-                         : "登录后才会列出可选规格")
+                         ? "无可用 H@H 规格"
+                         : "登录后查看可用规格")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(resolutions) { item in
@@ -119,7 +119,7 @@ struct ArchiveDownloadView: View {
             } header: {
                 Text("H@H 下载")
             } footer: {
-                Text("任务会派给你账号下的 H@H 客户端，由它在后台下载，不消耗 GP。需要先在网站上绑定过 H@H 客户端。")
+                Text("H@H 在已绑定的客户端后台下载，不消耗 GP。客户端须在网站绑定。")
             }
 
             if let archiver {
@@ -197,12 +197,12 @@ struct ArchiveDownloadView: View {
             try await EhAPI.shared.downloadArchive(gid: gid, token: token, or: paramOr, res: item.res)
             hathMessage = HathMessage(
                 title: "已派发",
-                body: "「\(item.name)」已经交给你的 H@H 客户端，下载完成后在客户端本地目录查看。"
+                body: "「\(item.name)」已提交至 H@H 客户端。下载完成后可在客户端目录查看。"
             )
         } catch EhError.noHathClient {
             hathMessage = HathMessage(
-                title: "还没有 H@H 客户端",
-                body: "这个功能需要先在 E-Hentai 网站上给账号绑定一个 H@H 客户端。"
+                title: "未绑定 H@H 客户端",
+                body: "须在 E-Hentai 网站绑定 H@H 客户端。"
             )
         } catch {
             hathMessage = HathMessage(title: "派发失败", body: EhError.localizedMessage(for: error))
@@ -222,7 +222,7 @@ struct ArchiveDownloadView: View {
             if let link, !link.isEmpty {
                 readyLink = ReadyLink(url: link, title: kind.title)
             } else {
-                hathMessage = HathMessage(title: "没拿到下载链接", body: "服务端没有返回直链，可能是余额不足。")
+                hathMessage = HathMessage(title: "未取得下载链接", body: "服务器未返回下载链接。")
             }
         } catch {
             hathMessage = HathMessage(title: "请求失败", body: EhError.localizedMessage(for: error))
@@ -299,7 +299,7 @@ private struct ArchiveLinkSheet: View {
                 } header: {
                     Text("下载链接已就绪")
                 } footer: {
-                    Text("链接有时效，尽快下载。用浏览器打开可以直接存进「文件」。")
+                    Text("链接有有效期。可在浏览器下载并存入「文件」。")
                 }
 
                 Section {

@@ -111,7 +111,7 @@ struct ReaderPageShareSheet: UIViewControllerRepresentable {
     static func save(_ export: ReaderPageExport) async {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
-            EhToast.failure("没有相册权限")
+            EhToast.failure("无相册访问权限")
             return
         }
         guard !Task.isCancelled else { return }
@@ -124,7 +124,7 @@ struct ReaderPageShareSheet: UIViewControllerRepresentable {
             }
             EhToast.success("已保存到相册")
         } catch {
-            EhToast.failure("相册无法保存此图片格式，请尝试存储到文件")
+            EhToast.failure("保存到相册失败。可存储到文件。")
         }
     }
 }

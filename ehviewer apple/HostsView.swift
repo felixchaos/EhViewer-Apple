@@ -60,7 +60,7 @@ struct HostsView: View {
         Form {
             Section {
                 if entries.isEmpty {
-                    Text("还没有自定义记录")
+                    Text("无自定义记录")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(entries) { entry in
@@ -89,7 +89,7 @@ struct HostsView: View {
             } header: {
                 Text("自定义记录")
             } footer: {
-                Text("自定义记录优先于内置 IP 表。左滑删除。")
+                Text("自定义记录优先于内置 IP 表。左滑可删除。")
             }
 
             Section {
@@ -130,7 +130,7 @@ struct HostsView: View {
             Button("添加") { add() }
             Button("取消", role: .cancel) { clearDraft() }
         } message: {
-            Text("填一条你确认能连通的 IP。填错会让该域名彻底连不上，删掉即可恢复。")
+            Text("填写可用的 IP 地址。若域名无法连接，删除该记录以恢复默认解析。")
         }
     }
 

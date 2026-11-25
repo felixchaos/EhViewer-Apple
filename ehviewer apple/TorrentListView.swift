@@ -39,9 +39,9 @@ struct TorrentListView: View {
                     }
                 } else if torrents.isEmpty {
                     ContentUnavailableView(
-                        "没有种子",
+                        "无种子",
                         systemImage: "arrow.down.doc",
-                        description: Text("这本画廊还没有人上传种子。")
+                        description: Text("此画廊无已上传的种子。")
                     )
                 } else {
                     List(torrents) { torrent in

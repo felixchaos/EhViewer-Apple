@@ -45,10 +45,9 @@ FALLBACK_MIN_OS = "26.2"
 def min_os_version(ipa_url):
     """从 ipa 内 Payload/*.app/Info.plist 读 MinimumOSVersion。"""
     try:
+        # Published assets are public. Keep API credentials out of the
+        # download request and its redirects to the asset CDN.
         req = urllib.request.Request(ipa_url)
-        token = os.environ.get("GITHUB_TOKEN")
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
         with urllib.request.urlopen(req, timeout=120) as r:
             blob = r.read()
         with zipfile.ZipFile(io.BytesIO(blob)) as z:
@@ -118,9 +117,8 @@ def main():
                 "developerName": "Felix Chaos",
                 "subtitle": "E-Hentai / ExHentai 画廊客户端",
                 "localizedDescription": (
-                    "用 SwiftUI 重写的 E-Hentai / ExHentai 画廊客户端，"
-                    "支持 iPhone、iPad 与 Mac。功能与交互对齐 Android 端的 "
-                    "EhViewer_CN_SXJ。"
+                    "E-Hentai / ExHentai 画廊客户端，支持 iPhone、iPad 与 Mac。"
+                    "支持浏览、搜索、阅读、收藏及下载。"
                 ),
                 "iconURL": (
                     f"https://raw.githubusercontent.com/{REPO}/main/"

@@ -226,7 +226,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
     func on509Error() {
         let content = UNMutableNotificationContent()
         content.title = "下载限制"
-        content.body = "已达到图片浏览限制 (509)，请稍后再试或获取更多配额"
+        content.body = "图片配额已用尽（509）。可稍后重试或增加配额。"
         content.categoryIdentifier = "ERROR_509"
         content.sound = .default
 

@@ -43,10 +43,33 @@ struct BrowseHomeView: View {
     /// The originating list stays mounted while its search results are visible.
     @Binding var route: BrowseHomeRoute
     var onRequestDirectRead: ((GalleryInfo) -> Void)? = nil
+    let workspaceRoute: TagWorkspaceRoute?
     @State private var toplistPeriod = 15
     @State private var search = GalleryBrowseSearch(query: "")
     @State private var replayGeneration = 0
     @State private var visitedOrigins: Set<BrowseSource> = []
+
+    init(route: Binding<BrowseHomeRoute>, workspaceRoute: TagWorkspaceRoute? = nil,
+         onRequestDirectRead: ((GalleryInfo) -> Void)? = nil) {
+        _route = route
+        self.workspaceRoute = workspaceRoute
+        self.onRequestDirectRead = onRequestDirectRead
+        _toplistPeriod = State(initialValue: workspaceRoute?.origin.toplistPeriod ?? 15)
+    }
+
+    private func scopedRoute(for source: BrowseSource) -> TagWorkspaceRoute? {
+        guard let workspaceRoute else { return nil }
+        switch (workspaceRoute.origin.scope, source) {
+        case (.browse, .home), (.watched, .subscription), (.loadedPopular, .popular):
+            return workspaceRoute
+        case (.loadedToplist, .toplist) where workspaceRoute.origin.toplistPeriod ?? 15 == toplistPeriod:
+            return workspaceRoute
+        default:
+            // Explicitly selecting a different source is ordinary navigation
+            // inside this workspace, not an implicit broadening of its seed.
+            return nil
+        }
+    }
 
     private var selection: Binding<BrowseSource> {
         Binding(get: { route.selection }, set: { route.select($0) })
@@ -86,7 +109,12 @@ struct BrowseHomeView: View {
         }
     }
 
+    @ViewBuilder
     private func list(for source: BrowseSource) -> some View {
+        if let workspace = scopedRoute(for: source) {
+            GalleryListView(workspace: workspace, onRequestDirectRead: onRequestDirectRead,
+                            browseSource: selection, toplistPeriod: source == .toplist ? $toplistPeriod : nil)
+        } else {
         GalleryListView(
             mode: source.listMode(toplistPeriod: toplistPeriod, searchQuery: search.query),
             browseSource: selection,
@@ -100,6 +128,7 @@ struct BrowseHomeView: View {
             },
             onRequestDirectRead: onRequestDirectRead
         )
+        }
     }
 
     private func showSearch(_ submitted: GalleryBrowseSearch) {

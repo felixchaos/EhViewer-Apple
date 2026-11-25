@@ -3,7 +3,7 @@ import CoreGraphics
 import XCTest
 
 final class FavoritesOfflineUITests: XCTestCase {
-    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false, clearFinished: Bool = false, downloadSort: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(cloud: String, importID: String? = nil, nativePicker: Bool = false, launchPage: Int? = nil, localReader: Bool = false, historyTag: Bool = false, clearFinished: Bool = false, downloadSort: Bool = false, workspaces: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
@@ -15,6 +15,7 @@ final class FavoritesOfflineUITests: XCTestCase {
         if historyTag { app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1" }
         if clearFinished { app.launchEnvironment["EH_FIXTURE_CLEAR_FINISHED"] = "1" }
         if downloadSort { app.launchEnvironment["EH_FIXTURE_DOWNLOAD_SORT"] = "1" }
+        if workspaces { app.launchEnvironment["EH_FIXTURE_WORKSPACES"] = "1" }
         app.launch()
         return app
     }
@@ -320,12 +321,132 @@ final class FavoritesOfflineUITests: XCTestCase {
         historyItem.tap()
         XCTAssertTrue(tag.waitForExistence(timeout: 8))
         tag.tap()
-        // This result is emitted only for the exact namespaced tag endpoint.
+        // The matching record is in local history, not a remote lookup.
         XCTAssertTrue(result.waitForExistence(timeout: 8))
-        back(app)
+        XCTAssertTrue(app.staticTexts["阅读历史"].firstMatch.isHittable)
+        let workspaceBack = app.buttons["workspace-back"].firstMatch
+        XCTAssertTrue(workspaceBack.waitForExistence(timeout: 8))
+        workspaceBack.tap()
         XCTAssertTrue(tag.waitForExistence(timeout: 8))
         back(app)
         XCTAssertTrue(historyItem.waitForExistence(timeout: 8))
+    }
+
+    @MainActor func testCloudTagWorkspacesKeepScopeAndDoNotMoveTabBar() {
+        let app = launch(cloud: "empty", launchPage: 3, workspaces: true)
+        let slot = app.buttons["favorites-slot-0"].firstMatch
+        XCTAssertTrue(slot.waitForExistence(timeout: 8))
+        slot.tap()
+        let source = app.staticTexts["Workspace cloud origin"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 8))
+        let firstTag = app.buttons["fixture first"].firstMatch
+        XCTAssertTrue(firstTag.waitForExistence(timeout: 8))
+        let tabBar = app.descendants(matching: .any).matching(identifier: "workspace-floating-tabs").firstMatch
+        let compact = tabBar.exists
+        let originalFrame = compact ? tabBar.frame : .zero
+        firstTag.tap()
+        let layer1 = app.staticTexts["Workspace cloud first layer"].firstMatch
+        XCTAssertTrue(layer1.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["favorites-slot-0"].firstMatch.isHittable, "The workspace keeps the native Favorites category controls.")
+        XCTAssertFalse(app.staticTexts["Unexpected global workspace request"].exists)
+        if compact {
+            XCTAssertTrue(tabBar.exists)
+            XCTAssertEqual(tabBar.frame.minX, originalFrame.minX, accuracy: 1)
+            XCTAssertEqual(tabBar.frame.midY, originalFrame.midY, accuracy: 1)
+        }
+        let layer2Tag = app.buttons.matching(NSPredicate(format: "label == %@", "fixture second")).allElementsBoundByIndex.first(where: \.isHittable) ?? app.buttons["fixture second"].firstMatch
+        XCTAssertTrue(layer2Tag.waitForExistence(timeout: 8))
+        layer2Tag.tap()
+        let layer2 = app.staticTexts["Workspace narrowed both tags"].firstMatch
+        XCTAssertTrue(layer2.waitForExistence(timeout: 8))
+        if compact {
+            tab("历史", in: app)
+            XCTAssertTrue(app.staticTexts["阅读历史"].firstMatch.waitForExistence(timeout: 8))
+            tab("收藏", in: app)
+            XCTAssertTrue(layer2.waitForExistence(timeout: 8))
+        }
+        let workspaceBackButtons = app.buttons.matching(identifier: "workspace-back")
+        let workspaceBack = workspaceBackButtons.firstMatch
+        XCTAssertTrue(workspaceBack.waitForExistence(timeout: 8))
+        XCTAssertEqual(workspaceBackButtons.count, 1, "A suspended workspace must not advertise Back in accessibility.")
+        XCTAssertTrue(workspaceBack.isHittable)
+        workspaceBack.tap()
+        XCTAssertTrue(layer1.waitForExistence(timeout: 8))
+        let cursor = app.staticTexts["Workspace retained cursor"].firstMatch
+        if !cursor.exists { app.swipeUp() }
+        XCTAssertTrue(cursor.waitForExistence(timeout: 8))
+        XCTAssertEqual(workspaceBackButtons.count, 1)
+        workspaceBack.tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 8))
+        XCTAssertFalse(workspaceBack.exists)
+        XCTAssertTrue(slot.isSelected)
+    }
+
+    @MainActor func testCloudFavoriteSelectionUsesItsActionsInsteadOfTabSwitching() {
+        let app = launch(cloud: "empty", launchPage: 3, workspaces: true)
+        let slot = app.buttons["favorites-slot-0"].firstMatch
+        XCTAssertTrue(slot.waitForExistence(timeout: 8))
+        slot.tap()
+        let item = app.staticTexts["Workspace cloud origin"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 8))
+        let tabBar = app.descendants(matching: .any).matching(identifier: "workspace-floating-tabs").firstMatch
+        guard tabBar.exists else { return }
+        let actions = app.buttons["cloud-favorite-actions"].firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        let done = app.buttons["favorites-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertTrue(tabBar.waitForNonExistence(timeout: 6))
+        XCTAssertTrue(app.buttons["全选"].firstMatch.isHittable)
+        done.tap()
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
+    }
+
+    @MainActor func testLocalFavoriteSelectionReplacesFloatingNavigation() {
+        let app = launch(cloud: "empty", launchPage: 3, workspaces: true)
+        let slot = app.buttons["favorites-slot--2"].firstMatch
+        XCTAssertTrue(slot.waitForExistence(timeout: 8))
+        slot.tap()
+        XCTAssertTrue(app.staticTexts["Workspace local favorite"].firstMatch.waitForExistence(timeout: 8))
+        let tabBar = app.descendants(matching: .any).matching(identifier: "workspace-floating-tabs").firstMatch
+        guard tabBar.exists else { return }
+        let actions = app.buttons["local-favorite-actions"].firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        let done = app.buttons["favorites-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertTrue(tabBar.waitForNonExistence(timeout: 6))
+        XCTAssertTrue(app.buttons["全选"].firstMatch.isHittable)
+        done.tap()
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
+    }
+
+    @MainActor func testDownloadSelectionReplacesTabsAndDoesNotPauseCompletedItem() {
+        let app = launch(cloud: "empty", launchPage: 4, localReader: true, downloadSort: true)
+        let completed = app.staticTexts["Sort Fixture Zebra"].firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: 8))
+        let tabBar = app.descendants(matching: .any).matching(identifier: "workspace-floating-tabs").firstMatch
+        guard tabBar.exists else { return }
+        let actions = app.buttons["downloads-actions"].firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        let done = app.buttons["downloads-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertTrue(tabBar.waitForNonExistence(timeout: 6))
+        completed.tap()
+        XCTAssertFalse(app.buttons["暂停"].firstMatch.isEnabled)
+        XCTAssertFalse(app.buttons["开始"].firstMatch.isEnabled)
+        done.tap()
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
     }
 
     // Run only on a dedicated offline simulator with no non-fixture downloads.

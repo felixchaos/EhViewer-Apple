@@ -28,6 +28,12 @@ enum EhOfflineUIFixture {
             : (readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001)))),
         token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
+    static let workspaceFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_WORKSPACES"] == "1"
+    static let workspaceA = "artist:fixture first"
+    static let workspaceB = "group:fixture second"
+    static let workspaceCloudGid: Int64 = 900010010120
+    static let workspaceLocalGid: Int64 = 900010010121
+
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
     private static let coldReaderMode = ProcessInfo.processInfo.environment["EH_FIXTURE_DIRECT_COLD"]
@@ -120,7 +126,19 @@ enum EhOfflineUIFixture {
                                                        title: historyGallery.title ?? "", date: Date()))
             GalleryCache.shared.putDetail(.init(info: historyGallery,
                                                  tags: [.init(groupName: "artist", tags: [historyTag])]))
+            var matching = HistoryRecord(gid: historyTagResult.gid, token: historyTagResult.token,
+                                         title: historyTagResult.bestTitle, date: Date().addingTimeInterval(-60))
+            matching.simpleTags = ["a:\(historyTag)"]
+            try? EhDatabase.shared.insertHistory(matching)
             GalleryCache.shared.putDetail(.init(info: historyTagResult))
+        } else {
+            try? EhDatabase.shared.deleteHistory(gid: historyTagResult.gid)
+        }
+        try? EhDatabase.shared.deleteLocalFavorite(gid: workspaceLocalGid)
+        if workspaceFixture {
+            var local = LocalFavoriteRecord(gid: workspaceLocalGid, token: "fixture", title: "Workspace local favorite")
+            local.simpleTags = [workspaceA, workspaceB]
+            try? EhDatabase.shared.insertLocalFavorite(local)
         }
         if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMAGE_FOLDER"],
            UUID(uuidString: identifier) != nil {
@@ -299,6 +317,44 @@ enum EhOfflineUIFixture {
     private static var homeReselectRequests = 0
 
     static func listResponse(_ url: String = "") throws -> GalleryListResult {
+        if workspaceFixture, let components = URLComponents(string: url) {
+            let items = components.queryItems ?? []
+            func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+            let first = "artist:\"fixture first$\""
+            let second = "group:\"fixture second$\""
+            if components.path == "/favorites.php" {
+                guard value("favcat") == "0" else { return GalleryListResult() }
+                if let term = value("f_search") {
+                    guard value("st") == "on", term.contains(first) else {
+                        return GalleryListResult(galleries: [.init(title: "Incorrect favorites request")])
+                    }
+                    if term.contains(second) {
+                        return GalleryListResult(galleries: [
+                            .init(gid: workspaceCloudGid + 10, token: "fixture", title: "Workspace narrowed both tags")
+                        ])
+                    }
+                    if value("next") == "fixture-scope" {
+                        return GalleryListResult(galleries: [
+                            .init(gid: workspaceCloudGid + 2, token: "fixture",
+                                  title: "Workspace retained cursor", simpleTags: [workspaceB])
+                        ])
+                    }
+                    // Intentionally omit slot and tag values from the supplied
+                    // cursor. The workspace must reattach them before use.
+                    return GalleryListResult(galleries: [
+                        .init(gid: workspaceCloudGid + 1, token: "fixture",
+                              title: "Workspace cloud first layer", simpleTags: [workspaceB])
+                    ], pages: -1, nextHref: "https://e-hentai.org/favorites.php?next=fixture-scope")
+                }
+                return GalleryListResult(galleries: [
+                    .init(gid: workspaceCloudGid, token: "fixture",
+                          title: "Workspace cloud origin", simpleTags: [workspaceA, workspaceB], favoriteSlot: 0)
+                ])
+            }
+            if value("f_search")?.contains(first) == true {
+                return GalleryListResult(galleries: [.init(title: "Unexpected global workspace request")])
+            }
+        }
         if url.contains("favorites.php") {
             switch ProcessInfo.processInfo.environment["EH_FIXTURE_CLOUD"] {
             case "one": return GalleryListResult(galleries: [cloud])

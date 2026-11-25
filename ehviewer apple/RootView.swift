@@ -9,6 +9,9 @@ import SwiftUI
 import EhSettings
 import EhAPI
 import EhCookie
+#if os(iOS)
+import EhDownload
+#endif
 
 #if os(iOS)
 import UIKit
@@ -56,9 +59,7 @@ struct RootView: View {
 
             // Restore session cookies before deciding whether this cold launch can sign in.
             EhCookieManager.shared.ensureCredentialsRestored()
-            let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
-            return cookies.contains { $0.name == "ipb_member_id" } &&
-                   cookies.contains { $0.name == "ipb_pass_hash" }
+            return EhCookieManager.shared.isSignedIn
         }
         _flowStep = State(initialValue: step)
         // 同步初始化 appState 登录状态，避免首帧后异步 mutation 导致重渲染
@@ -132,6 +133,9 @@ struct RootView: View {
             guard flowStep == .login else { return }
             flowStep = .main
         }
+        .onReceive(NotificationCenter.default.publisher(for: AccountProfileStore.sessionDidChange)) { _ in
+            appState.checkLoginStatus()
+        }
         .onChange(of: appState.isSignedIn) { _, isSignedIn in
             GalleryStatusCache.shared.resetCloudState()
             GalleryCache.shared.clearAccountSnapshots()
@@ -154,7 +158,7 @@ struct RootView: View {
             }
             Button("保持 E-Hentai", role: .cancel) {}
         } message: {
-            Text("检测到你的账号拥有 ExHentai 访问权限，是否切换到 ExHentai？")
+            Text("账号具备 ExHentai 访问权限。是否切换站点？")
         }
         // Sad Panda / igneous 失效警告 (V-15)
         .onReceive(NotificationCenter.default.publisher(for: .ehSadPandaDetected)) { _ in
@@ -167,7 +171,7 @@ struct RootView: View {
         .alert("磁盘空间不足", isPresented: $showDiskFullAlert) {
             Button("我知道了", role: .cancel) {}
         } message: {
-            Text("磁盘剩余空间不足，所有下载已自动暂停。\n请前往系统设置释放存储空间后，手动恢复下载。")
+            Text("磁盘空间不足，所有下载已暂停。释放空间后手动恢复下载。")
         }
         .alert("ExHentai 访问失效", isPresented: $showSadPandaAlert) {
             Button("重新登录") {
@@ -181,7 +185,7 @@ struct RootView: View {
                 NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
             }
         } message: {
-            Text("igneous Cookie 已失效 (Sad Panda)，已自动清除。\n请重新登录以恢复 ExHentai 访问权限，或切换到 E-Hentai。")
+            Text("已清除失效的 igneous Cookie。重新登录以恢复 ExHentai 访问，或切换至 E-Hentai。")
         }
         // 对齐 Android: 深色模式支持 (Settings.KEY_THEME)
         // 0=跟随系统, 1=浅色, 2=深色  (使用 cachedColorScheme 避免 body 直接读 AppSettings)
@@ -203,6 +207,10 @@ struct RootView: View {
             checkSecurityOnResume()
             // 检查剪贴板中的画廊链接 (对齐 Android MainActivity.onResume)
             checkClipboardForGalleryUrl()
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            guard !EhOfflineUIFixture.enabled else { return }
+            #endif
+            Task { await DownloadManager.shared.recoverForegroundQueue() }
         }
         #elseif os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
@@ -258,7 +266,7 @@ struct RootView: View {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: 64))
                     .foregroundStyle(.secondary)
-                Text("您已拒绝使用条款")
+                Text("未接受使用条款")
                     .font(.title2.bold())
                 Text("请关闭应用。")
                     .foregroundStyle(.secondary)
@@ -295,25 +303,12 @@ struct RootView: View {
 
     /// 登录后异步操作：获取用户资料 + ExH 检测
     private func postLoginActions() async {
-        // 1. 保存 UID
-        if let uid = EhCookieManager.shared.memberId {
-            AppSettings.shared.userId = uid
-        }
+        let account = AccountProfileStore.shared
+        guard let member = account.memberID else { return }
+        await account.refreshName()
+        guard account.memberID == member else { return }
 
-        // 2. 获取用户资料
-        do {
-            let profile = try await EhAPI.shared.getProfile()
-            if let name = profile.displayName {
-                AppSettings.shared.displayName = name
-            }
-            if let avatar = profile.avatar {
-                AppSettings.shared.avatar = avatar
-            }
-        } catch {
-            debugLog("[RootView] 获取用户资料失败: \(error)")
-        }
-
-        // 3. ExH 可达性检测
+        // ExH 可达性检测
         do {
             guard let url = URL(string: "https://exhentai.org/") else { return }
             var request = URLRequest(url: url)
@@ -326,7 +321,8 @@ struct RootView: View {
             let exSession = URLSession(configuration: config)
             let (data, response) = try await exSession.data(for: request)
 
-            if let httpResponse = response as? HTTPURLResponse,
+            if account.memberID == member,
+               let httpResponse = response as? HTTPURLResponse,
                httpResponse.statusCode == 200, data.count >= 1000 {
                 // ExHentai 可访问 — 仅当用户尚未选择 ExHentai 时才提示
                 if AppSettings.shared.gallerySite != .exHentai {
@@ -465,11 +461,8 @@ final class AppState {
     }
 
     func checkLoginStatus() {
-        // 检查 Cookie 是否存在
-        let cookies = HTTPCookieStorage.shared.cookies(for: URL(string: "https://e-hentai.org")!) ?? []
-        let hasMemberId = cookies.contains { $0.name == "ipb_member_id" }
-        let hasPassHash = cookies.contains { $0.name == "ipb_pass_hash" }
-        let newValue = hasMemberId && hasPassHash
+        AccountProfileStore.shared.synchronize()
+        let newValue = AccountProfileStore.shared.isSignedIn
         if newValue != isSignedIn {
             isSignedIn = newValue  // ★ 仅在值变化时写入，避免 withMutation 触发无效重渲染
         }

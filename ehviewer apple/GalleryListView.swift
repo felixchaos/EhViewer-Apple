@@ -22,6 +22,13 @@ struct GalleryListView: View {
     typealias ListMode = GalleryListRequest.Source
 
     @Environment(\.ehBrowseOriginIsCurrent) private var browseOriginIsCurrent
+    @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    @Environment(\.ehWorkspaceIsActive) private var workspaceIsActive
+    @State private var needsSiteRefresh = false
+    private var workspaceRoute: TagWorkspaceRoute?
+    private var tagOriginOverride: TagWorkspaceOrigin?
+    private var workspaceExternalQuery: String?
+    private var selectedOrigin: ((WorkspaceGalleryDestination) -> Void)?
     @State private var viewModel = GalleryListViewModel()
     @State private var showQuickSearch = false
     @State private var showAdvancedSearch = false
@@ -30,6 +37,7 @@ struct GalleryListView: View {
     @State private var selectedQuickSearch: QuickSearchRecord?
     @State private var standalonePreset: GalleryBrowseSearch?
     @State private var selectedGallery: GalleryInfo?
+    @State private var internalSelectedOrigin: WorkspaceGalleryDestination?
     /// 搜索框聚焦态。用 @State 而非 @FocusState：焦点实际由
     /// UISearchTextField 持有，这里只是把它的状态镜像出来供布局使用。
     @State private var isSearchFocused: Bool = false
@@ -87,7 +95,15 @@ struct GalleryListView: View {
     ]
 
     private var selectionBinding: Binding<GalleryInfo?> {
-        externalSelection ?? $selectedGallery
+        let underlying = externalSelection ?? $selectedGallery
+        return Binding(get: { underlying.wrappedValue }, set: { gallery in
+            if let gallery {
+                let destination = galleryDestination(gallery)
+                if let selectedOrigin { selectedOrigin(destination) }
+                else { internalSelectedOrigin = destination }
+            }
+            underlying.wrappedValue = gallery
+        })
     }
 
     #if os(iOS)
@@ -117,7 +133,7 @@ struct GalleryListView: View {
         self.onSearchReplay = onSearchReplay
         self.initialSavedSearch = initialBrowseSearch
         if let initialBrowseSearch, initialBrowseSearch.hasSavedFilters {
-            let state = AdvancedSearchState()
+            var state = AdvancedSearchState()
             state.restoreListFilters(initialBrowseSearch.initialFilters)
             _advancedSearch = State(initialValue: state)
             _viewModel = State(initialValue: GalleryListViewModel(initialFilters: initialBrowseSearch.initialFilters))
@@ -134,9 +150,42 @@ struct GalleryListView: View {
         self.externalSelection = nil
     }
 
-    init(mode: ListMode, selection: Binding<GalleryInfo?>) {
+    init(mode: ListMode, selection: Binding<GalleryInfo?>,
+         selectedOrigin: ((WorkspaceGalleryDestination) -> Void)? = nil) {
         self.mode = mode
         self.externalSelection = selection
+        self.selectedOrigin = selectedOrigin
+    }
+
+    init(workspace route: TagWorkspaceRoute, selection: Binding<GalleryInfo?>? = nil,
+         selectedOrigin: ((WorkspaceGalleryDestination) -> Void)? = nil,
+         onRequestDirectRead: ((GalleryInfo) -> Void)? = nil,
+         externalQuery: String? = nil, embeddedFavorites: Bool = false,
+         hidesEmptyState: Bool = false,
+         isSelecting: Binding<Bool>? = nil, selectedGids: Binding<Set<Int64>>? = nil,
+         visibleGalleries: Binding<[GalleryInfo]>? = nil,
+         browseSource: Binding<BrowseSource>? = nil, toplistPeriod: Binding<Int>? = nil,
+         tagOriginOverride: TagWorkspaceOrigin? = nil) {
+        workspaceRoute = route
+        workspaceExternalQuery = externalQuery
+        self.embeddedFavorites = embeddedFavorites
+        self.hidesOwnSearchBar = externalQuery != nil
+        self.hidesEmptyState = hidesEmptyState
+        self.visibleGalleries = visibleGalleries
+        self.browseSource = browseSource
+        self.toplistPeriod = toplistPeriod
+        self.tagOriginOverride = tagOriginOverride
+        if let isSelecting, let selectedGids { self.selectionBindings = (isSelecting, selectedGids) }
+        externalSelection = selection
+        self.selectedOrigin = selectedOrigin
+        self.onRequestDirectRead = onRequestDirectRead
+        let filters = route.origin.filters
+        mode = route.request(extra: externalQuery ?? "", filters: filters).source
+        var advanced = AdvancedSearchState()
+        advanced.restoreListFilters(filters)
+        _advancedSearch = State(initialValue: advanced)
+        _viewModel = State(initialValue: GalleryListViewModel(initialFilters: filters, workspaceRoute: route,
+                                                           initialSearchText: externalQuery ?? ""))
     }
 
     /// 收藏搜索模式
@@ -144,7 +193,8 @@ struct GalleryListView: View {
          hidesEmptyState: Bool = false, embeddedFavorites: Bool = false,
          isSelecting: Binding<Bool>? = nil,
          selectedGids: Binding<Set<Int64>>? = nil,
-         visibleGalleries: Binding<[GalleryInfo]>? = nil) {
+         visibleGalleries: Binding<[GalleryInfo]>? = nil,
+         tagOriginOverride: TagWorkspaceOrigin? = nil) {
         self.mode = mode
         self.favSearchKeyword = searchKeyword
         self.externalSelection = nil
@@ -152,6 +202,7 @@ struct GalleryListView: View {
         self.hidesEmptyState = hidesEmptyState
         self.embeddedFavorites = embeddedFavorites
         self.visibleGalleries = visibleGalleries
+        self.tagOriginOverride = tagOriginOverride
         if let isSelecting, let selectedGids {
             self.selectionBindings = (isSelecting, selectedGids)
         }
@@ -159,9 +210,13 @@ struct GalleryListView: View {
 
     /// 收藏搜索模式 (嵌入)
     init(mode: ListMode, selection: Binding<GalleryInfo?>, searchKeyword: String?,
-         hidesOwnSearchBar: Bool = false, hidesEmptyState: Bool = false) {
+         hidesOwnSearchBar: Bool = false, hidesEmptyState: Bool = false,
+         selectedOrigin: ((WorkspaceGalleryDestination) -> Void)? = nil,
+         tagOriginOverride: TagWorkspaceOrigin? = nil) {
         self.mode = mode
         self.externalSelection = selection
+        self.selectedOrigin = selectedOrigin
+        self.tagOriginOverride = tagOriginOverride
         self.favSearchKeyword = searchKeyword
         self.hidesOwnSearchBar = hidesOwnSearchBar
         self.hidesEmptyState = hidesEmptyState
@@ -170,6 +225,9 @@ struct GalleryListView: View {
     /// 当前实际运行模式 — 如果搜索框有内容，则为搜索模式
     /// 但收藏夹模式下搜索应保持在收藏夹内 (对齐 Android: 收藏夹搜索只搜收藏内容)
     private var effectiveMode: ListMode {
+        if let workspaceRoute {
+            return workspaceRoute.request(extra: viewModel.searchText, filters: viewModel.appliedFilters).source
+        }
         if let standalonePreset { return .search(keyword: standalonePreset.query) }
         if case .tag = mode {
             return .tagRoute(source: mode, submittedQuery: viewModel.submittedTagRouteQuery)
@@ -227,8 +285,11 @@ struct GalleryListView: View {
                 // Detail 部分需要 NavigationStack 才能支持 navigationDestination
                 NavigationStack {
                     if let gallery = selectedGallery {
-                        GalleryDetailView(gallery: gallery)
-                            .id(gallery.gid)  // 强制在选择变更时重新创建视图，修复封面不刷新问题
+                        if let internalSelectedOrigin, internalSelectedOrigin.gallery.gid == gallery.gid {
+                            internalSelectedOrigin.view()
+                        } else {
+                            GalleryDetailView(gallery: gallery).id(gallery.gid)
+                        }
                     } else {
                         ContentUnavailableView("选择画廊", systemImage: "photo.stack", description: Text("从左侧列表选择一个画廊"))
                     }
@@ -251,12 +312,12 @@ struct GalleryListView: View {
             if !GalleryStatusCache.shared.isLoaded {
                 await GalleryStatusCache.shared.reload()
             }
-            if case .tag(let keyword) = mode, viewModel.submittedTagRouteQuery == nil, viewModel.searchText.isEmpty {
+            if workspaceRoute == nil, case .tag(let keyword) = mode, viewModel.submittedTagRouteQuery == nil, viewModel.searchText.isEmpty {
                 viewModel.searchText = keyword
             }
             // 搜索页刚建好时，把查询摆回输入框——否则搜索页的输入框是空的，
             // 用户看不到自己搜的是什么，也没法在此基础上增删条件
-            if case .search(let keyword) = mode, lastAppliedField == nil, !keyword.isEmpty {
+            if workspaceRoute == nil, case .search(let keyword) = mode, lastAppliedField == nil, !keyword.isEmpty {
                 syncField(from: keyword)
             }
 
@@ -281,15 +342,17 @@ struct GalleryListView: View {
             continueReadingRevision &+= 1
         }
         #endif
+        .onChange(of: workspaceExternalQuery) { _, extra in
+            guard let extra else { return }
+            viewModel.applyQuickSearchSnapshot(GalleryBrowseSearch(query: extra, applying: viewModel.appliedFilters))
+        }
+        .onChange(of: favSearchKeyword) { _, query in
+            guard workspaceRoute == nil, case .favorites = mode else { return }
+            viewModel.favSearchKeyword = query
+            viewModel.reloadFavoriteSearch(mode: mode)
+        }
         .onChange(of: viewModel.galleries) { _, list in
             visibleGalleries?.wrappedValue = list
-        }
-        .onChange(of: showAdvancedSearch) { _, isShowing in
-            if !isShowing, onSearchSubmit == nil, standalonePreset == nil {
-                // 高级搜索面板关闭时，静默保存参数到 ViewModel (不自动触发搜索)
-                // 用户提交搜索或点击搜索按钮时才会使用这些参数
-                viewModel.syncAdvancedSettings(advancedSearch.appliedListFilters)
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .galleryFavoriteChanged)) { notification in
             // 收藏状态同步: 详情页收藏/取消收藏后，列表内对应画廊的收藏标记实时更新，无需刷新
@@ -299,11 +362,50 @@ struct GalleryListView: View {
                 viewModel.applyCloudFavoriteChange(gid: gid, slot: slot, mode: mode)
             }
         }
+        // These actions belong to the list, independent of its layout host.
+        .downloadNetworkPrompt($downloadNetworkConfirmation)
+        .sheet(item: $pendingDownload, onDismiss: {
+            guard let (gallery, label) = labeledDownload else { return }
+            labeledDownload = nil
+            confirmDownload(gallery, label: label)
+        }) { gallery in
+            DownloadLabelPicker(
+                onSelect: { label in
+                    labeledDownload = (gallery, label)
+                    pendingDownload = nil
+                },
+                onCancel: { pendingDownload = nil }
+            )
+        }
+        .sheet(item: $pendingFavorite) { gallery in
+            FavoriteSlotPicker(
+                onSelect: { slot in
+                    pendingFavorite = nil
+                    Task {
+                        if slot == -1 {
+                            GalleryActionService.shared.addLocalFavorite(gallery: gallery)
+                        } else {
+                            try? await GalleryActionService.shared.addFavorite(
+                                gid: gallery.gid, token: gallery.token, slot: slot
+                            )
+                        }
+                    }
+                },
+                onCancel: { pendingFavorite = nil }
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: GalleryActionService.siteChangedNotification)) { _ in
             guard browseOriginIsCurrent else { return }
+            guard workspaceIsActive else { needsSiteRefresh = true; return }
             // 站点切换后清除缓存并重新加载 (对齐 Android: 切换站点 → 刷新列表)
             // 同样用 effectiveMode，否则切站点会把用户正在看的搜索结果换成首页
             viewModel.refresh(mode: effectiveMode)
+        }
+        .onChange(of: workspaceIsActive) { _, active in
+            if active && needsSiteRefresh {
+                needsSiteRefresh = false
+                viewModel.refresh(mode: effectiveMode)
+            }
         }
     }
 
@@ -366,32 +468,32 @@ struct GalleryListView: View {
                     searchBarView
                 }
 
-                if browseSource != nil {
-                    // Keep the browse list and its scroll state alive while
-                    // the editor shows suggestions, before opening results.
-                    ZStack(alignment: .top) {
-                        compactListBody
-                            .opacity(isSearchFocused ? 0 : 1)
-                            .allowsHitTesting(!isSearchFocused)
-                            .accessibilityHidden(isSearchFocused)
-                            .ehSuspendTabBarDriver(isSearchFocused)
-                        if isSearchFocused {
-                            searchSuggestionsOverlay
-                        }
-                    }
-                } else if isSearchFocused {
-                    searchSuggestionsOverlay
-                } else {
-                    compactListBody
+                #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+                if browseSource != nil, browseOriginIsCurrent,
+                   EhOfflineUIFixture.enabled, StandaloneListFixture.enabled {
+                    NavigationLink("Fixture standalone list", value: StandaloneListFixture.route)
                 }
+                #endif
+                withSearchFocusPanel { compactListBody }
             }
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            .navigationDestination(for: StandaloneListFixture.self) { _ in
+                GalleryListView(mode: .home, isPushed: true)
+                    .task {
+                        AppSettings.shared.defaultFavSlot = -2
+                        AppSettings.shared.hasDefaultDownloadLabel = false
+                        try? EhDatabase.shared.insertDownloadLabel("Fixture download label")
+                    }
+            }
+            #endif
             .ehTopAlignedPage()
             // ★ navigationDestination 只在 NavigationStack 顶层注册一次，避免 pushedContent 重复注册导致未定义行为
             .navigationDestination(for: GalleryInfo.self) { gallery in
                 GalleryDetailView(gallery: gallery)
                     .id(gallery.gid)
             }
-            // 标签点击推入的画廊列表 (对齐 Android: onTagClick → 叠加新列表)
+            .ehWorkspaceGalleryDestination()
+            // Fallback for standalone previews not hosted by a workspace.
             .navigationDestination(for: TagSearchDestination.self) { dest in
                 GalleryListView(mode: .tag(keyword: dest.tag), isPushed: true)
             }
@@ -424,32 +526,6 @@ struct GalleryListView: View {
             }
             .sheet(isPresented: $showAdvancedSearch) {
                 advancedSearchSheet
-            }
-            .sheet(item: $pendingDownload) { gallery in
-                DownloadLabelPicker(
-                    onSelect: { label in
-                        pendingDownload = nil
-                        Task { await GalleryActionService.shared.startDownload(gallery: gallery, label: label) }
-                    },
-                    onCancel: { pendingDownload = nil }
-                )
-            }
-            .sheet(item: $pendingFavorite) { gallery in
-                FavoriteSlotPicker(
-                    onSelect: { slot in
-                        pendingFavorite = nil
-                        Task {
-                            if slot == -1 {
-                                GalleryActionService.shared.addLocalFavorite(gallery: gallery)
-                            } else {
-                                try? await GalleryActionService.shared.addFavorite(
-                                    gid: gallery.gid, token: gallery.token, slot: slot
-                                )
-                            }
-                        }
-                    },
-                    onCancel: { pendingFavorite = nil }
-                )
             }
             .sheet(isPresented: $showTagSelector) {
                 TagSelectorView { pickSearchTag($0) }
@@ -489,7 +565,7 @@ struct GalleryListView: View {
             // 搜索栏 (全宽，置于内容顶部)
             searchBarView
 
-            Group {
+            withSearchFocusPanel {
                 if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                     errorView
                 } else {
@@ -635,7 +711,7 @@ struct GalleryListView: View {
                         }
                     } else {
                         ZStack {
-                            NavigationLink(value: gallery) { EmptyView() }
+                            NavigationLink(value: galleryDestination(gallery)) { EmptyView() }
                                 .opacity(0)
                             GalleryRow(
                                 gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
@@ -720,8 +796,7 @@ struct GalleryListView: View {
         return VStack(spacing: 0) {
             // 搜索栏 (全宽，置于内容顶部)
             if !hidesOwnSearchBar { searchBarView }
-
-            Group {
+            withSearchFocusPanel {
                 if viewModel.galleries.isEmpty && viewModel.errorMessage != nil && !viewModel.isLoading {
                     errorView
                 } else {
@@ -842,9 +917,13 @@ struct GalleryListView: View {
     @State private var pendingFavorite: GalleryInfo?
     /// 待选下载标签的画廊（对齐 Android 的下载标签对话框）
     @State private var pendingDownload: GalleryInfo?
+    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
+    @State private var labeledDownload: (GalleryInfo, String?)?
+
 
 
     private var searchesSubscriptions: Bool {
+        if let workspaceRoute { return workspaceRoute.origin.scope == .watched }
         if let standalonePreset { return standalonePreset.initialFilters.mode == .subscription }
         if case .subscription = mode { return true }
         return initialSavedSearch?.initialFilters.mode == .subscription
@@ -854,7 +933,7 @@ struct GalleryListView: View {
         EhSearchBar(
             text: $searchFieldText,
             tokens: $searchTokens,
-            placeholder: searchesSubscriptions ? "搜索订阅" : "搜索标签或标题",
+            placeholder: workspaceRoute != nil ? "在此工作区追加筛选" : (searchesSubscriptions ? "搜索订阅" : "搜索标签或标题"),
             showsClearForEmpty: initialSavedSearch?.query.isEmpty == true && initialSavedSearch?.explicitFilters != nil,
             isFocused: $isSearchFocused,
             // 右侧不再放小图标：15pt 的点按目标远低于 HIG 的 44pt，手机上按不中。
@@ -890,7 +969,7 @@ struct GalleryListView: View {
     /// 搜某个标签时，最想确认的就是「这本是因为哪个标签被搜出来的」，
     /// 而它常常排在第五个之后，根本看不见。
     private var activeSearchTags: Set<String> {
-        Set(searchTokens)
+        Set(searchTokens + (workspaceRoute?.tags.map(GallerySearchQuery.exactTag) ?? []))
     }
 
     /// 输入框当前表达的查询（token + 正在打的字）
@@ -981,7 +1060,11 @@ struct GalleryListView: View {
         case .legacy(let saved), .snapshot(let saved): preset = saved
         }
         isSearchFocused = false
-        if let onSearchSubmit {
+        if workspaceRoute != nil {
+            syncField(from: preset.query)
+            let filters = preset.hasSavedFilters ? preset.initialFilters : viewModel.appliedFilters
+            viewModel.applyQuickSearchSnapshot(GalleryBrowseSearch(query: preset.query, applying: filters))
+        } else if let onSearchSubmit {
             restoreAppliedSearchField()
             (onSearchReplay ?? onSearchSubmit)(preset)
         } else {
@@ -999,23 +1082,47 @@ struct GalleryListView: View {
         }
     }
 
-    private func searchTag(_ tag: String) {
-        let quoted = Self.exactTagQuery(for: tag)
-        isSearchFocused = false
-        if let onSearchSubmit {
-            restoreAppliedSearchField()
-            onSearchSubmit(browseSearch(for: quoted))
-            return
+    private var tagOrigin: TagWorkspaceOrigin {
+        if let tagOriginOverride { return tagOriginOverride }
+        if let workspaceRoute { return workspaceRoute.origin }
+        switch effectiveMode {
+        case .favorites(let slot):
+            return .init(scope: .cloudFavorites(slot), query: favSearchKeyword ?? "")
+        case .subscription:
+            return .init(scope: .watched, filters: .subscriptionSearch)
+        case .popular:
+            return .init(scope: .loadedPopular, candidates: viewModel.galleries)
+        case .toplist(let period):
+            return .init(scope: .loadedToplist, candidates: viewModel.galleries, toplistPeriod: period)
+        case .tag(let tag):
+            return .init(scope: .browse, query: GallerySearchQuery.exactTag(tag))
+        case .search(let query):
+            let filters = viewModel.appliedFilters
+            return .init(scope: filters.mode == .subscription ? .watched : .browse,
+                         query: query, filters: filters)
+        case .home:
+            return .init(scope: .browse, filters: viewModel.appliedFilters)
         }
-        #if os(iOS)
-        let field = GallerySearchQuery.Field(tokens: [quoted], text: "")
-        #else
-        let field = GallerySearchQuery.Field(tokens: [], text: quoted)
-        #endif
-        lastAppliedField = field
-        setSearchField(field)
-        standalonePreset = nil
-        viewModel.performSearch(query: quoted, filters: advancedSearch.appliedListFilters)
+    }
+
+    private var inheritedTagRoute: TagWorkspaceRoute? {
+        guard let workspaceRoute else { return nil }
+        return .init(origin: tagOrigin, tags: workspaceRoute.tags)
+    }
+
+    private func galleryDestination(_ gallery: GalleryInfo) -> WorkspaceGalleryDestination {
+        .init(gallery: gallery, origin: tagOrigin, route: inheritedTagRoute,
+              extra: viewModel.searchText, filters: viewModel.appliedFilters)
+    }
+
+    private func searchTag(_ tag: String) {
+        guard let workspaceNavigation else { return }
+        let destination = inheritedTagRoute?.descending(into: tag, extra: viewModel.searchText,
+                                                        filters: viewModel.appliedFilters)
+            ?? tagOrigin.selecting(tag)
+        isSearchFocused = false
+        restoreAppliedSearchField()
+        workspaceNavigation.open(destination)
     }
 
     static func exactTagQuery(for tag: String) -> String {
@@ -1028,21 +1135,44 @@ struct GalleryListView: View {
         if GalleryActionService.shared.downloadLabelChoiceNeeded() {
             pendingDownload = gallery
         } else {
-            Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
+            confirmDownload(gallery)
+        }
+    }
+
+    private func confirmDownload(_ gallery: GalleryInfo, label: String? = nil) {
+        guard workspaceIsActive else { return }
+        DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
+            Task { await GalleryActionService.shared.startDownload(gallery: gallery, label: label) }
         }
     }
 
     @ViewBuilder private var advancedSearchSheet: some View {
-        if let onSearchSubmit {
-            BrowseAdvancedSearchSheet(initialFilters: initialSavedSearch?.initialFilters
-                                        ?? (searchesSubscriptions ? .subscriptionSearch : .init()),
-                                      query: searchField.submittedQuery) { filters, query in
+        let query = searchField.submittedQuery
+        if workspaceRoute != nil {
+            GalleryAdvancedSearchSheet(initialState: .init(filters: viewModel.appliedFilters),
+                                       validatingQuery: query) { applied in
+                let filters = applied.appliedListFilters
+                isSearchFocused = false
+                syncField(from: query)
+                viewModel.applyQuickSearchSnapshot(GalleryBrowseSearch(query: query, applying: filters))
+            }
+        } else if let onSearchSubmit {
+            GalleryAdvancedSearchSheet(initialState: .init(filters: initialSavedSearch?.initialFilters
+                                             ?? (searchesSubscriptions ? .subscriptionSearch : .init())),
+                                       validatingQuery: query) { applied in
+                let filters = applied.appliedListFilters
                 isSearchFocused = false
                 restoreAppliedSearchField()
                 onSearchSubmit(GalleryBrowseSearch(query: query, applying: filters))
             }
         } else {
-            AdvancedSearchView(state: advancedSearch)
+            GalleryAdvancedSearchSheet(initialState: advancedSearch) { applied in
+                advancedSearch = applied
+                // Standalone lists stage the options until the next search.
+                if standalonePreset == nil {
+                    viewModel.syncAdvancedSettings(applied.appliedListFilters)
+                }
+            }
         }
     }
 
@@ -1085,7 +1215,10 @@ struct GalleryListView: View {
 
     private func submitSearch(_ query: String, fullSite: Bool = false) {
         isSearchFocused = false
-        if let onSearchSubmit {
+        if workspaceRoute != nil {
+            syncField(from: query)
+            viewModel.applyQuickSearchSnapshot(GalleryBrowseSearch(query: query, applying: viewModel.appliedFilters))
+        } else if let onSearchSubmit {
             // The retained source belongs to its prior editing state. The
             // results list will fill its field from the submitted snapshot.
             restoreAppliedSearchField()
@@ -1111,6 +1244,20 @@ struct GalleryListView: View {
         // 其余按钮 (对齐 Android FAB secondaryButtons)
         ToolbarItem(placement: .automatic) {
             HStack(spacing: 4) {
+                // Standalone destinations must be able to open the form
+                // independently of transient keyboard focus.
+                if browseSource == nil, !hidesOwnSearchBar,
+                   isPushed || isEmbedded || isRegularWidth,
+                   workspaceRoute?.origin.cloudSlot == nil {
+                    Button {
+                        showAdvancedSearch = true
+                    } label: {
+                        Label("高级搜索", systemImage: "line.3.horizontal.decrease.circle")
+                            .labelStyle(.iconOnly)
+                    }
+                    .accessibilityIdentifier("gallery-advanced-options")
+                }
+
                 // 快速搜索 (对齐 Android QuickSearch)
                 Button { showQuickSearch = true } label: {
                     Image(systemName: "bookmark")
@@ -1122,7 +1269,7 @@ struct GalleryListView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
-                .disabled(viewModel.galleries.isEmpty)
+                .disabled(viewModel.galleries.isEmpty || workspaceRoute?.origin.isLocal == true)
             }
         }
     }
@@ -1134,6 +1281,19 @@ struct GalleryListView: View {
     /// 此前是个 300pt 高的下拉浮层，只放了历史与建议；标签选择器、高级搜索、
     /// 快速搜索被塞进搜索胶囊右侧的三个 15pt 图标里，手机上点不中，
     /// 「快速搜索」还在改版时整个丢了。整屏接管后这些都有整行的落点。
+    private func withSearchFocusPanel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        let showing = isSearchFocused && !hidesOwnSearchBar
+        return ZStack(alignment: .top) {
+            // Keep results and scroll position intact when the editor opens.
+            content()
+                .opacity(showing ? 0 : 1)
+                .allowsHitTesting(!showing)
+                .accessibilityHidden(showing)
+                .ehSuspendTabBarDriver(showing)
+            if showing { searchSuggestionsOverlay }
+        }
+    }
+
     @ViewBuilder
     private var searchSuggestionsOverlay: some View {
         if isSearchFocused {
@@ -1150,7 +1310,13 @@ struct GalleryListView: View {
                     submitSearch(term)
                 },
                 onOpenTagSelector: { showTagSelector = true },
-                onOpenAdvancedSearch: { showAdvancedSearch = true },
+                onOpenAdvancedSearch: {
+                    if workspaceRoute?.origin.cloudSlot != nil {
+                        EhToast.failure("收藏夹搜索仅支持标题和标签等关键词")
+                    } else {
+                        showAdvancedSearch = true
+                    }
+                },
                 onOpenQuickSearch: { showQuickSearch = true },
                 isAdvancedActive: advancedSearch.isEnabled,
                 onSearchFullSite: searchesSubscriptions && onSearchSubmit != nil && !searchField.submittedQuery.isEmpty
@@ -1414,20 +1580,20 @@ struct GalleryListView: View {
             EhStateView(kind: .empty(
                 symbol: "heart",
                 title: "这个收藏夹是空的",
-                message: "在画廊详情页点 ♡ 就能加进来；云收藏夹需要登录后才会同步"
+                message: "可从画廊详情添加收藏。云端收藏需要登录。"
             ))
         case .subscription:
             EhStateView(kind: .empty(
                 symbol: "bell",
                 title: "订阅里还没有内容",
-                message: "在「我的 → 订阅标签」里加几个标签，符合的画廊会出现在这里"
+                message: "在「我的 → 订阅标签」添加标签。此处显示匹配的画廊。"
             ))
         case .search, .tag:
             EhStateView(
                 kind: .empty(
                     symbol: "magnifyingglass",
                     title: "没有符合条件的画廊",
-                    message: "换个关键词，或放宽高级搜索里的筛选条件"
+                    message: "更改关键词，或减少筛选条件。"
                 ),
                 primaryAction: advancedSearch.isEnabled
                     ? ("清除筛选条件", {
@@ -1472,7 +1638,7 @@ struct GalleryListView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("这是 E-Hentai 的限制，与 App 无关", systemImage: "info.circle")
                     Label("换一个 VPN 节点通常立即恢复", systemImage: "arrow.triangle.2.circlepath")
-                    Label("同一节点被多人共用时最容易触发", systemImage: "person.2")
+                    Label("共用网络出口可能触发限制。", systemImage: "person.2")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1590,6 +1756,7 @@ struct GalleryRow: View {
             } label: {
                 Label("下载", systemImage: "arrow.down.circle")
             }
+            .accessibilityIdentifier("gallery-row-download")
 
             // 收藏 / 取消收藏
             Button {
@@ -1599,6 +1766,7 @@ struct GalleryRow: View {
                 Label(favorited ? "取消收藏" : "收藏",
                       systemImage: favorited ? "heart.slash" : "heart")
             }
+            .accessibilityIdentifier("gallery-row-favorite")
 
             Divider()
 
@@ -1620,14 +1788,19 @@ struct GalleryRow: View {
 }
 
 private extension AdvancedSearchState {
-    func restoreQuickSearch(_ preset: GalleryBrowseSearch) {
+    init(filters: GalleryListRequest.Filters) {
+        self.init()
+        restoreListFilters(filters)
+    }
+
+    mutating func restoreQuickSearch(_ preset: GalleryBrowseSearch) {
         let filters = preset.initialFilters
         selectedCategories = preset.savedCategory ?? EhCategory.all.rawValue
         restore(advanceSearch: filters.advanceSearch, minRating: filters.minRating,
                 pageFrom: filters.pageFrom, pageTo: filters.pageTo)
     }
 
-    func restoreListFilters(_ filters: GalleryListRequest.Filters) {
+    mutating func restoreListFilters(_ filters: GalleryListRequest.Filters) {
         searchMode = SearchMode(rawValue: filters.cacheMode) ?? .normal
         selectedCategories = filters.category == 0 ? EhCategory.all.rawValue : filters.category
         restore(advanceSearch: filters.advanceSearch, minRating: filters.minRating,
@@ -1649,30 +1822,34 @@ private extension AdvancedSearchState {
     }
 }
 
-/// Only the browse destination applies the form immediately. Other list
-/// surfaces keep their existing deferred action semantics.
-private struct BrowseAdvancedSearchSheet: View {
+/// Each presentation owns a value snapshot. Cancel and interactive dismissal
+/// drop it without mutating the search form or the active request.
+private struct GalleryAdvancedSearchSheet: View {
     @State private var draft: AdvancedSearchState
-    let query: String
-    let onApply: (GalleryListRequest.Filters, String) -> Void
+    let validatingQuery: String?
+    let onApply: (AdvancedSearchState) -> Void
 
-    init(initialFilters: GalleryListRequest.Filters, query: String,
-         onApply: @escaping (GalleryListRequest.Filters, String) -> Void) {
-        let draft = AdvancedSearchState()
-        draft.restoreListFilters(initialFilters)
-        _draft = State(initialValue: draft)
-        self.query = query
+    init(initialState: AdvancedSearchState, validatingQuery: String? = nil,
+         onApply: @escaping (AdvancedSearchState) -> Void) {
+        _draft = State(initialValue: initialState)
+        self.validatingQuery = validatingQuery
         self.onApply = onApply
     }
 
     var body: some View {
         let needsKeyword = draft.searchMode == .uploader || draft.searchMode == .tag
-        AdvancedSearchView(state: draft,
-                           allowsApply: !needsKeyword || !ListUrlBuilder.sanitizeKeyword(query).isEmpty) { applied in
-            onApply(applied.appliedListFilters, query)
-        }
+        let hasRequiredQuery = validatingQuery.map { !ListUrlBuilder.sanitizeKeyword($0).isEmpty } ?? true
+        AdvancedSearchView(state: $draft, allowsApply: !needsKeyword || hasRequiredQuery, onApply: onApply)
     }
 }
+
+#if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+private enum StandaloneListFixture: Hashable {
+    case route
+
+    static let enabled = ProcessInfo.processInfo.environment["EH_FIXTURE_STANDALONE_LIST"] == "1"
+}
+#endif
 
 // MARK: - ViewModel
 
@@ -1705,16 +1882,29 @@ class GalleryListViewModel {
     @ObservationIgnored private let filterGalleries: @MainActor (inout [GalleryInfo]) -> Int
     @ObservationIgnored private var listEpoch: UInt64 = 0
     @ObservationIgnored private let listRequest: ((String) async throws -> GalleryListResult)?
+    @ObservationIgnored private let workspaceRoute: TagWorkspaceRoute?
+    var appliedFilters: GalleryListRequest.Filters { currentFilters }
 
     init(filterGalleries: (@MainActor (inout [GalleryInfo]) -> Int)? = nil,
          listRequest: ((String) async throws -> GalleryListResult)? = nil,
-         initialFilters: GalleryListRequest.Filters = .init()) {
+         initialFilters: GalleryListRequest.Filters = .init(),
+         workspaceRoute: TagWorkspaceRoute? = nil, initialSearchText: String = "") {
+        self.workspaceRoute = workspaceRoute
+        self.searchText = initialSearchText
         self.filterGalleries = filterGalleries ?? { GalleryFilterEngine.shared.apply(to: &$0) }
         self.listRequest = listRequest
         self.currentFilters = initialFilters
     }
 
     private func requestGalleryList(_ url: String) async throws -> GalleryListResult {
+        var url = url
+        if let workspaceRoute {
+            if workspaceRoute.origin.isLocal {
+                return workspaceRoute.localList(extra: searchText, filters: currentFilters)
+            }
+            url = workspaceRoute.preservingScope(of: url, extra: searchText, filters: currentFilters,
+                                                 site: AppSettings.shared.gallerySite)
+        }
         if let listRequest { return try await listRequest(url) }
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if EhOfflineUIFixture.enabled { return try EhOfflineUIFixture.listResponse(url) }
@@ -1864,7 +2054,8 @@ class GalleryListViewModel {
         // 先查缓存 (空结果不视为有效缓存 — 可能是之前网络失败)
         let descriptor = listRequestDescriptor(for: mode)
         let cacheKey = descriptor.cacheKey(page: 0)
-        if let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
+        if workspaceRoute?.origin.isLocal != true, workspaceRoute?.origin.scope != .allFavorites,
+           let cached = GalleryCache.shared.getListResult(forKey: cacheKey),
            !cached.galleries.isEmpty {
             print("[EhVM] loadGalleries: CACHE HIT \(cached.galleries.count) galleries")
             galleries = cached.galleries
@@ -1879,7 +2070,7 @@ class GalleryListViewModel {
 
         isLoading = true
         errorMessage = nil
-        currentCacheKey = cacheKey
+        currentCacheKey = workspaceRoute?.origin.isLocal == true ? nil : cacheKey
 
         Task {
             // 超时保护: 如果网络请求超过 20 秒仍未完成，显示错误让用户可以重试
@@ -1893,13 +2084,18 @@ class GalleryListViewModel {
                 if requestEpoch == self.listEpoch && self.isLoading && self.galleries.isEmpty {
                     fetchTask.cancel()
                     self.isLoading = false
-                    self.errorMessage = "网络请求超时，请检查网络连接或 VPN 设置后重试"
+                    self.errorMessage = "网络请求超时。检查网络或 VPN 设置后重试。"
                     print("[EhVM] loadGalleries: TIMEOUT after 20s")
                 }
             }
             await fetchTask.value
             timeoutTask.cancel()
         }
+    }
+
+    func reloadFavoriteSearch(mode: GalleryListRequest.Source) {
+        isLoading = false
+        loadGalleries(mode: mode)
     }
 
     func refresh(mode: GalleryListRequest.Source) {
@@ -2038,7 +2234,8 @@ class GalleryListViewModel {
     func applyQuickSearchSnapshot(_ preset: GalleryBrowseSearch) -> Task<Void, Never> {
         listEpoch &+= 1
         let epoch = listEpoch
-        let source = GalleryListRequest.Source.search(keyword: preset.query)
+        let source = workspaceRoute?.request(extra: preset.query, filters: preset.initialFilters).source
+            ?? GalleryListRequest.Source.search(keyword: preset.query)
         searchText = preset.query
         submittedTagRouteQuery = preset.query
         currentMode = source
@@ -2051,7 +2248,7 @@ class GalleryListViewModel {
         prevHref = nil
         nextHref = nil
         let descriptor = listRequestDescriptor(for: source)
-        currentCacheKey = descriptor.cacheKey(page: 0)
+        currentCacheKey = workspaceRoute?.origin.isLocal == true ? nil : descriptor.cacheKey(page: 0)
         return Task { await fetchPage(descriptor, page: 0, replacementEpoch: epoch) }
     }
 
@@ -2409,7 +2606,13 @@ class GalleryListViewModel {
             guard requestEpoch == listEpoch else { return }
 
             if page == 0 {
-                self.galleries = result.galleries
+                if let workspaceRoute, workspaceRoute.origin.scope == .allFavorites {
+                    let local = workspaceRoute.localList(extra: searchText, filters: currentFilters).galleries
+                    let localIDs = Set(local.map(\.gid))
+                    self.galleries = local + result.galleries.filter { !localIDs.contains($0.gid) }
+                } else {
+                    self.galleries = result.galleries
+                }
                 recordFavoriteSyncIfNeeded(mode: mode)
             } else {
                 self.galleries.append(contentsOf: result.galleries)
@@ -2442,7 +2645,7 @@ class GalleryListViewModel {
             print("[EhVM] fetchPage: SUCCESS — \(self.galleries.count) galleries loaded")
 
             // 缓存第一页结果
-            if page == 0 && listRequest == nil {
+            if page == 0 && listRequest == nil && workspaceRoute?.origin.isLocal != true && workspaceRoute?.origin.scope != .allFavorites {
                 let cacheKey = descriptor.cacheKey(page: 0)
                 GalleryCache.shared.putListResult(
                     CachedGalleryListResult(
@@ -2470,7 +2673,8 @@ class GalleryListViewModel {
     }
 
     private func listRequestDescriptor(for mode: GalleryListRequest.Source) -> GalleryListRequest {
-        .init(source: mode, filters: currentFilters, favoriteKeyword: favSearchKeyword)
+        workspaceRoute?.request(extra: searchText, filters: currentFilters)
+            ?? .init(source: mode, filters: currentFilters, favoriteKeyword: favSearchKeyword)
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 import EhModels
 import EhSpider
@@ -67,6 +68,96 @@ import EhSpider
         await transfer.allowReturn()
     }
 
+    @Test func startReportsCommittedStateWithoutDuplicatingOrChangingExistingTasks() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let active = fixture(51)
+        let waiting = fixture(52)
+        let paused = fixture(53)
+        let failed = fixture(54)
+        let finished = fixture(55)
+        let imported = GalleryInfo(gid: -56, token: OfflineGallery.token, title: "Offline", pages: 1)
+        let folder = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: finished.gid, title: finished.bestTitle
+        ))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let image = folder.appendingPathComponent("00000001.jpg")
+        let bytes = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try bytes.write(to: image)
+        for (gallery, state) in [(paused, DownloadManager.stateNone), (failed, DownloadManager.stateFailed),
+                                 (finished, DownloadManager.stateFinish), (imported, DownloadManager.stateFinish)] {
+            try store.insertDownload(DownloadTaskPersistence.record(
+                for: .init(gallery: gallery, label: "Original group", state: state)
+            ))
+        }
+        let transfer = HeldTransfer(gid: active.gid)
+        let factory = TransferSequence([transfer])
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in factory.take() })
+
+        async let first = manager.startDownload(gallery: active, label: "First label")
+        async let second = manager.startDownload(gallery: active, label: "First label")
+        let requests = await [first, second]
+        #expect(requests.filter { $0 == .enqueued }.count == 1)
+        #expect(requests.filter { $0 == .alreadyDownloading }.count == 1)
+        await transfer.waitUntilStarted()
+        #expect(await manager.startDownload(gallery: active, label: "Ignored") == .alreadyDownloading)
+        #expect(await manager.startDownload(gallery: waiting) == .enqueued)
+        #expect(await manager.startDownload(gallery: waiting) == .alreadyWaiting)
+        #expect(await manager.startDownload(gallery: paused, label: "Ignored") == .resumed)
+        #expect(await manager.startDownload(gallery: failed, label: "Ignored") == .resumed)
+        #expect(await manager.startDownload(gallery: paused) == .alreadyWaiting)
+        #expect(await manager.startDownload(gallery: finished, label: "Ignored") == .alreadyFinished)
+        #expect(await manager.startDownload(gallery: imported) == .offlineImport)
+        let mismatched = GalleryInfo(gid: imported.gid, token: "other", title: "Other", pages: 1)
+        #expect(await manager.startDownload(gallery: mismatched) == .offlineImport)
+        #expect(await manager.getAllTasks().count == 6)
+        #expect(try store.getDownload(gid: active.gid)?.label == "First label")
+        for gallery in [paused, failed] {
+            #expect(try store.getDownload(gid: gallery.gid)?.label == "Original group")
+            #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateWait)
+        }
+        #expect(try store.getDownload(gid: finished.gid)?.state == DownloadManager.stateFinish)
+        #expect(try store.getDownload(gid: imported.gid)?.state == DownloadManager.stateFinish)
+        #expect(try Data(contentsOf: image) == bytes)
+        await manager.pauseAllDownloads()
+        await transfer.allowReturn()
+    }
+
+    @Test func rejectedDatabaseWritesDoNotReportEnqueueOrResume() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("downloads.sqlite")
+        let store = try EhDatabase(storageURL: databaseURL)
+        let paused = fixture(53)
+        let new = fixture(54)
+        try store.insertDownload(DownloadTaskPersistence.record(
+            for: .init(gallery: paused, label: "Original group", state: DownloadManager.stateNone)
+        ))
+        var connection: OpaquePointer?
+        try #require(sqlite3_open(databaseURL.path, &connection) == SQLITE_OK)
+        defer { sqlite3_close(connection) }
+        try #require(sqlite3_exec(connection, """
+            CREATE TRIGGER refuse_new BEFORE INSERT ON download
+            BEGIN SELECT RAISE(ABORT, 'Synthetic registration failure'); END;
+            CREATE TRIGGER refuse_resume BEFORE UPDATE OF state ON download
+            BEGIN SELECT RAISE(ABORT, 'Synthetic state write failure'); END;
+            """, nil, nil, nil) == SQLITE_OK)
+        let transfer = HeldTransfer(gid: new.gid)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+
+        #expect(await manager.startDownload(gallery: new) == .unavailable)
+        #expect(await manager.startDownload(gallery: paused) == .unavailable)
+        #expect(await manager.getAllTasks().map(\.gallery.gid) == [paused.gid])
+        #expect(await manager.getTaskState(gid: paused.gid) == DownloadManager.stateNone)
+        #expect(try store.getDownload(gid: new.gid) == nil)
+        #expect(try store.getDownload(gid: paused.gid)?.state == DownloadManager.stateNone)
+        #expect(await !transfer.hasStarted)
+        // Drain even if a regressed candidate incorrectly starts the transfer.
+        await manager.pauseAllDownloads()
+        await transfer.allowReturn()
+    }
+
     @Test func resumingFailedTaskKeepsItsGroupAndUsesTheQueue() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -84,6 +175,79 @@ import EhSpider
         #expect(try store.getDownload(gid: gallery.gid)?.label == "Original group")
         await transfer.allowReturn()
         await listener.waitUntilFinished()
+        #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateFinish)
+    }
+
+    @MainActor
+    @Test(arguments: [ActivationOrder.foregroundAfterExpiration, .foregroundBeforeExpiration, .backgroundAgainBeforeDrain])
+    func foregroundResumesExpiredAttemptAfterDrainButNotManualPause(order: ActivationOrder) async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = GalleryInfo(gid: 46, token: "neutral", title: "Partial fixture", pages: 2)
+        let paused = fixture(47)
+        let directory = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: gallery.gid, title: gallery.bestTitle
+        ))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let existingFile = directory.appendingPathComponent("00000001.jpg")
+        let original = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try original.write(to: existingFile)
+        try store.insertDownload(DownloadTaskPersistence.record(
+            for: .init(gallery: paused, label: "Manually paused", state: DownloadManager.stateNone)
+        ))
+        let old = HeldTransfer(gid: gallery.gid)
+        let resumed = HeldTransfer(gid: gallery.gid)
+        let factory = TransferSequence([old, resumed])
+        let listener = RecordingListener()
+        let activation = SimulatedActivation()
+        let manager = DownloadManager(database: store, directory: root, isApplicationActive: {
+            activation.isActive
+        }, makeTransfer: { _, _ in factory.take() })
+        await manager.setListener(listener)
+        await manager.startDownload(gallery: gallery, label: "Existing label")
+        await old.waitUntilStarted()
+
+        if order != .foregroundAfterExpiration {
+            activation.isActive = true
+            await manager.recoverForegroundQueue() // No-op while the old attempt is active.
+        }
+        await manager.pauseActiveIfNeeded()
+
+        #expect(await manager.getTaskState(gid: gallery.gid) == DownloadManager.stateWait)
+        #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateWait)
+        #expect(await !resumed.hasStarted)
+        await old.emitLateEvents()
+        #expect(await listener.progress == [])
+        #expect(await listener.diskFullCount == 0)
+        #expect(await listener.limitCount == 0)
+        if order != .foregroundBeforeExpiration {
+            activation.isActive = false
+            await manager.recoverForegroundQueue() // Inactive must not request a restart.
+            await old.allowReturn()
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(await !resumed.hasStarted)
+            activation.isActive = true
+            await manager.recoverForegroundQueue()
+        }
+        await old.allowReturn()
+
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while await !resumed.hasStarted && clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(await resumed.hasStarted)
+        #expect(await old.observedCancellation)
+        #expect(await manager.getTaskState(gid: paused.gid) == DownloadManager.stateNone)
+        #expect((await manager.getAllTasks()).first { $0.gallery.gid == gallery.gid }?.downloadedPages == 1)
+        #expect(try Data(contentsOf: existingFile) == original)
+        #expect(try store.getDownload(gid: gallery.gid)?.label == "Existing label")
+
+        await resumed.allowReturn()
+        await listener.waitUntilFinished()
+        #expect(await listener.finished == [gallery.gid])
+        #expect(try store.getDownload(gid: paused.gid)?.state == DownloadManager.stateNone)
         #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateFinish)
     }
 
@@ -225,6 +389,15 @@ import EhSpider
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         return root
     }
+}
+
+enum ActivationOrder: Sendable {
+    case foregroundAfterExpiration, foregroundBeforeExpiration, backgroundAgainBeforeDrain
+}
+
+@MainActor
+private final class SimulatedActivation {
+    var isActive = false
 }
 
 private final class TransferSequence: @unchecked Sendable {

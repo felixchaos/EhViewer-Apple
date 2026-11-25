@@ -40,9 +40,9 @@ struct MyTagsView: View {
                 }
             } else if tags.isEmpty {
                 ContentUnavailableView {
-                    Label("还没有订阅标签", systemImage: "tag")
+                    Label("无订阅标签", systemImage: "tag")
                 } description: {
-                    Text("订阅标签后，「订阅」列表只会显示带这些标签的新画廊。")
+                    Text("「订阅」显示匹配标签的新画廊。")
                 } actions: {
                     Button("添加标签") { showAddSheet = true }
                 }

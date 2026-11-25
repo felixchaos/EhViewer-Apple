@@ -68,15 +68,22 @@ public actor SpiderQueen {
     // MARK: - 生命周期
 
     public init(galleryInfo: GalleryInfo, spiderInfo: SpiderInfo, mode: Mode = .read) {
-        let configuration = URLSessionConfiguration.default
-        configuration.httpCookieStorage = .shared
         let inactivity = TimeInterval(max(10, min(120, AppSettings.shared.downloadTimeout)))
-        configuration.timeoutIntervalForRequest = inactivity
-        configuration.timeoutIntervalForResource = inactivity * 4
+        let configuration = Self.sessionConfiguration(inactivity: inactivity,
+                                                      proxy: AppSettings.shared.appliedProxy)
         let session = URLSession(configuration: configuration)
         let den = SpiderDen(galleryInfo: galleryInfo, mode: mode == .download ? .download : .read)
         self.init(galleryInfo: galleryInfo, spiderInfo: spiderInfo, mode: mode, spiderDen: den,
                   imageRequestTimeout: inactivity) { request in try await session.data(for: request) }
+    }
+
+    static func sessionConfiguration(inactivity: TimeInterval, proxy: ProxySettings) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpCookieStorage = .shared
+        configuration.connectionProxyDictionary = proxy.connectionProxyDictionary
+        configuration.timeoutIntervalForRequest = inactivity
+        configuration.timeoutIntervalForResource = inactivity * 4
+        return configuration
     }
 
     init(

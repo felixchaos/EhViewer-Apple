@@ -89,7 +89,14 @@ struct ImageReaderView: View {
     @State private var lastScrollChangeTime: Date = .distantPast
     /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
     #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
-    @State private var tallFixtureOffset: Int = 0
+    @State private var fixtureScrollMetrics = FixtureScrollMetrics()
+    @State private var fixturePinchTrace = ""
+    @State private var fixturePinchBegins = 0
+    private struct FixtureScrollMetrics: Equatable {
+        var x = 0
+        var y = 0
+        var width = 0
+    }
     #endif
     @State private var verticalPageInterval: Bool = false
 
@@ -117,6 +124,9 @@ struct ImageReaderView: View {
     /// 音量键 / 媒体模式翻页器
     @State private var volumePageTurner = VolumeKeyPageTurner()
     @State private var verticalMediaScroll = ReaderVerticalMediaScroll()
+    @State private var verticalZoom: CGFloat = 1
+    @State private var verticalPinchActive = false
+    @State private var verticalPinch: (scale: CGFloat, anchor: ReaderVerticalMediaScroll.ZoomAnchor)?
     #endif
 
     // 点击区域比例 (左右各 30%，中间 40% 用于工具栏)
@@ -256,19 +266,25 @@ struct ImageReaderView: View {
                     Button("Fixture volume up") { volumePageTurner.sendFixtureVolume(0.6) }
                     Text("Fixture page \(vm.currentPage + 1)")
                     if EhOfflineUIFixture.tallVolumeFixture {
-                        Text("Fixture scroll").accessibilityValue(String(tallFixtureOffset))
+                        Text("Fixture scroll").accessibilityValue(String(fixtureScrollMetrics.y))
                     }
                 }
                 .padding(8)
                 .foregroundStyle(.white)
                 .background(.black)
             } else if EhOfflineUIFixture.verticalGestureFixture {
-                Text("Fixture vertical reader")
-                    .accessibilityValue(Text(verbatim: "\(tallFixtureOffset)|\(vm.currentPage + 1)"))
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    .background(.black)
-                    .allowsHitTesting(false)
+                VStack {
+                    Text("Fixture vertical reader")
+                        .accessibilityValue(Text(verbatim: "\(fixtureScrollMetrics.y)|\(vm.currentPage + 1)"))
+                    Text("Fixture vertical zoom")
+                        .accessibilityValue(Text(verbatim: "\(fixtureScrollMetrics.x)|\(fixtureScrollMetrics.y)|\(fixtureScrollMetrics.width)"))
+                    Text("Fixture pinch")
+                        .accessibilityValue(Text(verbatim: fixturePinchTrace))
+                }
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(.black)
+                .allowsHitTesting(false)
             }
         }
         #endif
@@ -498,7 +514,7 @@ struct ImageReaderView: View {
 
     private func stepFromMediaKey(forward: Bool) {
         if readingDirection == .topToBottom,
-           verticalMediaScroll.step(forward: forward, pageSpacing: verticalPageInterval ? 8 : 0) {
+           verticalMediaScroll.step(forward: forward, pageSpacing: verticalPageInterval ? 8 * verticalZoom : 0) {
             return
         }
         handleKeyNavigation(forward: forward)
@@ -1007,50 +1023,74 @@ struct ImageReaderView: View {
     // .scrollPosition 是 SwiftUI 原生 API，内部由 runtime 高效追踪
 
     private func verticalScrollReader(geometry: GeometryProxy) -> some View {
-        let contentWidth = geometry.size.width
-        let showInterval = verticalPageInterval
+        let viewportWidth = geometry.size.width
+        #if os(iOS)
+        let contentWidth = viewportWidth * verticalZoom
+        let axes: Axis.Set = [.vertical, .horizontal]
+        let spacing = verticalPageInterval ? 8 * verticalZoom : 0
+        #else
+        let contentWidth = viewportWidth
+        let axes: Axis.Set = .vertical
+        let spacing: CGFloat = verticalPageInterval ? 8 : 0
+        #endif
 
         return ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: showInterval ? 8 : 0) {
+            ScrollView(axes, showsIndicators: false) {
+                LazyVStack(spacing: spacing) {
                     ForEach(0..<vm.totalPages, id: \.self) { idx in
                         verticalPageImage(index: idx, containerWidth: contentWidth)
                             .frame(width: contentWidth)
                             .id(idx)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(width: contentWidth, alignment: .center)
                 .scrollTargetLayout()
                 #if os(iOS)
                 .background(alignment: .topLeading) {
-                    ReaderVerticalMediaScrollAnchor(target: verticalMediaScroll)
+                    ReaderVerticalMediaScrollAnchor(target: verticalMediaScroll) { phase, scale, location in
+                        handleVerticalPinch(phase, magnification: scale, at: location, viewportWidth: viewportWidth)
+                    }
                         .frame(width: 0, height: 0)
                         .allowsHitTesting(false)
                 }
                 #endif
             }
             .clipped()
-            // Perf: 垂直模式不再使用 SwiftUIZoomableImage，无需 scrollDisabled
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
-            .scrollBounceBehavior(.basedOnSize)
+            .scrollBounceBehavior(.basedOnSize, axes: axes)
             #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
-            .onScrollGeometryChange(for: Int.self, of: {
-                (EhOfflineUIFixture.tallVolumeFixture || EhOfflineUIFixture.verticalGestureFixture)
-                    ? Int($0.visibleRect.minY.rounded()) : 0
-            }, action: { _, offset in tallFixtureOffset = offset })
+            .onScrollGeometryChange(for: FixtureScrollMetrics.self, of: { geometry in
+                guard EhOfflineUIFixture.verticalGestureFixture || EhOfflineUIFixture.tallVolumeFixture
+                else { return FixtureScrollMetrics() }
+                return FixtureScrollMetrics(x: Int(geometry.visibleRect.minX.rounded()),
+                                            y: Int(geometry.visibleRect.minY.rounded()),
+                                            width: Int(geometry.contentSize.width.rounded()))
+            }, action: { _, metrics in fixtureScrollMetrics = metrics })
             #endif
             .contentShape(Rectangle())
-            // Fix: 使用 SpatialTapGesture 恢复点击翻页区域
-            // 用 simultaneousGesture 不阻塞 ScrollView 的滚动手势
-            // 滚动后 500ms 内忽略点击，防止惯性滚动误触
+            #if os(iOS)
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentSize.width }) { _, _ in
+                // Wait until the scroll backing view sees the new lazy layout.
+                Task { @MainActor in verticalMediaScroll.applyZoomAfterLayout() }
+            }
             .simultaneousGesture(
-                SpatialTapGesture()
-                    .onEnded { value in
-                        let timeSinceScroll = Date().timeIntervalSince(lastScrollChangeTime)
-                        guard timeSinceScroll > 0.5 else { return }
-                        handleTapZone(location: value.location, viewSize: geometry.size)
-                    }
+                SpatialTapGesture(count: 2).onEnded { value in
+                    guard !verticalPinchActive, viewportWidth > 0, geometry.size.height > 0 else { return }
+                    let point = UnitPoint(x: value.location.x / viewportWidth,
+                                          y: value.location.y / geometry.size.height)
+                    guard let anchor = verticalMediaScroll.zoomAnchor(at: point, scale: verticalZoom) else { return }
+                    setVerticalZoom(verticalZoom > 1.01 ? 1 : 2, anchor: anchor, viewportWidth: viewportWidth)
+                }
+                .exclusively(before: SpatialTapGesture().onEnded { value in
+                    guard !verticalPinchActive else { return }
+                    handleSettledVerticalTap(at: value.location, size: geometry.size)
+                })
             )
+            #else
+            .simultaneousGesture(SpatialTapGesture().onEnded { value in
+                handleSettledVerticalTap(at: value.location, size: geometry.size)
+            })
+            #endif
             .onAppear {
                 if vm.currentPage > 0 && !hasAppliedInitialScroll {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -1093,6 +1133,54 @@ struct ImageReaderView: View {
             }
         }
     }
+
+    private func handleSettledVerticalTap(at point: CGPoint, size: CGSize) {
+        // A scroll settling on another image must not also trigger a tap zone.
+        guard Date().timeIntervalSince(lastScrollChangeTime) > 0.5 else { return }
+        handleTapZone(location: point, viewSize: size)
+    }
+
+    #if os(iOS)
+    private func handleVerticalPinch(_ phase: UIGestureRecognizer.State, magnification: CGFloat,
+                                     at location: UnitPoint, viewportWidth: CGFloat) {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.verticalGestureFixture {
+            if phase == .began { fixturePinchBegins += 1 }
+            fixturePinchTrace = "\(fixturePinchBegins)|\(phase.rawValue)|\(Int(magnification * 1000))"
+        }
+        #endif
+        switch phase {
+        case .began:
+            if let anchor = verticalMediaScroll.zoomAnchor(at: location, scale: verticalZoom) {
+                verticalPinch = (verticalZoom, anchor)
+                verticalPinchActive = true
+            }
+        case .changed, .ended:
+            if let pinch = verticalPinch {
+                let factor = pinch.scale * magnification
+                setVerticalZoom(phase == .ended && factor < 1.05 ? 1 : factor,
+                                anchor: pinch.anchor, viewportWidth: viewportWidth)
+            }
+            if phase == .ended {
+                verticalPinch = nil
+                verticalPinchActive = false
+            }
+        case .cancelled, .failed:
+            verticalPinch = nil
+            verticalPinchActive = false
+        default:
+            break
+        }
+    }
+
+    private func setVerticalZoom(_ requested: CGFloat, anchor: ReaderVerticalMediaScroll.ZoomAnchor,
+                                 viewportWidth: CGFloat) {
+        let next = min(3, max(1, requested))
+        guard abs(next - verticalZoom) * viewportWidth > 0.5 else { return }
+        verticalMediaScroll.prepareZoom(width: viewportWidth * next, offset: anchor.offset(at: next))
+        verticalZoom = next
+    }
+    #endif
 
     /// 垂直滚动模式的页面图片 — 宽度撑满、高度按比例
     @ViewBuilder
@@ -1181,7 +1269,7 @@ struct ImageReaderView: View {
             let source = await vm.pageExport(index)
             guard !Task.isCancelled else { return }
             guard let source else {
-                EhToast.failure("原始图片不在本机。刷新本页后再试。")
+                EhToast.failure("未找到原图。刷新本页后重试。")
                 return
             }
             switch destination {
@@ -1285,10 +1373,11 @@ struct ImageReaderView: View {
         let deadH = h * tapZoneVerticalDeadZone
         let guidance = ReaderGestureGuidance(direction: readingDirection)
         #if os(macOS)
-        let motionTitle = guidance.motionTitle(for: .pointer)
+        let input: ReaderGestureGuidance.Input = .pointer
         #else
-        let motionTitle = guidance.motionTitle(for: .touch)
+        let input: ReaderGestureGuidance.Input = .touch
         #endif
+        let motionTitle = guidance.motionTitle(for: input)
 
         return ZStack {
             Color.black.opacity(0.75)
@@ -1310,7 +1399,7 @@ struct ImageReaderView: View {
                     .font(.title)
                 Text("单击: 显示/隐藏工具栏")
                     .font(.caption.bold())
-                if guidance.showsDoubleTapZoom {
+                if guidance.showsDoubleTapZoom(for: input) {
                     Divider()
                         .frame(width: 80)
                         .overlay(Color.white.opacity(0.5))

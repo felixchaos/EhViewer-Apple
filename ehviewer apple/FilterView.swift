@@ -15,8 +15,8 @@ struct FilterView: View {
     var body: some View {
         List {
             Section {
-                Text("命中规则的画廊会从所有列表里挡掉——首页、搜索、订阅、排行都算。"
-                     + "规则只在本机生效，不会同步到 E-Hentai 账号。")
+                Text("规则适用于首页、搜索、订阅和排行等列表。"
+                     + "仅在本机生效，不同步至 E-Hentai。")
                     .font(EhFont.caption)
                     .foregroundStyle(EhColor.secondaryLabel)
             }
@@ -69,7 +69,7 @@ struct FilterView: View {
 
             if vm.filters.isEmpty {
                 Section {
-                    Text("还没有任何规则。右上角加一条，或者在画廊详情页长按标签选「屏蔽这个标签」。")
+                    Text("无过滤规则。可新增规则，或在画廊详情长按标签并选择「屏蔽这个标签」。")
                         .font(EhFont.caption)
                         .foregroundStyle(EhColor.secondaryLabel)
                 }
@@ -193,8 +193,8 @@ struct AddFilterSheet: View {
         case 0: return "含有此文本的标题将被过滤"
         case 1: return "此上传者的画廊将被过滤"
         case 2: return "含有此标签的画廊将被过滤 (格式: namespace:tag)"
-        case 3: return "含有此命名空间下任何标签的画廊将被过滤"
-        case 4: return "含有此上传者标签的画廊将被过滤"
+        case 3: return "过滤含此命名空间标签的画廊"
+        case 4: return "过滤含此上传者标签的画廊"
         case 5: return "此语言的画廊将被过滤"
         default: return ""
         }

@@ -672,3 +672,51 @@ private final class HeldQuickSearchResult {
         response = nil
     }
 }
+
+
+struct TagWorkspaceScopeTests {
+    @Test func favoriteCursorAndDateStayWithinOriginalSlotAndBothTags() throws {
+        let first = TagWorkspaceOrigin(scope: .cloudFavorites(4), query: "left+right & title")
+            .selecting("female:sample one")
+        let second = first.descending(into: "group:sample two", extra: "edition", filters: .init())
+        let url = try #require(URLComponents(string: second.preservingScope(
+            of: "https://e-hentai.org/?favcat=7&f_search=ignore&next=567",
+            extra: "", filters: .init(), site: .eHentai)))
+        let items = url.queryItems ?? []
+        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+        #expect(url.path == "/favorites.php")
+        #expect(value("favcat") == "4")
+        #expect(value("st") == "on")
+        #expect(value("next") == "567")
+        #expect(value("f_search") == "left+right & title edition female:\"sample one$\" group:\"sample two$\"")
+        #expect(url.percentEncodedQuery?.contains("%2B") == true)
+        let date = second.request(extra: "", filters: .init()).favoritesDateURL(day: "2026-01-07", site: .eHentai)
+        #expect(date?.contains("seek=2026-01-07") == true)
+        #expect(date?.contains("favcat=4") == true)
+        #expect(first.tags == ["female:sample one"])
+    }
+
+    @Test func watchedAndInheritedRatingArePreservedWithoutGlobalFallback() throws {
+        var filters = GalleryListRequest.Filters.subscriptionSearch
+        filters.minRating = 4
+        filters.advanceSearch = 0
+        let origin = TagWorkspaceOrigin(scope: .watched, query: "existing", filters: filters)
+        let query = try #require(URLComponents(string: origin.selecting("artist:sample")
+            .request(extra: "another", filters: filters).pageURL(0, site: .eHentai)))
+        #expect(query.path == "/watched")
+        #expect(query.queryItems?.first { $0.name == "f_search" }?.value == "existing another artist:\"sample$\"")
+        #expect(query.queryItems?.first { $0.name == "f_srdd" }?.value == "4")
+    }
+
+    @Test func localCandidatesNeverAddRemoteOrBroadenAfterClearingExtra() {
+        let good = GalleryInfo(gid: 1, title: "Fixture match", simpleTags: ["a:one", "g:two"])
+        let near = GalleryInfo(gid: 2, title: "Fixture partial", simpleTags: ["a:one"])
+        let other = GalleryInfo(gid: 3, title: "Fixture excluded", simpleTags: ["a:one two", "g:two"])
+        let origin = TagWorkspaceOrigin(scope: .localFavorites, candidates: [good, near, other])
+        let first = origin.selecting("artist:one")
+        #expect(first.localList(extra: "", filters: .init()).galleries.map(\.gid) == [1, 2])
+        let nested = first.descending(into: "group:two", extra: "match", filters: .init())
+        #expect(nested.localList(extra: "", filters: .init()).galleries.map(\.gid) == [1])
+        #expect(first.localList(extra: "", filters: .init()).galleries.map(\.gid) == [1, 2])
+    }
+}

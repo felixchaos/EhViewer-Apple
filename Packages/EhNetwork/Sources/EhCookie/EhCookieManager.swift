@@ -141,8 +141,8 @@ public final class EhCookieManager: @unchecked Sendable {
     /// 是否已登录 E-Hentai
     public var isSignedIn: Bool {
         let cookies = getCookies(for: Self.domainEhentai)
-        return cookies[Self.keyIPBMemberId] != nil
-            && cookies[Self.keyIPBPassHash] != nil
+        return cookies[Self.keyIPBMemberId]?.isEmpty == false
+            && cookies[Self.keyIPBPassHash]?.isEmpty == false
     }
 
     /// 是否拥有 ExHentai 访问权限
@@ -217,6 +217,24 @@ public final class EhCookieManager: @unchecked Sendable {
                 storage.setCookie(cookie)
             }
         }
+    }
+
+    /// Commit an imported pair before exposing the new account to the UI or fetching its name.
+    public func applyImportedLogin(memberId: String, passHash: String, igneous: String?) async {
+        guard !memberId.isEmpty, !passHash.isEmpty else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writeQueue.async { [self] in
+                removePersistedAuthCookies()
+                let credentials = EhCredentials(memberId: memberId, passHash: passHash, igneous: igneous)
+                // Write the supplied values together; do not read a possibly stale cookie jar.
+                if EhCredentialStore.isAvailable {
+                    Self.credentialPersistenceFailed = !EhCredentialStore.save(credentials)
+                }
+                rewriteAuthCookiesAsSession(credentials)
+                continuation.resume()
+            }
+        }
+        injectNWCookie()
     }
 
     /// 登录后同步 Cookie 到 ExHentai 域名
@@ -330,6 +348,22 @@ public final class EhCookieManager: @unchecked Sendable {
         clearCookies(for: Self.domainForums)
         // 钥匙串里的凭据也要一起清，否则下次启动又被恢复回来
         EhCredentialStore.clear()
+    }
+
+    public func signOutAndWait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writeQueue.async { [self] in
+                for domain in [Self.domainEhentai, Self.domainExhentai, Self.domainForums] {
+                    let host = domain.trimmingCharacters(in: .init(charactersIn: "."))
+                    guard let url = URL(string: "https://\(host)") else { continue }
+                    for cookie in storage.cookies(for: url) ?? [] {
+                        storage.deleteCookie(cookie)
+                    }
+                }
+                EhCredentialStore.clear()
+                continuation.resume()
+            }
+        }
     }
 
     /// 清除 igneous Cookie — Sad Panda 检测后自动调用 (V-15)

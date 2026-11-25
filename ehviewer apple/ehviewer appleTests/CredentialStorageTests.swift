@@ -130,11 +130,27 @@ struct CredentialStorageTests {
         #expect(manager.persistCredentials())
         #expect(EhCredentialStore.load() != nil)
 
-        SettingsViewModel().logout()
-        try await settle()
-
+        await SettingsViewModel().logout()
+        #expect(!manager.isSignedIn, "注销完成时必须已经清除会话 Cookie。")
         #expect(EhCredentialStore.load() == nil,
                 "注销后钥匙串里还留着凭据，下次启动会被静默恢复成已登录")
+    }
+
+    @Test
+    func importingReplacesTheAccountPairBeforeReturning() async {
+        let manager = EhCookieManager.shared
+        await manager.signOutAndWait()
+        await manager.applyImportedLogin(memberId: "52", passHash: "first-fixture", igneous: "access-fixture")
+        #expect(manager.isSignedIn)
+        #expect(manager.memberId == "52")
+        #expect(manager.igneous == "access-fixture")
+
+        await manager.applyImportedLogin(memberId: "53", passHash: "second-fixture", igneous: nil)
+        #expect(manager.memberId == "53")
+        #expect(manager.passHash == "second-fixture")
+        #expect(manager.igneous == nil, "新账号不能继承旧账号的 ExHentai 权限 Cookie。")
+        await manager.signOutAndWait()
+        #expect(!manager.isSignedIn)
     }
 
     /// URLSession 自动落盘的持久认证 Cookie 必须被收编成会话 Cookie。

@@ -90,7 +90,7 @@ struct SearchFocusPanel: View {
                 entryRow(
                     symbol: "tag",
                     title: "标签选择器",
-                    subtitle: "按命名空间浏览，自动拼装搜索语法",
+                    subtitle: "按命名空间选择标签",
                     action: onOpenTagSelector
                 )
                 entryRow(

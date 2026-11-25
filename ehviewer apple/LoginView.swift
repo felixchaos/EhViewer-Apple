@@ -32,8 +32,8 @@ private enum LoginMethod: String, Identifiable, CaseIterable {
     /// 一句话说清"这个方式会发生什么 / 什么时候该用它"
     var blurb: String {
         switch self {
-        case .web:      return "在应用内打开官网登录，能过人机验证"
-        case .password: return "直接填账号密码，可能被人机验证拦下"
+        case .web:      return "在应用内打开官网，可完成人机验证。"
+        case .password: return "使用账号与密码登录。可能需要人机验证。"
         case .cookie:   return "从浏览器复制整段 Cookie 粘进来"
         }
     }
@@ -100,7 +100,7 @@ struct LoginView: View {
                 Button("继续") { enterGuestMode() }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("访客只能浏览 E-Hentai，无法使用收藏、下载配额与 ExHentai。随时可以在设置里登录。")
+                Text("访客可浏览 E-Hentai。云端收藏、账号配额和 ExHentai 需要登录。可在设置中登录。")
             }
         }
     }
@@ -125,7 +125,7 @@ struct LoginView: View {
                 Text("登录 E-Hentai")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(EhColor.label)
-                Text("登录后可同步收藏、发表评论、查看配额与访问 ExHentai。也可以先以访客身份浏览。")
+                Text("登录可同步收藏、发表评论和查看配额。ExHentai 还需账号访问权限。可使用访客模式。")
                     .font(EhFont.caption)
                     .foregroundStyle(EhColor.secondaryLabel)
                     .multilineTextAlignment(.center)
@@ -365,29 +365,25 @@ struct PasswordLoginView: View {
         isLoading = true
         errorMessage = nil
 
+        defer { isLoading = false }
+        let loginName = username
         do {
-            // 使用 EhAPI 统一的 signIn 方法 (内部使用 EhRequestBuilder + SignInParser)
-            let displayName = try await EhAPI.shared.signIn(username: username, password: password)
-
-            // 登录成功 — 同步 Cookie 到 ExHentai。
-            // syncLoginCookies 里会顺带把 URLSession 自动落盘的那份认证 Cookie
-            // 收编进钥匙串并换成会话 Cookie（见 secureAuthCookies）。
-            EhCookieManager.shared.syncLoginCookies()
-            EhCookieManager.shared.injectNWCookie()
-
-            // 保存用户信息
-            AppSettings.shared.isLogin = true
-            AppSettings.shared.displayName = displayName
-
-            // 保存 UID
-            if let uid = EhCookieManager.shared.memberId {
-                AppSettings.shared.userId = uid
+            _ = try await EhAPI.shared.signIn(username: loginName, password: password)
+            let cookies = EhCookieManager.shared
+            cookies.syncLoginCookies()
+            cookies.injectNWCookie()
+            let profile = AccountProfileStore.shared
+            profile.synchronize()
+            guard let memberID = profile.memberID else {
+                errorMessage = "登录会话不可用。"
+                return
             }
-
-            // 异步获取完整用户资料 (avatar 等) — RootView 统一处理
-
+            profile.rememberLoginName(loginName, for: memberID)
+            profile.broadcastSessionChange()
+            AppSettings.shared.isLogin = true
             warnIfCredentialsNotPersisted()
-            appState.isSignedIn = true
+            appState.checkLoginStatus()
+            dismiss()
         } catch let error as EhParseError {
             switch error {
             case .signInError(let msg):
@@ -424,37 +420,14 @@ struct WebViewLoginView: View {
             ZStack {
                 WebViewLogin(
                     isLoading: $isLoading,
-                    onLoginDetected: { displayName in
+                    onLoginDetected: {
                         guard !loginDetected else { return }
                         loginDetected = true
-
-                        // 同步 Cookie
-                        EhCookieManager.shared.syncLoginCookies()
-                        EhCookieManager.shared.injectNWCookie()
-
-                        // 保存登录状态
+                        AccountProfileStore.shared.beginImportedSession()
+                        warnIfCredentialsNotPersisted()
                         AppSettings.shared.isLogin = true
-                        if let name = displayName, !name.isEmpty {
-                            AppSettings.shared.displayName = name
-                        }
-
-                        // 保存 UID (ipb_member_id)
-                        if let uid = EhCookieManager.shared.memberId {
-                            AppSettings.shared.userId = uid
-                        }
-
-                        // 登录后异步获取用户资料 + ExH 检测
-                        Task {
-                            await postLoginSetup()
-                        }
-
-                        // 先设置登录状态，让 RootView 的 onChange 将 flowStep 切换到 .main
-                        // 延迟 dismiss 以确保状态变更传播完成后再关闭 sheet
-                        // 否则 sheet 关闭动画可能干扰 SwiftUI 的状态更新链
-                        appState.isSignedIn = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            dismiss()
-                        }
+                        appState.checkLoginStatus()
+                        dismiss()
                     }
                 )
 
@@ -474,22 +447,6 @@ struct WebViewLoginView: View {
         }
     }
 
-    /// 登录后的异步设置：获取用户资料
-    /// ExH 检测由 RootView 统一处理
-    private func postLoginSetup() async {
-        // 获取用户资料 (displayName, avatar)
-        do {
-            let profile = try await EhAPI.shared.getProfile()
-            if let name = profile.displayName {
-                AppSettings.shared.displayName = name
-            }
-            if let avatar = profile.avatar {
-                AppSettings.shared.avatar = avatar
-            }
-        } catch {
-            debugLog("[WebViewLogin] 获取用户资料失败: \(error)")
-        }
-    }
 }
 
 // MARK: - WKWebView 封装 (对齐 Android WebView Cookie 提取)
@@ -497,13 +454,15 @@ struct WebViewLoginView: View {
 #if os(iOS)
 struct WebViewLogin: UIViewRepresentable {
     @Binding var isLoading: Bool
-    var onLoginDetected: (String?) -> Void
+    var onLoginDetected: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        // An explicit login uses a fresh web session; an old WebKit cookie pair
+        // must not silently restore an account after app sign-out.
+        config.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         // 使用 iOS Safari 原生 UA — Cloudflare Turnstile 需要真实浏览器 UA
@@ -553,46 +512,19 @@ struct WebViewLogin: UIViewRepresentable {
             guard !hasDetected else { return }
 
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                var memberId: String?
-                var passHash: String?
-
-                for cookie in cookies {
-                    // 认证 Cookie 一律经 EhCookieManager 写：它会写成会话 Cookie
-                    // 并把持久副本放进钥匙串。直接塞进 HTTPCookieStorage 会
-                    // 带着 WebView 给的过期时间落盘，pass hash 就又明文躺在容器里了。
-                    if cookie.name == "ipb_member_id" {
-                        memberId = cookie.value
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "ipb_pass_hash" {
-                        passHash = cookie.value
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "igneous" {
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "sk" || cookie.name == "star" {
-                        HTTPCookieStorage.shared.setCookie(cookie)
-                    }
+                let forumCookies = cookies.filter {
+                    let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    return domain == "forums.e-hentai.org" || domain == "e-hentai.org"
                 }
-
-                if memberId != nil && passHash != nil {
-                    EhCookieManager.shared.secureAuthCookies()
+                guard let member = forumCookies.first(where: { $0.name == EhCookieManager.keyIPBMemberId })?.value,
+                      let hash = forumCookies.first(where: { $0.name == EhCookieManager.keyIPBPassHash })?.value,
+                      !member.isEmpty, !hash.isEmpty
+                else { return }
+                Task { @MainActor in
+                    guard !self.hasDetected else { return }
                     self.hasDetected = true
-                    // 尝试从页面提取用户名
-                    DispatchQueue.main.async {
-                        webView.evaluateJavaScript(
-                            "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
-                        ) { result, _ in
-                            let name = result as? String
-                            DispatchQueue.main.async {
-                                self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
-                            }
-                        }
-                    }
+                    await EhCookieManager.shared.applyImportedLogin(memberId: member, passHash: hash, igneous: nil)
+                    self.parent.onLoginDetected()
                 }
             }
         }
@@ -602,13 +534,15 @@ struct WebViewLogin: UIViewRepresentable {
 // macOS 使用 NSViewRepresentable
 struct WebViewLogin: NSViewRepresentable {
     @Binding var isLoading: Bool
-    var onLoginDetected: (String?) -> Void
+    var onLoginDetected: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        // An explicit login uses a fresh web session; an old WebKit cookie pair
+        // must not silently restore an account after app sign-out.
+        config.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         // 使用 macOS Safari 原生 UA — Cloudflare Turnstile 需要真实浏览器 UA
@@ -657,45 +591,19 @@ struct WebViewLogin: NSViewRepresentable {
             guard !hasDetected else { return }
 
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                var memberId: String?
-                var passHash: String?
-
-                for cookie in cookies {
-                    // 认证 Cookie 一律经 EhCookieManager 写：它会写成会话 Cookie
-                    // 并把持久副本放进钥匙串。直接塞进 HTTPCookieStorage 会
-                    // 带着 WebView 给的过期时间落盘，pass hash 就又明文躺在容器里了。
-                    if cookie.name == "ipb_member_id" {
-                        memberId = cookie.value
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "ipb_pass_hash" {
-                        passHash = cookie.value
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "igneous" {
-                        EhCookieManager.shared.setCookie(name: cookie.name, value: cookie.value,
-                                                        domain: cookie.domain)
-                    }
-                    if cookie.name == "sk" || cookie.name == "star" {
-                        HTTPCookieStorage.shared.setCookie(cookie)
-                    }
+                let forumCookies = cookies.filter {
+                    let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    return domain == "forums.e-hentai.org" || domain == "e-hentai.org"
                 }
-
-                if memberId != nil && passHash != nil {
-                    EhCookieManager.shared.secureAuthCookies()
+                guard let member = forumCookies.first(where: { $0.name == EhCookieManager.keyIPBMemberId })?.value,
+                      let hash = forumCookies.first(where: { $0.name == EhCookieManager.keyIPBPassHash })?.value,
+                      !member.isEmpty, !hash.isEmpty
+                else { return }
+                Task { @MainActor in
+                    guard !self.hasDetected else { return }
                     self.hasDetected = true
-                    DispatchQueue.main.async {
-                        webView.evaluateJavaScript(
-                            "document.querySelector('#userlinks .home b')?.textContent || document.querySelector('.home b')?.textContent || ''"
-                        ) { result, _ in
-                            let name = result as? String
-                            DispatchQueue.main.async {
-                                self.parent.onLoginDetected(name?.isEmpty == true ? nil : name)
-                            }
-                        }
-                    }
+                    await EhCookieManager.shared.applyImportedLogin(memberId: member, passHash: hash, igneous: nil)
+                    self.parent.onLoginDetected()
                 }
             }
         }
@@ -782,6 +690,7 @@ struct CookieLoginView: View {
     @State private var manualMemberId = ""
     @State private var manualPassHash = ""
     @State private var manualIgneous = ""
+    @State private var isApplying = false
 
     /// 粘贴框解析结果；手动模式下用手填的值
     private var parsed: EhCookieTextParser.Result {
@@ -836,7 +745,7 @@ struct CookieLoginView: View {
                 } header: {
                     Text("粘贴 Cookie")
                 } footer: {
-                    Text("整段粘进来就行，不用自己拆。分号分隔、请求头、Cookie 导出插件的 JSON 都能识别。")
+                    Text("可粘贴分号分隔的 Cookie、Cookie 请求头或导出插件生成的 JSON，无需拆分。")
                 }
 
                 // 实时解析反馈 —— 粘完立刻知道认没认出来
@@ -848,7 +757,7 @@ struct CookieLoginView: View {
 
                         if !parsed.isUsable {
                             Text(EhCookieTextParser.mentionsAnyKey(pasted)
-                                 ? "认出了字段名但没取到值，检查一下是不是复制漏了。"
+                                 ? "检测到字段名，未检测到值。检查复制内容。"
                                  : "没找到 ipb_member_id / ipb_pass_hash，可能粘错了内容。")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -876,22 +785,22 @@ struct CookieLoginView: View {
                     }
                     .font(.system(.body, design: .monospaced))
                 } footer: {
-                    Text("在浏览器里登录 e-hentai.org 后打开开发者工具 → 应用 → Cookie，复制这几项。")
+                    Text("登录 e-hentai.org 后，在「开发者工具 → 应用 → Cookie」复制以下字段。")
                 }
 
                 Section {
                     Button {
-                        applyCookies()
+                        Task { await applyCookies() }
                     } label: {
                         HStack {
                             Spacer()
-                            Text("验证并登录").bold()
+                            Text("导入 Cookie").bold()
                             Spacer()
                         }
                     }
-                    .disabled(!parsed.isUsable)
+                    .disabled(!parsed.isUsable || isApplying)
                 } footer: {
-                    Text("凭据保存在本机钥匙串，仅本设备可用，不进 iCloud、不随备份迁移，也不会上传到任何第三方。ExHentai 需要 igneous 才能访问，缺它只能浏览 E-Hentai。")
+                    Text("凭据仅保存在本机钥匙串，不同步至 iCloud、不随备份迁移，也不上传给第三方。ExHentai 可能要求有效的 igneous。")
                 }
             }
             .navigationTitle("Cookie 登录")
@@ -931,31 +840,17 @@ struct CookieLoginView: View {
     }
     #endif
 
-    private func applyCookies() {
+    private func applyCookies() async {
         let cookies = parsed
-        guard let memberId = cookies.memberId, let passHash = cookies.passHash else { return }
-
-        let cookieManager = EhCookieManager.shared
-        for domain in [EhCookieManager.domainEhentai, EhCookieManager.domainExhentai] {
-            cookieManager.setCookie(name: EhCookieManager.keyIPBMemberId, value: memberId, domain: domain)
-            cookieManager.setCookie(name: EhCookieManager.keyIPBPassHash, value: passHash, domain: domain)
-        }
-
-        // 注入 nw=1 跳过内容警告
-        cookieManager.injectNWCookie()
-
-        // igneous (ExHentai 权限 Cookie)
-        if let igneous = cookies.igneous, !igneous.isEmpty {
-            cookieManager.setCookie(name: EhCookieManager.keyIgneous, value: igneous, domain: EhCookieManager.domainExhentai)
-        }
-
-        // 落到钥匙串。setCookie 写的是会话 Cookie，不持久化，
-        // 不存钥匙串的话下次启动就登出了。
-        cookieManager.persistCredentials()
+        guard !isApplying, let memberId = cookies.memberId, let passHash = cookies.passHash else { return }
+        isApplying = true
+        defer { isApplying = false }
+        await EhCookieManager.shared.applyImportedLogin(memberId: memberId, passHash: passHash,
+                                                        igneous: cookies.igneous)
+        AccountProfileStore.shared.beginImportedSession()
         warnIfCredentialsNotPersisted()
-
         AppSettings.shared.isLogin = true
-        appState.isSignedIn = true
+        appState.checkLoginStatus()
         dismiss()
     }
 }

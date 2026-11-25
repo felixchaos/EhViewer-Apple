@@ -34,7 +34,7 @@ struct WarningView: View {
 
             // 设计稿这版比原先的项目符号列表短得多，而且补上了「不托管内容」
             // 这句免责——原文案通篇在描述内容形态，反而漏了这个更要紧的事实。
-            Text("继续使用表示你已满足所在地区的法定年龄要求，并自行承担浏览责任。本应用不托管任何内容，仅作为 E-Hentai / ExHentai 的第三方客户端。")
+            Text("继续即确认符合当地法定年龄要求，并自行承担浏览责任。本应用是 E-Hentai / ExHentai 的第三方客户端，不托管内容。")
                 .font(EhFont.body)
                 .foregroundStyle(EhColor.secondaryLabel)
                 .multilineTextAlignment(.center)

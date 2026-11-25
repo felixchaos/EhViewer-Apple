@@ -66,6 +66,8 @@ private extension DownloadListCategory {
 }
 
 struct DownloadsView: View {
+    @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    private let workspaceRoute: TagWorkspaceRoute?
     @State private var vm = DownloadsViewModel()
 
     // MARK: - 标签/搜索/过滤
@@ -138,6 +140,19 @@ struct DownloadsView: View {
     @State private var storage = DownloadStorageSnapshot()
     @State private var readingProgress: [Int64: Int] = [:]  // gid -> page index
 
+    init(workspaceRoute: TagWorkspaceRoute? = nil) {
+        self.workspaceRoute = workspaceRoute
+        if let controls = workspaceRoute?.origin.downloadControls {
+            _selectedLabel = State(initialValue: controls.label)
+            _statusFilter = State(initialValue: DownloadStatusFilter(rawValue: controls.status) ?? .all)
+            _categoryFilter = State(initialValue: controls.category)
+            var order = DownloadListOrder()
+            order.key = DownloadListOrder.Key(rawValue: controls.order) ?? .queue
+            order.ascending = controls.ascending
+            _listOrder = State(initialValue: order)
+        }
+    }
+
     var body: some View {
         let base = tasksMatchingLabelCategoryAndSearch
         let visible = shownTasks(in: base)
@@ -178,6 +193,10 @@ struct DownloadsView: View {
                 }
             }
             .ehCompactHeader()
+            .ehWorkspaceBatchSelection(isSelectMode)
+            #if os(iOS)
+            .ehHidesTabBar(isSelectMode)
+            #endif
             // 搜索改为按钮形态：设计稿的默认状态顶部只有标题与过滤胶囊，
             // 点放大镜才展开统一搜索框。此前用 .searchable，iOS 26 会把它
             // 渲染在屏幕底部，与浮起导航条重叠。
@@ -191,7 +210,7 @@ struct DownloadsView: View {
                 labelManagerSheet
             }
             .confirmationDialog(
-                "重置全部阅读进度？所有下载的画廊都会回到第 1 页，已下载的文件不受影响。",
+                "将所有已下载画廊的阅读进度重置为第 1 页。已下载文件不变。",
                 isPresented: $showResetProgressConfirm, titleVisibility: .visible
             ) {
                 Button("重置", role: .destructive) { resetAllReadingProgress() }
@@ -396,6 +415,11 @@ struct DownloadsView: View {
         HStack(spacing: 0) {
             let isAll = !visibleGids.isEmpty && selected == visibleGids
 
+            batchButton(symbol: "checkmark", title: "完成", enabled: true) {
+                exitSelectMode()
+            }
+            .accessibilityIdentifier("downloads-selection-done")
+
             batchButton(
                 symbol: isAll ? "checkmark.circle.fill" : "checkmark.circle",
                 title: isAll ? "取消全选" : "全选",
@@ -404,10 +428,10 @@ struct DownloadsView: View {
                 selectedGids = isAll ? [] : visibleGids
             }
 
-            batchButton(symbol: "play.fill", title: "开始", enabled: !selected.isEmpty) {
+            batchButton(symbol: "play.fill", title: "开始", enabled: !eligibleForResume(selected).isEmpty) {
                 batchResume(selected)
             }
-            batchButton(symbol: "pause.fill", title: "暂停", enabled: !selected.isEmpty) {
+            batchButton(symbol: "pause.fill", title: "暂停", enabled: !eligibleForPause(selected).isEmpty) {
                 batchPause(selected)
             }
             batchButton(symbol: "tag", title: "标签", enabled: !selected.isEmpty) {
@@ -424,6 +448,8 @@ struct DownloadsView: View {
         .ehGlass(cornerRadius: EhSize.tabBarRadius)
         .padding(.horizontal, EhSize.tabBarSideInset)
         .padding(.bottom, EhSize.tabBarBottomInset)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("downloads-selection-bar")
     }
 
     private func batchButton(
@@ -542,6 +568,19 @@ struct DownloadsView: View {
 
         if categoryFilter != .all {
             tasks = tasks.filter { categoryFilter.includes($0.gallery.category) }
+        }
+
+        if let workspaceRoute {
+            let candidates = tasks.map { task -> GalleryInfo in
+                var gallery = task.gallery
+                if gallery.simpleTags?.isEmpty != false {
+                    gallery.simpleTags = EhDatabase.shared.searchableTags(gid: gallery.gid)
+                }
+                return gallery
+            }
+            let filter = workspaceRoute.retargeted(to: .downloads, candidates: candidates)
+            let ids = Set(filter.localList(extra: searchText, filters: filter.origin.filters).galleries.map(\.gid))
+            return tasks.filter { ids.contains($0.gallery.gid) }
         }
 
         // 搜索过滤 —— 标题 + 标签，多个词按 AND
@@ -719,16 +758,16 @@ struct DownloadsView: View {
                 Button {
                     batchResume(selected)
                 } label: {
-                    Label("批量开始 (\(selected.count))", systemImage: "play")
+                    Label("批量开始 (\(eligibleForResume(selected).count))", systemImage: "play")
                 }
-                .disabled(selected.isEmpty)
+                .disabled(eligibleForResume(selected).isEmpty)
 
                 Button {
                     batchPause(selected)
                 } label: {
-                    Label("批量暂停 (\(selected.count))", systemImage: "pause")
+                    Label("批量暂停 (\(eligibleForPause(selected).count))", systemImage: "pause")
                 }
-                .disabled(selected.isEmpty)
+                .disabled(eligibleForPause(selected).isEmpty)
 
                 // 移动标签
                 if !labels.isEmpty {
@@ -905,6 +944,21 @@ struct DownloadsView: View {
 
     // MARK: - 下载列表
 
+    private func downloadTagRoute(_ tag: String, visible: [DownloadTask]) -> TagWorkspaceRoute {
+        let controls = TagWorkspaceOrigin.DownloadControls(
+            label: selectedLabel, status: statusFilter.rawValue, category: categoryFilter,
+            order: listOrder.key.rawValue, ascending: listOrder.ascending
+        )
+        var origin = TagWorkspaceOrigin(scope: .downloads, query: workspaceRoute?.origin.query ?? searchText,
+                                       candidates: visible.map(\.gallery), downloadControls: controls)
+        if let workspaceRoute {
+            origin.filters = workspaceRoute.origin.filters
+            return TagWorkspaceRoute(origin: origin, tags: workspaceRoute.tags)
+                .descending(into: tag, extra: searchText, filters: origin.filters)
+        }
+        return origin.selecting(tag)
+    }
+
     private func downloadList(_ visible: [DownloadTask]) -> some View {
         List {
             ForEach(visible, id: \.gallery.gid) { task in
@@ -935,26 +989,37 @@ struct DownloadsView: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    // 点击打开阅读器 (使用 fullScreenCover 避免导航栏残留)
-                    Button {
-                        readerGallery = task.gallery
-                    } label: {
-                        DownloadTaskRow(
-                            task: task,
-                            readingPage: readingProgress[task.gallery.gid],
-                            storageSize: storage.sizes[task.gallery.gid]
-                        ) {
-                            vm.pauseTask(gid: task.gallery.gid)
-                        } onResume: {
-                            vm.resumeTask(gid: task.gallery.gid)
-                        } onRequestDelete: {
-                            deletingTaskGid = task.gallery.gid
-                            showSingleDeleteConfirm = true
-                        } onShare: {
-                            Task { await shareGallery(task.gallery) }
+                    let open: () -> Void = { readerGallery = task.gallery }
+                    let tagTap: ((String) -> Void)? = task.gallery.simpleTags?.isEmpty == false
+                        ? workspaceNavigation.map { navigation in
+                            { tag in navigation.open(downloadTagRoute(tag, visible: visible)) }
                         }
+                        : nil
+                    let row = DownloadTaskRow(
+                        task: task,
+                        readingPage: readingProgress[task.gallery.gid],
+                        storageSize: storage.sizes[task.gallery.gid],
+                        onTagTap: tagTap
+                    ) {
+                        vm.pauseTask(gid: task.gallery.gid)
+                    } onResume: {
+                        vm.resumeTask(gid: task.gallery.gid)
+                    } onRequestDelete: {
+                        deletingTaskGid = task.gallery.gid
+                        showSingleDeleteConfirm = true
+                    } onShare: {
+                        Task { await shareGallery(task.gallery) }
                     }
-                    .buttonStyle(.plain)
+                    if tagTap == nil {
+                        // Preserve the ordinary row as one accessible button,
+                        // including its measured size and download status.
+                        Button(action: open) { row }.buttonStyle(.plain)
+                    } else {
+                        // Tag buttons must not be children of a row button.
+                        row.contentShape(Rectangle())
+                            .onTapGesture(perform: open)
+                            .accessibilityAction(named: Text("阅读"), open)
+                    }
                 }
             }
         }
@@ -1061,7 +1126,7 @@ struct DownloadsView: View {
         NavigationStack {
             List {
                 if labels.isEmpty {
-                    Text("还没有标签。在菜单里新建一个，下载时就能分组了。")
+                    Text("无下载标签。可新建标签以分组下载。")
                         .font(EhFont.caption)
                         .foregroundStyle(EhColor.secondaryLabel)
                 } else {
@@ -1179,7 +1244,25 @@ struct DownloadsView: View {
 
     // MARK: - 批量操作
 
-    private func batchPause(_ targets: Set<Int64>) {
+    private func eligibleForPause(_ targets: Set<Int64>) -> Set<Int64> {
+        Set(vm.tasks.compactMap { task in
+            guard targets.contains(task.gallery.gid),
+                  task.canPause else { return nil }
+            return task.gallery.gid
+        })
+    }
+
+    private func eligibleForResume(_ targets: Set<Int64>) -> Set<Int64> {
+        Set(vm.tasks.compactMap { task in
+            guard targets.contains(task.gallery.gid),
+                  task.canResume else { return nil }
+            return task.gallery.gid
+        })
+    }
+
+    private func batchPause(_ selected: Set<Int64>) {
+        let targets = eligibleForPause(selected)
+        guard !targets.isEmpty else { return }
         Task {
             for gid in targets {
                 await DownloadManager.shared.pauseDownload(gid: gid)
@@ -1189,7 +1272,9 @@ struct DownloadsView: View {
         }
     }
 
-    private func batchResume(_ targets: Set<Int64>) {
+    private func batchResume(_ selected: Set<Int64>) {
+        let targets = eligibleForResume(selected)
+        guard !targets.isEmpty else { return }
         Task {
             for gid in targets {
                 await DownloadManager.shared.resumeDownload(gid: gid)
@@ -1235,6 +1320,7 @@ struct DownloadTaskRow: View {
     let task: DownloadTask
     let readingPage: Int?      // 阅读进度 (当前页索引)
     let storageSize: Int64?    // 画廊占用空间 (字节)
+    var onTagTap: ((String) -> Void)? = nil
     let onPause: () -> Void
     let onResume: () -> Void
     let onRequestDelete: () -> Void   // 请求删除 (由父视图处理确认)
@@ -1289,7 +1375,8 @@ struct DownloadTaskRow: View {
                         EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: onResume)
                     }
                 }
-            )
+            ),
+            onTagTap: onTagTap
         )
         .contentShape(Rectangle())
         .contextMenu {

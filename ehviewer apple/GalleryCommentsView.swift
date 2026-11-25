@@ -16,11 +16,20 @@ struct GalleryCommentsView: View {
     let token: String
     let apiUid: Int64
     let apiKey: String
-    let initialComments: [GalleryComment]
-    let hasMore: Bool
     
-    @State private var vm = GalleryCommentsViewModel()
+    @State private var vm: GalleryCommentsViewModel
+    @State private var loadRequest: UUID?
+
     @State private var composing: CommentComposeTarget?
+
+    init(gid: Int64, token: String, apiUid: Int64, apiKey: String,
+         initialComments: [GalleryComment], hasMore: Bool) {
+        self.gid = gid
+        self.token = token
+        self.apiUid = apiUid
+        self.apiKey = apiKey
+        _vm = State(initialValue: GalleryCommentsViewModel(comments: initialComments, hasMore: hasMore))
+    }
 
     /// 未登录时不显示发表入口 —— 点了也只会拿到服务端的拒绝
     private var canComment: Bool { AppSettings.shared.isLogin }
@@ -41,26 +50,20 @@ struct GalleryCommentsView: View {
                     }
                 }
                 
-                // 加载更多
                 if vm.hasMore {
-                    Button {
-                        Task { await vm.loadAllComments(gid: gid, token: token) }
-                    } label: {
-                        HStack {
-                            if vm.isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.8)
+                    VStack(spacing: 8) {
+                        if vm.isLoading {
+                            ProgressView("正在加载评论")
+                            Button("取消") { cancelLoading() }
+                        } else {
+                            if vm.loadFailed { Text("评论加载失败。") }
+                            Button(vm.loadFailed ? "重试" : "加载全部评论") {
+                                loadRequest = UUID()
                             }
-                            Text(vm.isLoading ? "加载中..." : "加载全部评论")
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color(.tertiarySystemFill))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
                     .padding()
-                    .disabled(vm.isLoading)
                 }
             }
         }
@@ -68,9 +71,13 @@ struct GalleryCommentsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .onAppear {
-            vm.setInitialComments(initialComments, hasMore: hasMore)
+        .task(id: loadRequest) {
+            guard loadRequest != nil else { return }
+            await vm.loadAllComments {
+                try await EhAPI.shared.getAllComments(gid: gid, token: token)
+            }
         }
+        .onDisappear { cancelLoading() }
         .toolbar {
             if canComment {
                 ToolbarItem(placement: .primaryAction) {
@@ -91,12 +98,18 @@ struct GalleryCommentsView: View {
                 apiUid: apiUid,
                 apiKey: apiKey,
                 onPosted: { list in
-                    vm.setInitialComments(list.comments, hasMore: list.hasMore)
+                    cancelLoading()
+                    vm.replaceComments(list)
                 }
             )
         }
     }
     
+    private func cancelLoading() {
+        loadRequest = nil
+        vm.cancelLoading()
+    }
+
     // MARK: - 单条评论
     
     private func commentRow(_ comment: GalleryComment) -> some View {
@@ -155,11 +168,11 @@ struct GalleryCommentsView: View {
                     if comment.voteUpAble {
                         Button {
                             Task {
-                                await vm.voteComment(
+                                if !(await vm.voteComment(
                                     apiUid: apiUid, apiKey: apiKey,
                                     gid: gid, token: token,
                                     commentId: comment.id, vote: 1
-                                )
+                                )) { EhToast.failure("无法确认投票结果。") }
                             }
                         } label: {
                             Label("赞同", systemImage: comment.voteUpEd ? "hand.thumbsup.fill" : "hand.thumbsup")
@@ -172,11 +185,11 @@ struct GalleryCommentsView: View {
                     if comment.voteDownAble {
                         Button {
                             Task {
-                                await vm.voteComment(
+                                if !(await vm.voteComment(
                                     apiUid: apiUid, apiKey: apiKey,
                                     gid: gid, token: token,
                                     commentId: comment.id, vote: -1
-                                )
+                                )) { EhToast.failure("无法确认投票结果。") }
                             }
                         } label: {
                             Label("反对", systemImage: comment.voteDownEd ? "hand.thumbsdown.fill" : "hand.thumbsdown")
@@ -253,69 +266,73 @@ struct GalleryCommentsView: View {
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
-class GalleryCommentsViewModel {
-    var comments: [GalleryComment] = []
-    var hasMore = false
-    var isLoading = false
-    var errorMessage: String?
-    
-    func setInitialComments(_ comments: [GalleryComment], hasMore: Bool) {
+final class GalleryCommentsViewModel {
+    private(set) var comments: [GalleryComment]
+    private(set) var hasMore: Bool
+    private(set) var isLoading = false
+    private(set) var loadFailed = false
+    private var activeLoad: UUID?
+
+    init(comments: [GalleryComment], hasMore: Bool) {
         self.comments = comments
         self.hasMore = hasMore
     }
-    
-    func loadAllComments(gid: Int64, token: String) async {
-        guard !isLoading else { return }
+
+    func replaceComments(_ list: GalleryCommentList) {
+        comments = list.comments
+        hasMore = list.hasMore
+        loadFailed = false
+    }
+
+    func cancelLoading() {
+        activeLoad = nil
+        isLoading = false
+    }
+
+    func loadAllComments(fetch: @MainActor () async throws -> GalleryCommentList) async {
+        guard hasMore, activeLoad == nil, !Task.isCancelled else { return }
+        let id = UUID()
+        activeLoad = id
         isLoading = true
-        
+        loadFailed = false
+        defer {
+            if activeLoad == id { cancelLoading() }
+        }
+
         do {
-            let result = try await EhAPI.shared.getAllComments(gid: gid, token: token)
-            
-            await MainActor.run {
-                self.comments = result.comments
-                self.hasMore = result.hasMore
-                self.isLoading = false
-            }
+            let result = try await fetch()
+            guard activeLoad == id, !Task.isCancelled else { return }
+            replaceComments(result)
         } catch {
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
-                self.isLoading = false
-            }
+            guard activeLoad == id, !Task.isCancelled, !(error is CancellationError) else { return }
+            loadFailed = true
         }
     }
 
-    /// 评论投票 — 连通 EhAPI.voteComment (对齐 Android GalleryCommentsScene.voteComment)
     func voteComment(
         apiUid: Int64, apiKey: String,
         gid: Int64, token: String,
         commentId: Int64, vote: Int
-    ) async {
+    ) async -> Bool {
         do {
             let result = try await EhAPI.shared.voteComment(
                 apiUid: apiUid, apiKey: apiKey,
                 gid: gid, token: token,
                 commentId: commentId, commentVote: vote
             )
-            // 更新本地评论状态
-            await MainActor.run {
-                if let idx = comments.firstIndex(where: { $0.id == commentId }) {
-                    comments[idx].score = result.score
-                    // vote == 1 → 用户点赞; vote == -1 → 用户点踩
-                    // result.vote: 服务端返回的最终投票状态 (1 = 已赞, -1 = 已踩, 0 = 取消)
-                    comments[idx].voteUpEd = result.vote == 1
-                    comments[idx].voteDownEd = result.vote == -1
-                }
+            if let idx = comments.firstIndex(where: { $0.id == commentId }) {
+                comments[idx].score = result.score
+                comments[idx].voteUpEd = result.vote == 1
+                comments[idx].voteDownEd = result.vote == -1
             }
+            return true
         } catch {
-            await MainActor.run {
-                self.errorMessage = EhError.localizedMessage(for: error)
-            }
+            return false
         }
     }
 }
-
-
 
 #Preview {
     NavigationStack {

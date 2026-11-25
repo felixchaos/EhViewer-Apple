@@ -59,8 +59,7 @@ private let categoryGrid: [[CategoryItem]] = [
 
 // MARK: - AdvancedSearchState
 
-@Observable
-class AdvancedSearchState {
+struct AdvancedSearchState {
     var searchMode: SearchMode = .normal
     var selectedCategories: Int = EhCategory.all.rawValue
     var enableAdvance = false
@@ -90,11 +89,11 @@ class AdvancedSearchState {
         selectedCategories & cat.rawValue != 0
     }
 
-    func toggleCategory(_ cat: EhCategory) {
+    mutating func toggleCategory(_ cat: EhCategory) {
         selectedCategories ^= cat.rawValue
     }
 
-    func longPressCategory(_ cat: EhCategory) {
+    mutating func longPressCategory(_ cat: EhCategory) {
         if isCategorySelected(cat) {
             selectedCategories = cat.rawValue
         } else {
@@ -136,7 +135,7 @@ class AdvancedSearchState {
         return Int(pageTo) ?? -1
     }
 
-    func restore(advanceSearch: Int, minRating: Int, pageFrom: Int, pageTo: Int) {
+    mutating func restore(advanceSearch: Int, minRating: Int, pageFrom: Int, pageTo: Int) {
         if advanceSearch >= 0 {
             enableAdvance = true
             searchGalleryName = advanceSearch & 0x001 != 0
@@ -168,7 +167,7 @@ class AdvancedSearchState {
         }
     }
 
-    func reset() {
+    mutating func reset() {
         searchMode = .normal
         selectedCategories = EhCategory.all.rawValue
         enableAdvance = false
@@ -194,9 +193,9 @@ class AdvancedSearchState {
 // MARK: - AdvancedSearchView
 
 struct AdvancedSearchView: View {
-    @Bindable var state: AdvancedSearchState
+    @Binding var state: AdvancedSearchState
     var allowsApply: Bool = true
-    var onApply: ((AdvancedSearchState) -> Void)?
+    var onApply: (AdvancedSearchState) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -220,12 +219,8 @@ struct AdvancedSearchView: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if let onApply {
-                        Button("应用") { onApply(state); dismiss() }
-                            .disabled(!allowsApply)
-                    } else {
-                        Button("完成") { dismiss() }
-                    }
+                    Button("应用") { onApply(state); dismiss() }
+                        .disabled(!allowsApply)
                 }
                 #if os(iOS)
                 ToolbarItem(placement: .bottomBar) {
@@ -481,5 +476,5 @@ extension NSColor {
 #endif
 
 #Preview {
-    AdvancedSearchView(state: AdvancedSearchState())
+    AdvancedSearchView(state: .constant(AdvancedSearchState()), onApply: { _ in })
 }

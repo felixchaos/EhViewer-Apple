@@ -29,11 +29,11 @@ struct AppError: Identifiable {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet:
-                return AppError("网络不可用", message: "请检查网络连接后重试。")
+                return AppError("网络不可用", message: "检查网络连接后重试。")
             case .timedOut:
-                return AppError("请求超时", message: "服务器响应过慢，请稍后重试。")
+                return AppError("请求超时", message: "可稍后重试。")
             case .cancelled:
-                return AppError("请求已取消", message: "操作已被取消。")
+                return AppError("请求已取消", message: "未完成请求。")
             default:
                 return AppError("网络错误", message: urlError.localizedDescription, error: error)
             }
@@ -41,7 +41,7 @@ struct AppError: Identifiable {
 
         // 解码错误
         if error is DecodingError {
-            return AppError("数据解析失败", message: "服务器返回了意外的数据格式。", error: error)
+            return AppError("数据解析失败", message: "服务器响应格式不受支持。", error: error)
         }
 
         // 通用错误

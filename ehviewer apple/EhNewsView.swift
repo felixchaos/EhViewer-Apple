@@ -38,7 +38,7 @@ struct EhNewsView: View {
                 ContentUnavailableView(
                     "暂无公告",
                     systemImage: "newspaper",
-                    description: Text("E-Hentai 目前没有发布新的站内公告。")
+                    description: Text("E-Hentai 暂无新公告。")
                 )
             }
         }

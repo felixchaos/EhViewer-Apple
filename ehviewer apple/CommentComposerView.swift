@@ -71,7 +71,7 @@ struct CommentComposerView: View {
                 } header: {
                     Text(isEditing ? "编辑评论" : "发表评论")
                 } footer: {
-                    Text("支持 BBCode，例如 [b]加粗[/b]、[url=…]链接[/url]。至少 10 个字符，否则服务端会拒绝。")
+                    Text("至少输入 10 个字符。支持 BBCode，如 [b]加粗[/b]、[url=…]链接[/url]。")
                 }
 
                 if let errorMessage {

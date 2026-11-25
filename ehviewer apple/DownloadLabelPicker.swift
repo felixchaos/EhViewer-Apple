@@ -60,7 +60,7 @@ struct DownloadLabelPicker: View {
                     Toggle("记住这个标签，下次不再询问", isOn: $remember)
                         .tint(EhColor.accentFill)
                 } footer: {
-                    Text("可以在「下载 › 更多 › 下载标签」里改回每次询问。")
+                    Text("在「下载 → 更多 → 下载标签」可恢复「每次询问」。")
                 }
             }
             .navigationTitle("下载到")

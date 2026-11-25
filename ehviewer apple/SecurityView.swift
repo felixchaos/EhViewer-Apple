@@ -45,7 +45,7 @@ struct SecurityView: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
             
-            Text("请验证身份以继续")
+            Text("验证身份后继续")
                 .font(.headline)
                 .foregroundStyle(.secondary)
             
@@ -327,7 +327,7 @@ struct SecurityView: View {
             authError = "未设置生物识别，请使用密码解锁"
         case .biometryLockout:
             // Fix F1-2: 生物识别被系统锁定 — 引导使用密码
-            authError = "生物识别已锁定，请使用下方密码解锁"
+            authError = "生物识别已锁定。可使用密码解锁。"
             startLockout()
         case .authenticationFailed:
             if retryCount >= maxRetries {
@@ -346,7 +346,7 @@ struct SecurityView: View {
     private func startLockout() {
         isLockedOut = true
         lockoutRemaining = lockoutDuration
-        authError = "生物识别重试次数过多，请使用密码解锁或等待 \(lockoutDuration) 秒"
+        authError = "生物识别重试次数过多。可使用密码解锁，或等待 \(lockoutDuration) 秒。"
         
         lockoutTimer?.invalidate()
         lockoutTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in

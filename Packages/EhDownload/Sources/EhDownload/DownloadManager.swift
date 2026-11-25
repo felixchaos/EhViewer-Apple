@@ -54,9 +54,11 @@ public actor DownloadManager {
     // slot until its structured children finish touching the download files.
     private var runner: (attempt: Attempt, task: Task<Void, Never>)?
     private var startQueueAfterDrain = false
+    private var recoverForegroundAfterDrain = false
     private var pendingFileDeletion: FileDeletion?
     private let database: EhDatabase
     private nonisolated let directoryOverride: URL?
+    private let isApplicationActive: @MainActor @Sendable () -> Bool
     private let makeTransfer: @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer
 
     /// 下载监听器（用于通知集成）
@@ -84,6 +86,13 @@ public actor DownloadManager {
     init(
         database: EhDatabase = .shared,
         directory: URL? = nil,
+        isApplicationActive: @escaping @MainActor @Sendable () -> Bool = {
+            #if os(iOS)
+            UIApplication.shared.applicationState == .active
+            #else
+            false
+            #endif
+        },
         makeTransfer: @escaping @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer = {
             SpiderQueen(galleryInfo: $0, spiderInfo: $1, mode: .download)
         }
@@ -91,6 +100,7 @@ public actor DownloadManager {
         self.database = database
         self.directoryOverride = directory
         self.makeTransfer = makeTransfer
+        self.isApplicationActive = isApplicationActive
         // 确保下载目录存在
         var dir = downloadDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -202,24 +212,42 @@ public actor DownloadManager {
         return true
     }
 
-    /// 添加下载任务 (Fix A-1: 已有 failed/none 状态时自动恢复而非静默忽略)
-    public func startDownload(gallery: GalleryInfo, label: String? = nil) async {
-        guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token) else { return }
-        // 检查是否已在队列中
-        if let existingIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }) {
-            resumeDownload(at: existingIndex)
-            // stateWait / stateDownload / stateFinish → 不重复操作
-            return
+    public enum StartOutcome: Equatable, Sendable {
+        case enqueued, resumed
+        case alreadyWaiting, alreadyDownloading, alreadyFinished
+        case offlineImport, unavailable
+    }
+
+    /// Classify and apply the request under one actor turn. An existing
+    /// transfer retains its label, progress and files.
+    @discardableResult
+    public func startDownload(gallery: GalleryInfo, label: String? = nil) async -> StartOutcome {
+        guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token) else {
+            return .offlineImport
+        }
+        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }) {
+            let task = downloadQueue[index]
+            guard !OfflineGallery.isImported(gid: task.gallery.gid, token: task.gallery.token) else {
+                return .offlineImport
+            }
+            switch task.state {
+            case Self.stateNone, Self.stateFailed: return resumeDownload(at: index) ? .resumed : .unavailable
+            case Self.stateWait: return .alreadyWaiting
+            case Self.stateDownload: return .alreadyDownloading
+            case Self.stateFinish: return .alreadyFinished
+            default: return .unavailable
+            }
         }
 
         let task = DownloadTask(gallery: gallery, label: label)
+        do {
+            try database.insertDownload(DownloadTaskPersistence.record(for: task))
+        } catch {
+            return .unavailable
+        }
         downloadQueue.append(task)
-
-        // 持久化到数据库
-        try? database.insertDownload(DownloadTaskPersistence.record(for: task))
-
-        // 启动队列处理
         processQueue()
+        return .enqueued
     }
 
     /// 暂停下载
@@ -238,6 +266,7 @@ public actor DownloadManager {
     public func pauseAllDownloads() {
         retireActiveAttempt()
         startQueueAfterDrain = false
+        recoverForegroundAfterDrain = false
 
         // 暂停队列中所有等待/下载中的任务
         for i in downloadQueue.indices {
@@ -256,12 +285,18 @@ public actor DownloadManager {
         resumeDownload(at: index)
     }
 
-    private func resumeDownload(at index: Int) {
-        guard downloadQueue[index].canResume else { return }
+    @discardableResult
+    private func resumeDownload(at index: Int) -> Bool {
+        guard downloadQueue[index].canResume else { return false }
         let gid = downloadQueue[index].gallery.gid
+        do {
+            try database.updateDownloadState(gid: gid, state: Self.stateWait)
+        } catch {
+            return false
+        }
         downloadQueue[index].state = Self.stateWait
-        try? database.updateDownloadState(gid: gid, state: Self.stateWait)
         processQueue()
+        return true
     }
 
     /// 强制尝试处理队列 (外部调用)
@@ -394,20 +429,30 @@ public actor DownloadManager {
     // MARK: - 后台任务支持
 
     /// 暂停当前活跃下载 (用于后台任务过期时, 保留 stateWait 以便恢复)
-    public func pauseActiveIfNeeded() {
+    public func pauseActiveIfNeeded() async {
         guard let attempt = activeAttempt else { return }
-        pauseForExpiration(of: attempt)
+        await pauseForExpiration(of: attempt)
     }
 
-    private func pauseForExpiration(of attempt: Attempt) {
+    private func pauseForExpiration(of attempt: Attempt) async {
         guard activeAttempt == attempt else { return }
         retireActiveAttempt()
         startQueueAfterDrain = false
+        recoverForegroundAfterDrain = false
         if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == attempt.gid }) {
             downloadQueue[index].state = Self.stateWait
             downloadQueue[index].spider = nil
             try? database.updateDownloadState(gid: attempt.gid, state: Self.stateWait)
         }
+        // If activation raced ahead of the expiration callback, its first
+        // kick saw an active attempt. Recheck after restoring the waiting state.
+        await recoverForegroundQueue()
+    }
+
+    /// Start queued work only if the iOS application is still active.
+    public func recoverForegroundQueue() async {
+        guard await isApplicationActive() else { return }
+        processQueue(foregroundOnly: true)
     }
 
     /// 恢复队列处理 (用于 BGProcessingTask 唤醒时)
@@ -424,13 +469,17 @@ public actor DownloadManager {
         runner?.task.cancel()
     }
 
-    private func processQueue() {
+    private func processQueue(foregroundOnly: Bool = false) {
         guard activeAttempt == nil else { return }
         guard let index = downloadQueue.firstIndex(where: {
             $0.state == Self.stateWait && !OfflineGallery.isImported(gid: $0.gallery.gid, token: $0.gallery.token)
         }) else { return }
         guard runner == nil else {
-            startQueueAfterDrain = true
+            if foregroundOnly {
+                recoverForegroundAfterDrain = true
+            } else {
+                startQueueAfterDrain = true
+            }
             return
         }
 
@@ -441,7 +490,7 @@ public actor DownloadManager {
             let bgToken = await beginBackgroundTask(for: attempt)
             await executeDownload(attempt)
             await endBackgroundTask(bgToken)
-            finishRunner(attempt)
+            await finishRunner(attempt)
         }
         runner = (attempt, task)
     }
@@ -450,8 +499,12 @@ public actor DownloadManager {
 
     private func beginBackgroundTask(for attempt: Attempt) async -> Int {
         #if canImport(UIKit)
-        let identifier = await MainActor.run {
-            UIApplication.shared.beginBackgroundTask(withName: "EhGalleryDownload") {
+        guard activeAttempt == attempt, !Task.isCancelled else {
+            return UIBackgroundTaskIdentifier.invalid.rawValue
+        }
+        let identifier: UIBackgroundTaskIdentifier = await MainActor.run {
+            guard !Task.isCancelled else { return .invalid }
+            return UIApplication.shared.beginBackgroundTask(withName: "EhGalleryDownload") {
                 Task { await self.pauseForExpiration(of: attempt) }
             }
         }
@@ -470,17 +523,20 @@ public actor DownloadManager {
         #endif
     }
 
-    private func finishRunner(_ attempt: Attempt) {
+    private func finishRunner(_ attempt: Attempt) async {
         guard runner?.attempt == attempt else { return }
         let shouldContinue = activeAttempt == attempt || startQueueAfterDrain
+        let shouldRecoverForeground = recoverForegroundAfterDrain
         if activeAttempt == attempt { activeAttempt = nil }
         runner = nil
         startQueueAfterDrain = false
+        recoverForegroundAfterDrain = false
         if let deletion = pendingFileDeletion {
             pendingFileDeletion = nil
             removeFiles(deletion)
         }
         if shouldContinue { processQueue() }
+        else if shouldRecoverForeground { await recoverForegroundQueue() }
     }
 
     private func executeDownload(_ attempt: Attempt) async {
