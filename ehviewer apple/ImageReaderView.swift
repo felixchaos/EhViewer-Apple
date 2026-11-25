@@ -32,6 +32,8 @@ struct ImageReaderView: View {
     let token: String
     let pages: Int
     let previewSet: PreviewSet?
+    let fallbackTitle: String?
+    let onRequestClose: (() -> Void)?
     /// 初始页面 (0-based, 对齐 Android GalleryActivityEvent.page)
     let initialPage: Int?
 
@@ -116,13 +118,17 @@ struct ImageReaderView: View {
         token: String,
         pages: Int,
         previewSet: PreviewSet? = nil,
-        initialPage: Int? = nil
+        initialPage: Int? = nil,
+        fallbackTitle: String? = nil,
+        onRequestClose: (() -> Void)? = nil
     ) {
         self.gid = gid
         self.token = token
         self.pages = pages
         self.previewSet = previewSet
         self.initialPage = initialPage
+        self.fallbackTitle = fallbackTitle
+        self.onRequestClose = onRequestClose
 
         let viewModel = ReaderViewModel()
         viewModel.gid = gid
@@ -282,7 +288,7 @@ struct ImageReaderView: View {
             return .handled
         }
         .onKeyPress(.escape) {
-            dismiss()
+            closeReader()
             return .handled
         }
         .onKeyPress(.upArrow) {
@@ -334,7 +340,7 @@ struct ImageReaderView: View {
         // 边缘侧滑本来也只需要边缘那一条。
         .overlay(alignment: .leading) {
             if showOverlay {
-                EdgeSwipeDismissView { dismiss() }
+                EdgeSwipeDismissView { closeReader() }
                     .frame(width: 24)
                     .frame(maxHeight: .infinity)
                     .allowsHitTesting(true)
@@ -372,6 +378,10 @@ struct ImageReaderView: View {
     }
 
     // MARK: - Setup
+
+    private func closeReader() {
+        if let onRequestClose { onRequestClose() } else { dismiss() }
+    }
 
     private func setupReader() {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
@@ -541,7 +551,7 @@ struct ImageReaderView: View {
         case .nextPage:     goToNextPage()
         case .firstPage:    goToPage(0)
         case .lastPage:     goToPage(vm.totalPages - 1)
-        case .dismiss:      dismiss()
+        case .dismiss:      closeReader()
         case .arrowLeft:    handleKeyNavigation(forward: readingDirection == .rightToLeft)
         case .arrowRight:   handleKeyNavigation(forward: readingDirection != .rightToLeft)
         case .arrowUp:      goToPreviousPage()
@@ -1383,12 +1393,12 @@ struct ImageReaderView: View {
         // 通栏会在图上压出一条硬边，胶囊只占它需要的宽度。
         HStack(spacing: 10) {
             HStack(spacing: 6) {
-                Button(action: { dismiss() }) {
+                Button(action: closeReader) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(EhReaderChrome.label)
                 }
-                .accessibilityLabel("返回详情")
+                .accessibilityLabel(onRequestClose == nil ? "返回详情" : "返回列表")
                 .accessibilityIdentifier("reader-close")
 
                 if let title = readerTitle {
@@ -1438,9 +1448,9 @@ struct ImageReaderView: View {
     /// 必然已经填好（详情页是唯一入口），所以不必为它多发一次请求。
     /// 取不到就不显示，胶囊缩成只有返回键，不占无谓的宽度。
     private var readerTitle: String? {
-        guard let info = GalleryCache.shared.getDetail(gid: gid)?.info else { return nil }
-        let title = info.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle)
-        return title.isEmpty ? nil : title
+        let cached = GalleryCache.shared.getDetail(gid: gid)?.info
+            .suitableTitle(preferJpn: AppSettings.shared.showJpnTitle)
+        return [cached, fallbackTitle].compactMap { $0 }.first { !$0.isEmpty }
     }
 
     /// 底部页码文案 —— 双页时显示成 "12–13"

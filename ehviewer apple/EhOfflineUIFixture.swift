@@ -58,7 +58,12 @@ enum EhOfflineUIFixture {
 
     static func seedReaderFiles() async -> Bool {
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
-        UserDefaults.standard.removeObject(forKey: "reading_progress_\(synthetic.gid)")
+        let progressKey = "reading_progress_\(synthetic.gid)"
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {
+            UserDefaults.standard.set(1, forKey: progressKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: progressKey)
+        }
         // A real download record and images enter through the usual persistence API.
         // Open the fixture UI only once all pages are available, so it cannot fall back to the network.
         let manager = DownloadManager.shared

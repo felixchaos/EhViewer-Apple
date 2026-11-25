@@ -34,6 +34,10 @@ struct MainTabView: View {
         Binding(get: { navigation.selection }, set: { navigation.select($0) })
     }
 
+    #if os(iOS)
+    @State private var directReaderGallery: GalleryInfo?
+    #endif
+
     var body: some View {
         let _ = NSLog("[RENDER] MainTabView body")
         #if DEBUG
@@ -119,6 +123,18 @@ struct MainTabView: View {
                         if tab == .home { homeReselect = UUID() }
                     }
                 )
+            }
+            .allowsHitTesting(directReaderGallery == nil)
+            .accessibilityHidden(directReaderGallery != nil)
+            .overlay {
+                if let gallery = directReaderGallery {
+                    // Stay in the owning root so closing native context UI and opening
+                    // a reader do not compete for the same presentation controller.
+                    ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
+                                    fallbackTitle: gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle),
+                                    onRequestClose: { directReaderGallery = nil })
+                        .id(gallery.gid)
+                }
             }
         }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
@@ -220,7 +236,11 @@ struct MainTabView: View {
         switch tab {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
+            #if os(iOS)
+            BrowseHomeView(route: $navigation.browse, onRequestDirectRead: { directReaderGallery = $0 })
+            #else
             BrowseHomeView(route: $navigation.browse)
+            #endif
         case .subscription, .popular, .toplist:
             // These sidebar shortcuts are aliases of the retained Home stack on iOS.
             EmptyView()

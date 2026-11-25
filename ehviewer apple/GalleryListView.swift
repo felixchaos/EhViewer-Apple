@@ -77,6 +77,7 @@ struct GalleryListView: View {
     /// 提交搜索时交给父容器处理（切到独立的搜索页），而不是就地把
     /// 当前数据源变成搜索结果。只有浏览容器会传它。
     private var onSearchSubmit: ((GalleryBrowseSearch) -> Void)?
+    private var onRequestDirectRead: ((GalleryInfo) -> Void)?
     private var onSearchReplay: ((GalleryBrowseSearch) -> Void)?
     /// Retain the independently applied saved options when editing its query.
     private var initialSavedSearch: GalleryBrowseSearch?
@@ -108,9 +109,11 @@ struct GalleryListView: View {
     init(mode: ListMode, browseSource: Binding<BrowseSource>, toplistPeriod: Binding<Int>? = nil,
          initialBrowseSearch: GalleryBrowseSearch? = nil,
          onSearchSubmit: ((GalleryBrowseSearch) -> Void)? = nil,
-         onSearchReplay: ((GalleryBrowseSearch) -> Void)? = nil) {
+         onSearchReplay: ((GalleryBrowseSearch) -> Void)? = nil,
+         onRequestDirectRead: ((GalleryInfo) -> Void)? = nil) {
         self.toplistPeriod = toplistPeriod
         self.onSearchSubmit = onSearchSubmit
+        self.onRequestDirectRead = onRequestDirectRead
         self.onSearchReplay = onSearchReplay
         self.initialSavedSearch = initialBrowseSearch
         if let initialBrowseSearch, initialBrowseSearch.hasSavedFilters {
@@ -615,6 +618,7 @@ struct GalleryListView: View {
                                 .opacity(0)
                             GalleryRow(
                                 gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                onRequestRead: onRequestDirectRead,
                                 onRequestDownload: requestDownload,
                                 onRequestFavorite: toggleFavorite,
                                 onTagTap: searchTag,
@@ -1511,6 +1515,7 @@ struct GalleryRow: View {
     let fixThumbUrl: Bool
     /// 由父视图处理：收藏可能需要弹收藏夹选择器，下载需要移动网络确认，
     /// 这些都不是一行自己能决定的。
+    var onRequestRead: ((GalleryInfo) -> Void)? = nil
     var onRequestDownload: (GalleryInfo) -> Void = { _ in }
     var onRequestFavorite: (GalleryInfo) -> Void = { _ in }
     /// 点标签直接按这个标签搜
@@ -1549,6 +1554,15 @@ struct GalleryRow: View {
                      highlightedTags: highlightedTags)
             .contentShape(Rectangle())
         .contextMenu {
+            if let onRequestRead {
+                Button {
+                    onRequestRead(gallery)
+                } label: {
+                    Label("直接阅读", systemImage: "book")
+                }
+                .accessibilityIdentifier("gallery-row-read-directly")
+            }
+
             // 下载
             Button {
                 onRequestDownload(gallery)

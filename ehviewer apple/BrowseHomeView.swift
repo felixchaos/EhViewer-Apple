@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import EhModels
 
 extension BrowseSource {
     var title: String {
@@ -41,6 +42,7 @@ extension BrowseSource {
 struct BrowseHomeView: View {
     /// The originating list stays mounted while its search results are visible.
     @Binding var route: BrowseHomeRoute
+    var onRequestDirectRead: ((GalleryInfo) -> Void)? = nil
     @State private var toplistPeriod = 15
     @State private var search = GalleryBrowseSearch(query: "")
     @State private var replayGeneration = 0
@@ -95,7 +97,8 @@ struct BrowseHomeView: View {
                 // Even the same preset reopens at page one when explicitly replayed.
                 replayGeneration &+= 1
                 showSearch(preset)
-            }
+            },
+            onRequestDirectRead: onRequestDirectRead
         )
     }
 
