@@ -124,6 +124,8 @@ class ReaderViewModel {
         let beforeDecode: (URL) async -> Void
         let cacheWriter: (Data, Int64, Int) -> Void
         let persistentWriter: (Data, Int64, Int) async -> Void
+        var fallbackData: ((URL) async -> Data?)? = nil
+        var fallbackCacheWriter: ((Data, Int64, Int) async -> Void)? = nil
     }
 
     @ObservationIgnored var directResponseFixture: DirectResponseFixture?
@@ -1127,8 +1129,8 @@ class ReaderViewModel {
                     return
                 }
                 #if DEBUG
-                // The isolated response fixture must never enter the shared online fallback.
-                if directResponseFixture != nil {
+                // Never leave an isolated fixture for an online fallback.
+                if let fixture = directResponseFixture, fixture.fallbackData == nil {
                     errorPages.insert(index)
                     downloadProgress.removeValue(forKey: index)
                     return
@@ -1139,15 +1141,13 @@ class ReaderViewModel {
                 // ★ 兜底 1: 改走 EhAPI 的域名前置直连回退
                 //   TLS 握手失败 / DNS 解析失败时裸 session 永远失败 (issue #6)
                 if Self.shouldFallbackToEhAPI(error) {
-                    if let data = try? await EhAPI.shared.fetchImageData(
-                        url: url.absoluteString,
-                        referer: GalleryActionService.siteBaseURL
-                    ), !data.isEmpty,
+                    if let data = await fetchFallbackImage(url), !data.isEmpty,
                        let img = await Task.detached(priority: .userInitiated, operation: {
                            Self.downsampledImage(data: data)
                        }).value {
                         guard ownsDownload(index, owner) else { return }
-                        SpiderDen.cacheImageData(data, gid: owner.gallery, page: index)
+                        await cacheFallbackImage(data, gallery: owner.gallery, page: index)
+                        guard ownsDownload(index, owner) else { return }
                         Self.imageCache.setObject(img, forKey: self.cacheKey(for: index), cost: Self.decodedCost(of: img))
                         cachedImages[index] = img
                         errorPages.remove(index)
@@ -1158,6 +1158,13 @@ class ReaderViewModel {
                 }
 
                 guard ownsDownload(index, owner) else { return }
+                #if DEBUG
+                if directResponseFixture != nil {
+                    errorPages.insert(index)
+                    downloadProgress.removeValue(forKey: index)
+                    return
+                }
+                #endif
 
                 // ★ 兜底 2: 换一个 H@H 节点 (对齐 Android SpiderQueen 的 nl= 重试)
                 //   节点掉线 / 证书异常时，同一个 URL 重试多少次都没用，必须换节点
@@ -1179,7 +1186,26 @@ class ReaderViewModel {
         }
     }
 
-    // The response owner must survive both suspension points before page publication.
+    private func fetchFallbackImage(_ url: URL) async -> Data? {
+        #if DEBUG
+        if let fixture = directResponseFixture { return await fixture.fallbackData?(url) }
+        #endif
+        return try? await EhAPI.shared.fetchImageData(
+            url: url.absoluteString, referer: GalleryActionService.siteBaseURL
+        )
+    }
+
+    private func cacheFallbackImage(_ data: Data, gallery: Int64, page: Int) async {
+        #if DEBUG
+        if let fixture = directResponseFixture {
+            await fixture.fallbackCacheWriter?(data, gallery, page)
+            return
+        }
+        #endif
+        await SpiderDen.cacheReaderImageData(data, gid: gallery, page: page)
+    }
+
+    // Recheck the response owner at each suspension before page publication.
     func completeDirectImage(
         _ index: Int, data: Data, url: URL, owner: ImageDownloadOwner,
         decode: (() async -> PlatformImage?)? = nil,
@@ -1203,12 +1229,13 @@ class ReaderViewModel {
             return
         }
 
-        // Cache writes stay synchronous and ahead of optional permanent storage.
+        // Preserve the encoded page before optional permanent storage and publication.
         if let cacheWriter {
             cacheWriter(data, owner.gallery, index)
         } else {
-            SpiderDen.cacheImageData(data, gid: owner.gallery, page: index)
+            await SpiderDen.cacheReaderImageData(data, gid: owner.gallery, page: index)
         }
+        guard ownsDownload(index, owner) else { return }
         if let persistentWriter {
             await persistentWriter(data, owner.gallery, index)
         } else {

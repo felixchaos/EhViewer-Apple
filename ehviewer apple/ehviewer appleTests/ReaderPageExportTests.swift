@@ -1,6 +1,11 @@
 import Foundation
 import Testing
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 @testable import ehviewer_apple
 
 @MainActor
@@ -48,8 +53,8 @@ struct ReaderPageExportTests {
         model.totalPages = 3
         // This URL is deliberately not contacted even when the encoded cache is absent.
         model.imageURLs[2] = "https://example.invalid/fixture.jpg"
-        model.cachedImages[2] = PlatformImage()
         let data = Self.gif
+        model.cachedImages[2] = try #require(PlatformImage(data: data))
         let result = await model.pageExport(2) { gallery, index in
             #expect(gallery == 43)
             #expect(index == 2)

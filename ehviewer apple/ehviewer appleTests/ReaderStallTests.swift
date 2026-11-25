@@ -531,6 +531,91 @@ struct ReaderDirectResponseOwnershipTests {
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct ReaderDirectResponsePipelineTests {
+    @Test func interceptedFallbackWaitsForEncodedCacheAndCanExportExactBytes() async throws {
+        let failing = URL(string: "https://image.invalid/fallback.png")!
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReaderDirectFixtureProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        let gate = HeldReaderCacheLookup()
+        let vm = ReaderViewModel()
+        let gallery: Int64 = 900010001026
+        let encoded = ReaderDirectFixtureProtocol.replacementPNG
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        vm.gid = gallery
+        vm.totalPages = 1
+        vm.imageURLs[0] = failing.absoluteString
+        vm.directResponseFixture = .init(
+            session: session, retryURL: failing,
+            beforeDecode: { _ in Issue.record("Fallback went through direct decode") },
+            cacheWriter: { _, _, _ in Issue.record("Fallback wrote through the direct path") },
+            persistentWriter: { _, _, _ in Issue.record("Fallback changed permanent storage policy") },
+            fallbackData: { url in
+                #expect(url == failing)
+                return encoded
+            },
+            fallbackCacheWriter: { data, gid, page in
+                #expect(gid == gallery && page == 0)
+                _ = await gate.read()
+                do { try data.write(to: file) } catch { Issue.record(error) }
+            }
+        )
+
+        let load = Task { await vm.downloadImageData(0) }
+        await gate.waitUntilStarted()
+        #expect(vm.cachedImages[0] == nil)
+        await gate.finish()
+        await load.value
+        #expect(vm.cachedImages[0] != nil)
+        #expect(vm.downloadProgress[0] == nil)
+        #expect(vm.errorPages.isEmpty)
+        let export = await vm.pageExport(0) { _, _ in try? Data(contentsOf: file) }
+        #expect(export?.bytes == encoded)
+        #expect(export?.filename == "\(gallery)-1.png")
+    }
+
+    @Test func oldFallbackDoesNotPublishAfterDirectRetryReplacesIt() async {
+        let failing = URL(string: "https://image.invalid/fallback.png")!
+        let replacement = URL(string: "https://image.invalid/new.png")!
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReaderDirectFixtureProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        let gate = HeldReaderCacheLookup()
+        let vm = ReaderViewModel()
+        let gallery: Int64 = 900010001027
+        vm.gid = gallery
+        vm.totalPages = 1
+        vm.imageURLs[0] = failing.absoluteString
+        var bytes: Data?
+        vm.directResponseFixture = .init(
+            session: session, retryURL: replacement,
+            beforeDecode: { _ in },
+            cacheWriter: { data, _, _ in bytes = data },
+            persistentWriter: { _, _, _ in },
+            fallbackData: { _ in ReaderDirectFixtureProtocol.originalPNG },
+            fallbackCacheWriter: { data, _, _ in
+                _ = await gate.read()
+                if !Task.isCancelled { bytes = data }
+            }
+        )
+
+        let old = Task { await vm.downloadImageData(0) }
+        await gate.waitUntilStarted()
+        await vm.retryLoadPage(0)
+        let latest = vm.cachedImages[0]
+        #expect(latest != nil)
+        await gate.finish()
+        await old.value
+        #expect(vm.cachedImages[0] === latest)
+        #expect(bytes == ReaderDirectFixtureProtocol.replacementPNG)
+        #expect(vm.downloadProgress[0] == nil)
+        #expect(vm.errorPages.isEmpty)
+    }
+
     @Test func retryPublishesOnlyTheReplacementStreamAndWritesItsBytes() async throws {
         let original = URL(string: "https://image.invalid/old.png")!
         let replacement = URL(string: "https://image.invalid/new.png")!
@@ -597,7 +682,7 @@ struct ReaderDirectResponsePipelineTests {
 }
 
 private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendable {
-    private static let originalPNG = Data(base64Encoded:
+    static let originalPNG = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
     )!
     static let replacementPNG = Data(base64Encoded:
@@ -609,6 +694,10 @@ private final class ReaderDirectFixtureProtocol: URLProtocol, @unchecked Sendabl
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if request.url?.host == "image.invalid", request.url?.path == "/fallback.png" {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
         guard let url = request.url, url.host == "image.invalid",
               url.path == "/old.png" || url.path == "/new.png" else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))

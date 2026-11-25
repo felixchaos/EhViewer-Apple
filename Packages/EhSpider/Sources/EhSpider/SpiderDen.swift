@@ -101,6 +101,13 @@ public actor SpiderDen {
         return cache.set(data, forKey: "image_\(gid)_\(page)")
     }
 
+    /// Reader completion preserves the original bytes without blocking the UI actor.
+    @discardableResult
+    public static func cacheReaderImageData(_ data: Data, gid: Int64, page: Int) async -> Bool {
+        guard !data.isEmpty, let cache = readCache, !Task.isCancelled else { return false }
+        return await cache.setAsync(data, forKey: "image_\(gid)_\(page)")
+    }
+
     /// 阅读缓存当前占用的字节数
     public static func readCacheUsage() -> Int64 {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -542,22 +549,50 @@ final class SimpleDiskCache: @unchecked Sendable {
 
     @discardableResult
     func set(_ data: Data, forKey key: String) -> Bool {
-        let success: Bool = queue.sync {
-            let file = fileURL(for: key)
-            do {
-                try data.write(to: file)
-                return true
-            } catch {
-                return false
-            }
-        }
-        if success {
-            // 异步检查缓存大小
-            queue.async { [weak self] in
-                self?.trimToSize()
-            }
-        }
+        let success = queue.sync { writeOnCacheQueue(data, key: key) }
+        if success { scheduleTrim() }
         return success
+    }
+
+    private final class WriteCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.withLock { cancelled = true } }
+        var isCancelled: Bool { lock.withLock { cancelled } }
+    }
+
+    func setAsync(_ data: Data, forKey key: String) async -> Bool {
+        let cancellation = WriteCancellation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    guard !cancellation.isCancelled else {
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    // Once started, this write stays ahead of later requests
+                    // on the same serial queue, even if its reader has gone.
+                    let success = self.writeOnCacheQueue(data, key: key)
+                    if success { self.scheduleTrim() }
+                    continuation.resume(returning: success)
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func writeOnCacheQueue(_ data: Data, key: String) -> Bool {
+        do {
+            try data.write(to: fileURL(for: key))
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func scheduleTrim() {
+        queue.async { [weak self] in self?.trimToSize() }
     }
 
     @discardableResult
