@@ -41,6 +41,49 @@ final class ReaderVolumePagingUITests: XCTestCase {
         setPaging(false, in: app)
     }
 
+    @MainActor func testVolumePagesThroughFinalTallImage() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_VOLUME_PAGING"] == "1")
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
+        app.launchEnvironment["EH_FIXTURE_VOLUME_PAGING"] = "1"
+        app.launchEnvironment["EH_FIXTURE_TALL_VOLUME"] = "1"
+        app.launch()
+        let row = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        row.tap()
+        let read = app.buttons["gallery-detail-read"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        read.tap()
+        let finalPage = app.staticTexts["Fixture page 3"]
+        XCTAssertTrue(finalPage.waitForExistence(timeout: 8))
+        setPaging(true, in: app)
+        let scroll = app.staticTexts["Fixture scroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        let start = try XCTUnwrap((scroll.value as? String).flatMap(Int.init))
+        XCTAssertGreaterThan(start, 500, "The final image must already start below the previous two images.")
+        let down = app.buttons["Fixture volume down"]
+        down.tap()
+        let later = try XCTUnwrap(waitForOffset(scroll) { $0 - start > 450 },
+                                  "The last image must scroll down instead of ignoring the key.")
+        XCTAssertLessThan(later - start, Int(app.frame.height) + 20)
+        XCTAssertTrue(finalPage.exists)
+        app.buttons["Fixture volume up"].tap()
+        XCTAssertNotNil(waitForOffset(scroll) { abs($0 - start) < 30 })
+        XCTAssertTrue(finalPage.exists)
+        setPaging(false, in: app)
+    }
+
+    @MainActor private func waitForOffset(_ element: XCUIElement, until matches: (Int) -> Bool) -> Int? {
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            if let offset = (element.value as? String).flatMap(Int.init), matches(offset) { return offset }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return nil
+    }
+
     @MainActor private func setPaging(_ enabled: Bool, in app: XCUIApplication) {
         let settings = app.buttons["reader-settings"]
         if !settings.isHittable {

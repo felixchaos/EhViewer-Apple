@@ -88,6 +88,9 @@ struct ImageReaderView: View {
     @State private var hasAppliedInitialScroll = false
     @State private var lastScrollChangeTime: Date = .distantPast
     /// Perf P0-2: 一次性缓存 showPageInterval 设置，避免滚动路径上读 UserDefaults
+    #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+    @State private var tallFixtureOffset: Int = 0
+    #endif
     @State private var verticalPageInterval: Bool = false
 
     // Perf: 翻页去抖 — 快速滑动时取消上一次预加载，仅处理最终落地页
@@ -112,6 +115,7 @@ struct ImageReaderView: View {
     #if os(iOS)
     /// 音量键 / 媒体模式翻页器
     @State private var volumePageTurner = VolumeKeyPageTurner()
+    @State private var verticalMediaScroll = ReaderVerticalMediaScroll()
     #endif
 
     // 点击区域比例 (左右各 30%，中间 40% 用于工具栏)
@@ -250,6 +254,9 @@ struct ImageReaderView: View {
                     Button("Fixture volume down") { volumePageTurner.sendFixtureVolume(0.4) }
                     Button("Fixture volume up") { volumePageTurner.sendFixtureVolume(0.6) }
                     Text("Fixture page \(vm.currentPage + 1)")
+                    if EhOfflineUIFixture.tallVolumeFixture {
+                        Text("Fixture scroll").accessibilityValue(String(tallFixtureOffset))
+                    }
                 }
                 .padding(8)
                 .foregroundStyle(.white)
@@ -433,6 +440,7 @@ struct ImageReaderView: View {
     private func setupReader() {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.tallVolumeFixture { readingDirection = .topToBottom }
         if let fixture = EhOfflineUIFixture.readerLoadingMode {
             readingDirection = fixture == "vertical" ? .topToBottom
                 : (fixture == "spread-error" ? .rightToLeft : .leftToRight)
@@ -481,12 +489,20 @@ struct ImageReaderView: View {
     private func updateVolumePaging() {
         if isReaderVisible && AppSettings.shared.volumePage {
             volumePageTurner.start(
-                onNext: { goToNextPage() },
-                onPrevious: { goToPreviousPage() }
+                onNext: { stepFromMediaKey(forward: true) },
+                onPrevious: { stepFromMediaKey(forward: false) }
             )
         } else {
             volumePageTurner.stop()
         }
+    }
+
+    private func stepFromMediaKey(forward: Bool) {
+        if readingDirection == .topToBottom,
+           verticalMediaScroll.step(forward: forward, pageSpacing: verticalPageInterval ? 8 : 0) {
+            return
+        }
+        handleKeyNavigation(forward: forward)
     }
 
     private func updateIdleTimerOwnership() {
@@ -1001,11 +1017,23 @@ struct ImageReaderView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .scrollTargetLayout()
+                #if os(iOS)
+                .background(alignment: .topLeading) {
+                    ReaderVerticalMediaScrollAnchor(target: verticalMediaScroll)
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
+                #endif
             }
             .clipped()
             // Perf: 垂直模式不再使用 SwiftUIZoomableImage，无需 scrollDisabled
             .scrollPosition(id: $vm.verticalScrollPage, anchor: .top)
             .scrollBounceBehavior(.basedOnSize)
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            .onScrollGeometryChange(for: Int.self, of: {
+                EhOfflineUIFixture.tallVolumeFixture ? Int($0.visibleRect.minY.rounded()) : 0
+            }, action: { _, offset in tallFixtureOffset = offset })
+            #endif
             .contentShape(Rectangle())
             // Fix: 使用 SpatialTapGesture 恢复点击翻页区域
             // 用 simultaneousGesture 不阻塞 ScrollView 的滚动手势
