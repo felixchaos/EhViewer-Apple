@@ -31,6 +31,8 @@ public actor SpiderQueen {
     private var showKey: String?        // showpage API 的 showKey
     private var activeTasks: [Int: Task<Void, Never>] = [:]
     private let previewRequests = DownloadPreviewRequests()
+    // Persisted geometry may describe a different thumbnail setting.
+    private var downloadPreviewWidth: Int?
 
     /// 并发下载数 — 从 AppSettings 读取用户设置 (对齐 Android SpiderQueen.mWorkerPool 大小)
     private var maxConcurrent: Int {
@@ -394,21 +396,48 @@ public actor SpiderQueen {
             return token
         }
 
-        // 从网络获取: 请求画廊详情页对应的分页来获取 pToken
-        // 每页详情页显示 20 个预览缩略图，pToken 包含在预览链接中
-        let detailPage = index / max(1, spiderInfo.previewPerPage > 0 ? spiderInfo.previewPerPage : 20)
-        let tokens: [Int: String]
         if mode == .download {
-            tokens = try await previewRequests.load(page: detailPage) {
-                try await self.fetchPreviewTokens(page: detailPage)
+            // Learn current geometry even when the first missing image is far
+            // into a resumed transfer. Never divide by a guessed page size.
+            if downloadPreviewWidth == nil {
+                try await loadDownloadPreview(page: 0, covering: index)
             }
+            if let token = spiderInfo.pTokenMap[index] { return token }
+            guard let width = downloadPreviewWidth else { throw SpiderError.pTokenNotFound }
+            try await loadDownloadPreview(page: index / width, covering: index)
         } else {
-            tokens = try await fetchPreviewTokens(page: detailPage)
+            let detailPage = index / (spiderInfo.previewPerPage > 0 ? spiderInfo.previewPerPage : 20)
+            let tokens = try await fetchPreviewTokens(page: detailPage)
+            try Task.checkCancellation()
+            spiderInfo.pTokenMap.merge(tokens) { _, new in new }
         }
-        try Task.checkCancellation()
-        spiderInfo.pTokenMap.merge(tokens) { _, new in new }
         guard let token = spiderInfo.pTokenMap[index] else { throw SpiderError.pTokenNotFound }
         return token
+    }
+
+    private func loadDownloadPreview(page: Int, covering index: Int) async throws {
+        _ = try await previewRequests.load(page: page) {
+            try await self.cacheDownloadPreview(page: page, covering: index)
+        }
+        try Task.checkCancellation()
+    }
+
+    private func cacheDownloadPreview(page: Int, covering index: Int) async throws -> [Int: String] {
+        // Commit the shared result before releasing the in-flight request.
+        // A queued worker whose token is now cached must not fetch it again.
+        if page == 0, downloadPreviewWidth != nil { return [:] }
+        if page > 0, spiderInfo.pTokenMap[index] != nil { return [:] }
+
+        let tokens = try await fetchPreviewTokens(page: page)
+        try Task.checkCancellation()
+        spiderInfo.pTokenMap.merge(tokens) { _, new in new }
+        // Only the first page establishes width; the last can be shorter.
+        // Do not learn an incorrect width from a sparse/malformed response.
+        if page == 0, tokens.keys.allSatisfy({ $0 < tokens.count }) {
+            downloadPreviewWidth = tokens.count
+            spiderInfo.previewPerPage = tokens.count
+        }
+        return tokens
     }
 
     private func fetchPreviewTokens(page detailPage: Int) async throws -> [Int: String] {
