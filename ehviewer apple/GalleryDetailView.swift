@@ -143,6 +143,7 @@ struct GalleryDetailView: View {
                 previewSet: item.previewSet,
                 initialPage: item.initialPage
             )
+            .presentationBackground(.clear)
         }
         #else
         .navigationDestination(isPresented: Binding(

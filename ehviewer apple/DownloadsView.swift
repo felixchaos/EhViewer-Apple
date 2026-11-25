@@ -992,6 +992,7 @@ struct DownloadsView: View {
         .fullScreenCover(item: $readerGallery) { gallery in
             ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages)
                 .id(gallery.gid)
+                .presentationBackground(.clear)
         }
         #else
         .sheet(item: $readerGallery) { gallery in

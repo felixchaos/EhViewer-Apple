@@ -125,6 +125,7 @@ struct GalleryPreviewsView: View {
                 initialPage: target.page
             )
             .id(gid)
+                .presentationBackground(.clear)
         }
         #else
         .sheet(item: $readerTarget) { target in

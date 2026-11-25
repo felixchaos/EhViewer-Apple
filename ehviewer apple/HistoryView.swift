@@ -165,6 +165,7 @@ struct HistoryView: View {
                 gid: item.gid, token: item.token,
                 pages: item.pages, initialPage: item.initialPage
             )
+            .presentationBackground(.clear)
         }
         #else
         .sheet(item: $resumeItem) { item in

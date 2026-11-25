@@ -395,10 +395,7 @@ struct ImageReaderView: View {
             }
         }
         #if os(iOS)
-        // Reader Back belongs to the physical left edge, even in fullscreen.
-        // Attaching to the reader instead of covering the edge lets vertical
-        // drags and taps still reach the image and controls there.
-        .gesture(ReaderBackEdgePan(onDismiss: closeReader))
+        .modifier(ReaderInteractiveBack(onDismiss: closeReader))
         #endif
     }
 
@@ -1443,7 +1440,7 @@ struct ImageReaderView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(EhReaderChrome.label)
                 }
-                .accessibilityLabel(onRequestClose == nil ? "返回详情" : "返回列表")
+                .accessibilityLabel("返回")
                 .accessibilityIdentifier("reader-close")
 
                 if let title = readerTitle {
@@ -2086,50 +2083,6 @@ private struct SwiftUIZoomableImage: View {
 }
 #endif
 
-#if os(iOS)
-private struct ReaderBackEdgePan: UIGestureRecognizerRepresentable {
-    let onDismiss: () -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = context.coordinator
-        return pan
-    }
-
-    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
-        guard pan.state == .ended, let view = pan.view else { return }
-        if pan.translation(in: view).x > 80 || pan.velocity(in: view).x > 500 {
-            onDismiss()
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard let view = gestureRecognizer.view else { return false }
-            let point = touch.location(in: view)
-            return view.bounds.contains(point) && point.x < view.bounds.minX + 24
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let velocity = pan.velocity(in: pan.view)
-            return velocity.x > abs(velocity.y)
-        }
-
-        // For the same touch, page scrolling must wait for the edge pan to
-        // decide its direction. A recognized Back must not also turn a page.
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            guard let reader = gestureRecognizer.view, let target = other.view,
-                  let scroll = target as? UIScrollView, other === scroll.panGestureRecognizer else { return false }
-            return target.isDescendant(of: reader)
-        }
-    }
-}
-#endif
 
 // MARK: - macOS Scroll Wheel Page Navigator
 

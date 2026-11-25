@@ -45,6 +45,7 @@ struct ContinueReadingCard: View {
                 pages: item.pages,
                 initialPage: item.initialPage
             )
+            .presentationBackground(.clear)
         }
         #endif
     }

@@ -120,6 +120,28 @@ final class ReaderBackNavigationUITests: XCTestCase {
         XCTAssertFalse(app.buttons["gallery-detail-back"].exists, "Direct entry goes straight back to the list.")
     }
 
+    @MainActor func testResumeReaderButtonReturnsToHome() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_READER_GESTURES"] == "1")
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_DIRECT_COLD"] = "reset"
+        app.launch()
+        let resume = app.descendants(matching: .any)["home-continue-reading"].firstMatch
+        XCTAssertTrue(resume.waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(resume.label.contains("Previous visit fixture") || resume.staticTexts["Previous visit fixture"].exists)
+        resume.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.50)).tap()
+        let close = app.buttons["reader-close"]
+        XCTAssertTrue(waitForHit(close))
+        XCTAssertEqual(close.label, "返回", "The screen reader must not announce a destination that was never opened.")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 6))
+        XCTAssertTrue(resume.waitForExistence(timeout: 8))
+        XCTAssertTrue(waitForHit(app.buttons["我的"].firstMatch))
+        XCTAssertTrue(resume.label.contains("Previous visit fixture") || resume.staticTexts["Previous visit fixture"].exists)
+        XCTAssertFalse(app.buttons["gallery-detail-back"].exists)
+    }
+
     @MainActor private func verticalOffset(_ trace: XCUIElement) throws -> Int {
         let raw = try XCTUnwrap(trace.value as? String)
         return try XCTUnwrap(raw.split(separator: "|").first.flatMap { Int($0) })
