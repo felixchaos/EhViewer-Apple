@@ -344,6 +344,11 @@ private struct MainTabWorkspace: View {
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
         .onPreferenceChange(EhHidesTabBarKey.self) { nestedNavigation = $0 }
+        // The tab bar belongs to the window, outside this workspace's reader
+        // overlay. Hide that shared bar without unmounting the source tab.
+        .transformPreference(EhHidesTabBarKey.self) { hidesTabBar in
+            hidesTabBar = hidesTabBar || directReaderGallery != nil
+        }
         .onChange(of: !nestedNavigation && !isBatchSelecting && directReaderGallery == nil && clipboardGallery == nil,
                   initial: true) { _, canGoBack in workspace.canGoBack = canGoBack }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in

@@ -42,7 +42,10 @@ final class GalleryDirectReadUITests: XCTestCase {
         // A retained accessibility node is not enough: the actual row must
         // respond to a normal tap and open detail, not start reading again.
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(app.buttons["阅读"].firstMatch.waitForExistence(timeout: 8))
+        let detailRead = app.buttons["gallery-detail-read"]
+        XCTAssertTrue(detailRead.waitForExistence(timeout: 8))
+        XCTAssertTrue(detailRead.isHittable)
+        XCTAssertFalse(close.exists, "A normal row tap must open the detail, not the reader.")
     }
     @MainActor func testFirstUncachedReadPersistsHistoryAndResumeAfterRelaunch() {
         continueAfterFailure = false
