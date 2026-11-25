@@ -1,7 +1,7 @@
 import XCTest
 
 final class OfflineImageArchiveUITests: XCTestCase {
-    @MainActor func testNativeCBZPickerOpensLocalReaderAndHistoryReturnsToProgress() throws {
+    @MainActor func testNativeCBZPickerRevealsAndMeasuresImportThenHistoryResumes() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_NATIVE_FILE_SMOKE"] == "1",
                           "Run the real Files picker as a separate native smoke test.")
         continueAfterFailure = false
@@ -10,6 +10,8 @@ final class OfflineImageArchiveUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         app.launchEnvironment["EH_FIXTURE_IMAGE_ARCHIVE"] = id
+        app.launchEnvironment["EH_FIXTURE_DOWNLOAD_SORT"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
         app.launch()
         XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
 
@@ -20,6 +22,35 @@ final class OfflineImageArchiveUITests: XCTestCase {
         try selectTab("下载")
         let actions = app.buttons["downloads-actions"].firstMatch
         XCTAssertTrue(actions.waitForExistence(timeout: 6))
+        func tapMenu(_ name: String) {
+            let action = app.buttons[name].firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 5), "Missing Downloads menu item: " + name)
+            action.tap()
+        }
+        let existing = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Sort Fixture Zebra")).firstMatch
+        let bytePattern = "[0-9]+([.,][0-9]+)? (B|KB|MB|GB)"
+        let measured = NSPredicate(format: "label MATCHES %@", ".*" + bytePattern + ".*")
+        let initialMeasurement = XCTNSPredicateExpectation(predicate: measured, object: existing)
+        XCTAssertEqual(XCTWaiter.wait(for: [initialMeasurement], timeout: 8), .completed)
+        actions.tap()
+        tapMenu("排序：默认顺序")
+        if app.buttons["排序依据"].firstMatch.isHittable { app.buttons["排序依据"].firstMatch.tap() }
+        tapMenu("占用空间")
+        actions.tap()
+        tapMenu("排序：占用空间")
+        if app.buttons["方向"].firstMatch.isHittable { app.buttons["方向"].firstMatch.tap() }
+        tapMenu("降序")
+        actions.tap()
+        let category = app.buttons["downloads-category"].firstMatch
+        XCTAssertTrue(category.waitForExistence(timeout: 5))
+        category.tap()
+        if app.buttons["画廊分类"].firstMatch.isHittable { app.buttons["画廊分类"].firstMatch.tap() }
+        tapMenu("Manga")
+        XCTAssertTrue(app.staticTexts["Sort Fixture Apple"].firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(existing.exists)
+        if app.buttons["Manga"].firstMatch.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.10)).tap()
+        }
         actions.tap()
         let archive = app.buttons["导入 ZIP / CBZ"].firstMatch
         XCTAssertTrue(archive.waitForExistence(timeout: 5))
@@ -45,6 +76,10 @@ final class OfflineImageArchiveUITests: XCTestCase {
             XCTFail("The native picker did not produce the synthetic gallery.")
             return
         }
+        let measuredImport = app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label MATCHES %@", name, ".*" + bytePattern + ".*"
+        )).firstMatch
+        XCTAssertTrue(measuredImport.waitForExistence(timeout: 8), "Imported row must receive a size without manual refresh")
         for _ in 0..<3 where gallery.frame.midY > app.frame.height * 0.82 { app.swipeUp() }
         gallery.tap()
         let pages = app.buttons["reader-pages"]

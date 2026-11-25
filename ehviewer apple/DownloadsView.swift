@@ -135,9 +135,7 @@ struct DownloadsView: View {
     @State private var readerGallery: GalleryInfo?
 
     // MARK: - 存储信息
-    @State private var gallerySizes: [Int64: Int64] = [:]  // gid -> bytes
-    @State private var totalStorageSize: Int64 = 0
-    @State private var isCalculatingSize = false
+    @State private var storage = DownloadStorageSnapshot()
     @State private var readingProgress: [Int64: Int] = [:]  // gid -> page index
 
     var body: some View {
@@ -224,17 +222,14 @@ struct DownloadsView: View {
                 Button("仅删除记录", role: .destructive) {
                     if let gid = deletingTaskGid {
                         vm.deleteTask(gid: gid, withFiles: false)
-                        // 移除缓存的大小
-                        gallerySizes.removeValue(forKey: gid)
-                        recalcTotalSize()
+                        storage.remove(gid: gid, withFiles: false)
                     }
                     deletingTaskGid = nil
                 }
                 Button("删除记录和文件", role: .destructive) {
                     if let gid = deletingTaskGid {
                         vm.deleteTask(gid: gid, withFiles: true)
-                        gallerySizes.removeValue(forKey: gid)
-                        recalcTotalSize()
+                        storage.remove(gid: gid, withFiles: true)
                     }
                     deletingTaskGid = nil
                 }
@@ -273,7 +268,7 @@ struct DownloadsView: View {
             selectedGids.formIntersection(current)
         }
         .onChange(of: listOrder.key) { _, key in
-            if key == .fileSize, gallerySizes.isEmpty {
+            if key == .fileSize, storage.sizes.isEmpty {
                 Task { await calculateStorageSizes() }
             }
         }
@@ -334,10 +329,10 @@ struct DownloadsView: View {
                 Image(systemName: "internaldrive")
                     .font(.system(size: 11))
                     .foregroundStyle(EhColor.tertiaryLabel)
-                if isCalculatingSize {
+                if storage.isScanning {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Text("共 \(vm.tasks.count) 本 · \(Self.formatFileSize(totalStorageSize))")
+                    Text("共 \(vm.tasks.count) 本 · \(Self.formatFileSize(storage.total))")
                         .font(EhFont.mono(11))
                         .foregroundStyle(EhColor.secondaryLabel)
                 }
@@ -457,26 +452,31 @@ struct DownloadsView: View {
     // MARK: - 存储计算
 
     private func calculateStorageSizes() async {
-        isCalculatingSize = true
+        let request = storage.begin()
         let tasks = vm.tasks
-        let downloadDir = DownloadManager.shared.downloadDirectory
-        let result: ([Int64: Int64], Int64) = await Task.detached {
+        let manager = DownloadManager.shared
+        let root = manager.finishedDeletionRoot
+        let scan = Task.detached(priority: .utility) {
             var sizes: [Int64: Int64] = [:]
             for task in tasks {
-                let dir = DownloadManager.shared.galleryDirectory(gid: task.gallery.gid, title: task.gallery.bestTitle)
-                sizes[task.gallery.gid] = StorageUtils.directorySize(at: dir)
+                guard !Task.isCancelled else { return (sizes, Int64(0)) }
+                let gid = task.gallery.gid
+                let name = DownloadManager.galleryDirectoryName(gid: gid, title: task.gallery.bestTitle)
+                sizes[gid] = StorageUtils.directorySize(at: root.appendingPathComponent(name))
             }
-            // 总空间直接从下载根目录计算，确保包含所有文件（含孤立目录和元数据）
-            let total = StorageUtils.directorySize(at: downloadDir)
-            return (sizes, total)
-        }.value
-        gallerySizes = result.0
-        totalStorageSize = result.1
-        isCalculatingSize = false
-    }
-
-    private func recalcTotalSize() {
-        totalStorageSize = gallerySizes.values.reduce(0, +)
+            // Include files outside the current rows, such as retained files and metadata.
+            return (sizes, StorageUtils.directorySize(at: root))
+        }
+        let (sizes, total) = await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+        guard !Task.isCancelled, manager.finishedDeletionRoot == root else {
+            storage.cancel(request)
+            return
+        }
+        storage.finish(request, sizes: sizes, total: total)
     }
 
     /// 递归计算目录大小
@@ -524,7 +524,9 @@ struct DownloadsView: View {
         var tasks = vm.tasks
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if let ids = EhOfflineUIFixture.downloadSortIDs {
-            tasks = tasks.filter { ids.contains($0.gallery.gid) }
+            let archiveTitle = EhOfflineUIFixture.downloadSortArchiveTitle
+            tasks = tasks.filter { ids.contains($0.gallery.gid) ||
+                (archiveTitle != nil && $0.gallery.title == archiveTitle) }
         }
         #endif
 
@@ -565,7 +567,7 @@ struct DownloadsView: View {
     }
 
     private func shownTasks(in base: [DownloadTask]) -> [DownloadTask] {
-        listOrder.apply(to: base.filter { statusFilter.includes($0) }, measuredSizes: gallerySizes)
+        listOrder.apply(to: base.filter { statusFilter.includes($0) }, measuredSizes: storage.sizes)
     }
 
     private var emptyTitle: String {
@@ -684,9 +686,11 @@ struct DownloadsView: View {
                     await vm.loadTasks()
                     selectedLabel = nil
                     statusFilter = .all
+                    if !categoryFilter.includes(gallery.category) { categoryFilter = .all }
                     searchText = ""
                     isSearching = false
                     EhToast.success("已导入 \(gallery.pages) 页图片")
+                    await calculateStorageSizes()
                 } catch is CancellationError {
                     return
                 } catch {
@@ -916,7 +920,7 @@ struct DownloadsView: View {
                             DownloadTaskRow(
                                 task: task,
                                 readingPage: readingProgress[task.gallery.gid],
-                                storageSize: gallerySizes[task.gallery.gid]
+                                storageSize: storage.sizes[task.gallery.gid]
                             ) {
                                 vm.pauseTask(gid: task.gallery.gid)
                             } onResume: {
@@ -938,7 +942,7 @@ struct DownloadsView: View {
                         DownloadTaskRow(
                             task: task,
                             readingPage: readingProgress[task.gallery.gid],
-                            storageSize: gallerySizes[task.gallery.gid]
+                            storageSize: storage.sizes[task.gallery.gid]
                         ) {
                             vm.pauseTask(gid: task.gallery.gid)
                         } onResume: {

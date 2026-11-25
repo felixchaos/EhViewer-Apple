@@ -71,6 +71,13 @@ enum EhOfflineUIFixture {
         return [900010000025, 900010000026]
     }
 
+    static var downloadSortArchiveTitle: String? {
+        guard downloadSortIDs != nil,
+              let id = ProcessInfo.processInfo.environment["EH_FIXTURE_IMAGE_ARCHIVE"],
+              UUID(uuidString: id) != nil else { return nil }
+        return "image-fixture-" + id
+    }
+
     private static let historyTagFixtureEnabled =
         ProcessInfo.processInfo.environment["EH_FIXTURE_HISTORY_TAG"] == "1"
     private static let historyTag = "route fixture"
