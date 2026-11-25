@@ -190,6 +190,10 @@ struct GalleryListView: View {
 
 
 
+    #if os(iOS)
+    @State private var continueReading: ContinueReadingSnapshot?
+    #endif
+
     var body: some View {
         // 诊断: 确认 body 是否被无限重渲染 (NSLog 不受缓冲影响，崩溃前也能看到)
         #if DEBUG
@@ -261,6 +265,13 @@ struct GalleryListView: View {
                 viewModel.loadGalleries(mode: effectiveMode)
             }
         }
+        #if os(iOS)
+        .task {
+            guard case .home = mode else { return }
+            let snapshot = await ContinueReadingSnapshot.load()
+            if !Task.isCancelled { continueReading = snapshot }
+        }
+        #endif
         .onChange(of: viewModel.galleries) { _, list in
             visibleGalleries?.wrappedValue = list
         }
@@ -564,13 +575,13 @@ struct GalleryListView: View {
                     .accessibilityHidden(true)
                     .id(EhCompactHomeScrollOnReselect.topAnchor)
             }
-            #endif
             // Fix F2-1: \u9996\u9875\u9876\u90e8\u663e\u793a\u201c\u7ee7\u7eed\u9605\u8bfb\u201d\u5361\u7247
-            if case .home = mode {
-                ContinueReadingCard()
+            if case .home = mode, let continueReading {
+                ContinueReadingCard(snapshot: continueReading)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
             }
+            #endif
 
             // 内联加载指示器 (不阻塞界面，用户可正常操作其他 Tab 和功能)
             if viewModel.isLoading && viewModel.galleries.isEmpty {

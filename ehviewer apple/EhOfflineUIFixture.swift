@@ -18,6 +18,51 @@ enum EhOfflineUIFixture {
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
+    private static let coldReaderMode = ProcessInfo.processInfo.environment["EH_FIXTURE_DIRECT_COLD"]
+    private static let coldGallery = GalleryInfo(
+        gid: 900010000030, token: "fixture", title: "First visit fixture", pages: 3
+    )
+    private static let missingCountGallery = GalleryInfo(
+        gid: 900010000032, token: "fixture", title: "Missing page count fixture"
+    )
+    private static let previousGallery = GalleryInfo(
+        gid: 900010000031, token: "fixture", title: "Previous visit fixture", pages: 3
+    )
+
+    private static func seedColdReader() {
+        guard let mode = coldReaderMode else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "reader_tutorial_shown")
+        if mode == "reset" || mode == "missing-reset" {
+            let gallery = mode == "reset" ? coldGallery : missingCountGallery
+            try? EhDatabase.shared.deleteHistory(gid: gallery.gid)
+            try? EhDatabase.shared.deleteLocalFavorite(gid: gallery.gid)
+            defaults.removeObject(forKey: "reading_progress_\(gallery.gid)")
+            try? EhDatabase.shared.insertHistory(.init(gid: previousGallery.gid, token: previousGallery.token,
+                                                       title: previousGallery.title ?? "", pages: 3, date: Date()))
+            defaults.set(previousGallery.gid, forKey: "eh_last_reading_gid")
+            defaults.set(Date().timeIntervalSince1970, forKey: "eh_last_reading_time")
+            defaults.set(0, forKey: "reading_progress_\(previousGallery.gid)")
+        }
+        // Feed numbered images without creating a download or detail record.
+        let directory = FileManager.default.temporaryDirectory
+        for index in 0..<3 {
+            let path = directory.appendingPathComponent("cold-reader-page-\(index).png")
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180)).image { context in
+                UIColor.systemBlue.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 120, height: 180))
+                String(index + 1).draw(at: CGPoint(x: 32, y: 50), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 42), .foregroundColor: UIColor.white
+                ])
+            }
+            if let bytes = image.pngData(), (try? bytes.write(to: path, options: .atomic)) != nil {
+                for gallery in [coldGallery, previousGallery, missingCountGallery] {
+                    GalleryCache.shared.putImageURL(path.absoluteString, gid: gallery.gid, page: index)
+                }
+            }
+        }
+    }
+
     // Keep this UI test independent of other synthetic scenarios on a reused simulator.
     static var downloadSortIDs: Set<Int64>? {
         guard enabled, ProcessInfo.processInfo.environment["EH_FIXTURE_DOWNLOAD_SORT"] == "1" else { return nil }
@@ -35,6 +80,7 @@ enum EhOfflineUIFixture {
     )
 
     static func seed() {
+        seedColdReader()
         AppSettings.shared.recentFavCat = -1
         AppSettings.shared.defaultFavSlot = -1
         let fixturePage = ProcessInfo.processInfo.environment["EH_FIXTURE_LAUNCH_PAGE"].flatMap(Int.init) ?? 0
@@ -249,9 +295,51 @@ enum EhOfflineUIFixture {
                 GalleryInfo(gid: 900010000005, token: "fixture", title: "Synthetic ranking launch")
             ])
         default:
-            return GalleryListResult(galleries: [synthetic])
+            let gallery = if coldReaderMode?.hasPrefix("missing-") == true {
+                missingCountGallery
+            } else {
+                coldReaderMode == nil ? synthetic : coldGallery
+            }
+            return GalleryListResult(galleries: [gallery])
         }
     }
+}
+
+/// Scoped to the opt-in simulator session. No request in it leaves the app.
+final class EhOfflineReaderMetadataProtocol: URLProtocol, @unchecked Sendable {
+    private final class AttemptCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func advance() -> Int {
+            lock.withLock {
+                count += 1
+                return count
+            }
+        }
+    }
+
+    private static let attempts = AttemptCounter()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url, url.pathComponents.filter({ $0 != "/" }) == ["g", "900010000032", "fixture"] else {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
+        let first = Self.attempts.advance() == 1
+        guard let response = HTTPURLResponse(url: url, statusCode: first ? 503 : 200,
+                                             httpVersion: nil, headerFields: nil) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        // Even an HTTP error page may contain a page-count-like string.
+        client?.urlProtocol(self, didLoad: Data((first ? "Service busy, 99 pages" : "3 pages").utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
 
 /// Only the synthetic reader launch needs asynchronous local data setup.

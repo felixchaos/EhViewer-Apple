@@ -32,12 +32,14 @@ struct ImageReaderView: View {
     let token: String
     let pages: Int
     let previewSet: PreviewSet?
-    let fallbackTitle: String?
+    let galleryHint: GalleryInfo?
     let onRequestClose: (() -> Void)?
     /// 初始页面 (0-based, 对齐 Android GalleryActivityEvent.page)
     let initialPage: Int?
 
     @State private var vm: ReaderViewModel
+    @State private var openAttempt = 0
+    @State private var failedToOpen = false
     @State private var showOverlay = true
     @State private var showSettings = false
     #if os(iOS)
@@ -119,7 +121,7 @@ struct ImageReaderView: View {
         pages: Int,
         previewSet: PreviewSet? = nil,
         initialPage: Int? = nil,
-        fallbackTitle: String? = nil,
+        galleryHint: GalleryInfo? = nil,
         onRequestClose: (() -> Void)? = nil
     ) {
         self.gid = gid
@@ -127,7 +129,7 @@ struct ImageReaderView: View {
         self.pages = pages
         self.previewSet = previewSet
         self.initialPage = initialPage
-        self.fallbackTitle = fallbackTitle
+        self.galleryHint = galleryHint
         self.onRequestClose = onRequestClose
 
         let viewModel = ReaderViewModel()
@@ -150,8 +152,21 @@ struct ImageReaderView: View {
                 // HUD use the active window's live, potentially asymmetric safe area.
                 GeometryReader { artworkGeometry in
                     if vm.totalPages == 0 {
-                        ProgressView()
-                            .tint(.white)
+                        if failedToOpen {
+                            VStack(spacing: 14) {
+                                Text("无法加载画廊")
+                                Button("重试") {
+                                    failedToOpen = false
+                                    openAttempt += 1
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            ProgressView()
+                                .tint(.white)
+                        }
                     } else if readingDirection == .topToBottom {
                         verticalScrollReader(geometry: artworkGeometry)
                     } else {
@@ -211,13 +226,14 @@ struct ImageReaderView: View {
         }
         .onAppear(perform: setupReader)
         .onDisappear(perform: cleanupReader)
-        .task {
+        .task(id: openAttempt) {
             await vm.openGallery(
                 gid: gid, token: token, pageCount: pages,
                 previewSet: previewSet, initialPage: initialPage
             )
-            // Fix F2-2: 只有真正打开阅读器才记录历史 (从详情页 loadDetail 迁移到这里)
-            recordReadingHistory()
+            guard !Task.isCancelled else { return }
+            failedToOpen = vm.totalPages == 0
+            if !failedToOpen { recordReadingHistory() }
         }
         .sheet(isPresented: $showSettings) {
             ReaderSettingsSheet(
@@ -448,16 +464,11 @@ struct ImageReaderView: View {
         timeTimer?.invalidate()
         autoPageTask?.cancel()
         pageChangeTask?.cancel()
-        vm.saveReadingProgress(for: gid)
+        if vm.totalPages > 0 { vm.saveReadingProgress(for: gid) }
     }
 
-    /// 从本地已有的记录里凑出一条历史。
-    ///
-    /// 依次找：已有的历史行（续读同一本，保留原信息只更新时间）→ 下载记录 →
-    /// 本地收藏。三处都没有就返回 nil，宁可不记，也不要往历史里塞一行认不出来的空记录。
-    private static func historyRecordFromLocalSources(
-        gid: Int64, token: String, pages: Int
-    ) -> HistoryRecord? {
+    /// Keep known history and local metadata when no detail has been loaded.
+    private static func historyRecordFromLocalSources(gid: Int64, pages: Int) -> HistoryRecord? {
         if let existing = (try? EhDatabase.shared.getHistory(gid: gid)) ?? nil {
             return existing
         }
@@ -486,49 +497,48 @@ struct ImageReaderView: View {
         return nil
     }
 
-    /// Fix F2-2: 只有真正打开阅读器才计入历史 (从 GalleryDetailViewModel.loadDetail 迁移至此)
-    private func recordReadingHistory() {
-        // 从缓存中获取画廊信息
-        if let detail = GalleryCache.shared.getDetail(gid: gid) {
-            let info = detail.info
-            var record = HistoryRecord(
-                gid: info.gid, token: info.token,
-                title: info.bestTitle, category: info.category.rawValue,
-                pages: info.pages, mode: 0, date: Date()
-            )
-            record.titleJpn = info.titleJpn
-            record.thumb = info.thumb
-            record.posted = info.posted
-            record.uploader = info.uploader
-            record.rating = info.rating
-            record.simpleTags = info.simpleTags
-            record.simpleLanguage = info.simpleLanguage
-            do {
-                try EhDatabase.shared.insertHistory(record)
-                try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
-                NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
-            } catch {
-                debugLog("Failed to record reading history: \(error)")
-            }
-        } else if var record = Self.historyRecordFromLocalSources(gid: gid, token: token, pages: pages) {
-            // 没有详情缓存（从下载列表 / 收藏直接打开阅读器）时，去本地已有的记录里取。
-            //
-            // 此前这里直接写一条 title: "" / category: 0 的空记录，
-            // 历史页上就是一行「Untitled · Unknown · 0.00」——比不记还糟：
-            // 用户既认不出是哪一本，那行还占着位置。
-            record.date = Date()
-            do {
-                try EhDatabase.shared.insertHistory(record)
-                try EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
-                NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
-            } catch {
-                debugLog("Failed to record reading history: \(error)")
-            }
-        }
+    private func historyRecord(from info: GalleryInfo) -> HistoryRecord {
+        var record = HistoryRecord(
+            gid: info.gid, token: info.token, title: info.bestTitle,
+            category: info.category.rawValue, pages: vm.totalPages, mode: 0, date: Date()
+        )
+        record.titleJpn = info.titleJpn
+        record.thumb = info.thumb
+        record.posted = info.posted
+        record.uploader = info.uploader
+        record.rating = info.rating
+        record.simpleTags = info.simpleTags
+        record.simpleLanguage = info.simpleLanguage
+        return record
+    }
 
-        // 记录最后阅读的画廊 GID (给"继续阅读"功能使用)
-        UserDefaults.standard.set(gid, forKey: "eh_last_reading_gid")
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "eh_last_reading_time")
+    /// A direct read can have a usable Browse row without a cached detail.
+    /// Publish the resume target only after its matching History row is saved.
+    private func recordReadingHistory() {
+        guard !Task.isCancelled, vm.totalPages > 0 else { return }
+        let record: HistoryRecord
+        if let detail = GalleryCache.shared.getDetail(gid: gid) {
+            record = historyRecord(from: detail.info)
+        } else if var previous = Self.historyRecordFromLocalSources(gid: gid, pages: vm.totalPages) {
+            previous.date = Date()
+            previous.pages = vm.totalPages
+            record = previous
+        } else if let galleryHint, galleryHint.gid == gid, galleryHint.token == token,
+                  [galleryHint.title, galleryHint.titleJpn].compactMap({ $0 })
+                    .contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            record = historyRecord(from: galleryHint)
+        } else {
+            return
+        }
+        do {
+            try EhDatabase.shared.insertHistory(record)
+            UserDefaults.standard.set(gid, forKey: "eh_last_reading_gid")
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "eh_last_reading_time")
+            try? EhDatabase.shared.trimHistory(maxCount: AppSettings.shared.historyInfoSize)
+            NotificationCenter.default.post(name: .galleryHistoryChanged, object: nil)
+        } catch {
+            debugLog("Failed to record reading history: \(error)")
+        }
     }
 
     /// 往后翻就收起工具条，进入全屏。
@@ -1442,15 +1452,11 @@ struct ImageReaderView: View {
         .padding(.top, 8)
     }
 
-    /// 顶栏胶囊里的画廊标题。
-    ///
-    /// 阅读器只拿到 gid/token，标题从详情缓存里取——这份缓存在进阅读器之前
-    /// 必然已经填好（详情页是唯一入口），所以不必为它多发一次请求。
-    /// 取不到就不显示，胶囊缩成只有返回键，不占无谓的宽度。
+    /// Prefer the detail title; direct Browse entry can use its list title.
     private var readerTitle: String? {
-        let cached = GalleryCache.shared.getDetail(gid: gid)?.info
-            .suitableTitle(preferJpn: AppSettings.shared.showJpnTitle)
-        return [cached, fallbackTitle].compactMap { $0 }.first { !$0.isEmpty }
+        let info = GalleryCache.shared.getDetail(gid: gid)?.info ?? galleryHint
+        let title = info?.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle)
+        return title.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// 底部页码文案 —— 双页时显示成 "12–13"

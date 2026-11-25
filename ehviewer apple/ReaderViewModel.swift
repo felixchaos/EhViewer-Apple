@@ -337,6 +337,11 @@ class ReaderViewModel {
         config.timeoutIntervalForResource = 120
         config.waitsForConnectivity = true
         config.httpMaximumConnectionsPerHost = 6
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled {
+            config.protocolClasses = [EhOfflineReaderMetadataProtocol.self]
+        }
+        #endif
         return URLSession(configuration: config)
     }()
 
@@ -666,6 +671,7 @@ class ReaderViewModel {
         let needsLoad = prepareForGallery(targetGid: gid, targetToken: token)
         if needsLoad {
             await setupLocalGallery()
+            guard !Task.isCancelled else { return }
             if pageCount > 0 {
                 totalPages = pageCount
             }
@@ -675,6 +681,7 @@ class ReaderViewModel {
             if totalPages == 0 {
                 await fetchGalleryInfo()
             }
+            guard !Task.isCancelled, totalPages > 0 else { return }
             computeSpreads()
         }
 
@@ -821,16 +828,18 @@ class ReaderViewModel {
                              forHTTPHeaderField: "User-Agent")
             request.timeoutInterval = 15
 
-            let (data, _) = try await Self.session.data(for: request)
-            let html = String(data: data, encoding: .utf8) ?? ""
-
-            if let match = Self.pagesPattern.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-               let range = Range(match.range(at: 1), in: html) {
-                let pages = Int(html[range]) ?? 0
-                await MainActor.run { self.totalPages = pages }
-            }
-
+            let requestedGID = gid
+            let requestedToken = token
+            let (data, response) = try await Self.session.data(for: request)
+            guard !Task.isCancelled, gid == requestedGID, token == requestedToken,
+                  let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status),
+                  let html = String(data: data, encoding: .utf8) else { return }
             let range = NSRange(html.startIndex..., in: html)
+            guard let match = Self.pagesPattern.firstMatch(in: html, range: range),
+                  let countRange = Range(match.range(at: 1), in: html),
+                  let count = Int(html[countRange]), count > 0 else { return }
+            totalPages = count
+
             let matches = Self.pTokenUrlPattern.matches(in: html, range: range)
             for m in matches {
                 guard let ptRange = Range(m.range(at: 1), in: html),

@@ -11,22 +11,32 @@ import EhModels
 import EhDatabase
 import EhSettings
 
+/// Loaded by the mounted Home view, not by the optional row itself. A List
+/// has no row to mount while the record is absent, so a row task cannot bootstrap it.
+struct ContinueReadingSnapshot: Sendable {
+    let record: HistoryRecord
+    let progress: Int?
+
+    static func load() async -> Self? {
+        await Task.detached(priority: .userInitiated) {
+            let defaults = UserDefaults.standard
+            let age = Date().timeIntervalSince1970 - defaults.double(forKey: "eh_last_reading_time")
+            guard (0..<86400).contains(age),
+                  let gid = (defaults.object(forKey: "eh_last_reading_gid") as? NSNumber)?.int64Value,
+                  let record = try? EhDatabase.shared.getHistory(gid: gid) else { return nil }
+            let progress = defaults.object(forKey: "reading_progress_\(gid)") as? Int
+            return Self(record: record, progress: progress)
+        }.value
+    }
+}
+
 /// 继续阅读卡片 — 显示最近阅读的画廊，一键跳转阅读器
 struct ContinueReadingCard: View {
-    @State private var latestRecord: HistoryRecord?
-    @State private var readingProgress: Int?
+    let snapshot: ContinueReadingSnapshot
     @State private var readerLaunchItem: ReaderLaunchItem?
 
     var body: some View {
-        Group {
-            if let record = latestRecord, shouldShow {
-                cardContent(record: record)
-            }
-        }
-        // ⚠️ 关键修复: 使用 .task (异步) 替代 .onAppear (同步)
-        // 原 .onAppear 在主线程同步调用 dbQueue.read → 如果后台 VACUUM 持有 dbQueue，
-        // 主线程永久阻塞 → .task 永远无法执行 → 白屏 + 发热 + 闪退
-        .task { await loadLatestReadingAsync() }
+        cardContent(record: snapshot.record)
         #if os(iOS)
         .fullScreenCover(item: $readerLaunchItem) { item in
             ImageReaderView(
@@ -39,36 +49,6 @@ struct ContinueReadingCard: View {
         #endif
     }
 
-    /// 只在最近 24 小时内有阅读记录时显示
-    private var shouldShow: Bool {
-        guard let timestamp = UserDefaults.standard.object(forKey: "eh_last_reading_time") as? TimeInterval else {
-            return false
-        }
-        let lastTime = Date(timeIntervalSince1970: timestamp)
-        return Date().timeIntervalSince(lastTime) < 86400 // 24 小时
-    }
-
-    /// 异步加载最近阅读记录 — 数据库操作在后台线程执行，不阻塞主线程
-    private func loadLatestReadingAsync() async {
-        let lastGid = UserDefaults.standard.object(forKey: "eh_last_reading_gid") as? Int64
-        guard let gid = lastGid else { return }
-
-        // 在后台线程执行数据库读取，避免 DatabaseQueue 串行锁阻塞主线程
-        let result: (record: HistoryRecord?, progress: Int?) = await Task.detached {
-            // Imports can add more than 50 newer history rows without changing
-            // the Apple resume target. Find that target by its identity.
-            let record = try? EhDatabase.shared.getHistory(gid: gid)
-
-            let key = "reading_progress_\(gid)"
-            let progress = UserDefaults.standard.object(forKey: key) as? Int
-            return (record, progress)
-        }.value
-
-        // 回到主线程更新 @State
-        latestRecord = result.record
-        readingProgress = result.progress
-    }
-
     @ViewBuilder
     private func cardContent(record: HistoryRecord) -> some View {
         Button {
@@ -77,7 +57,7 @@ struct ContinueReadingCard: View {
                 token: record.token,
                 pages: record.pages,
                 previewSet: nil,
-                initialPage: readingProgress
+                initialPage: snapshot.progress
             )
         } label: {
             HStack(spacing: EhSpacing.row) {
@@ -96,7 +76,7 @@ struct ContinueReadingCard: View {
                         .lineLimit(1)
                         .foregroundStyle(EhColor.label)
 
-                    if let progress = readingProgress, record.pages > 0 {
+                    if let progress = snapshot.progress, record.pages > 0 {
                         let page = progress + 1
                         let percent = Int(Double(page) / Double(record.pages) * 100)
                         Text("\(page) / \(record.pages) 页 · \(percent)%")
@@ -126,10 +106,14 @@ struct ContinueReadingCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("home-continue-reading")
         .padding(.top, 8)
     }
 }
 
 #Preview {
-    ContinueReadingCard()
+    ContinueReadingCard(snapshot: .init(
+        record: .init(gid: 1, token: "preview", title: "Preview gallery", pages: 3, date: Date()),
+        progress: 1
+    ))
 }

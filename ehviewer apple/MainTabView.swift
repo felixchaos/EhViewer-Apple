@@ -131,7 +131,7 @@ struct MainTabView: View {
                     // Stay in the owning root so closing native context UI and opening
                     // a reader do not compete for the same presentation controller.
                     ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
-                                    fallbackTitle: gallery.suitableTitle(preferJpn: AppSettings.shared.showJpnTitle),
+                                    galleryHint: gallery,
                                     onRequestClose: { directReaderGallery = nil })
                         .id(gallery.gid)
                 }
