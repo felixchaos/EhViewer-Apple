@@ -12,6 +12,7 @@ import EhModels
 import EhSpider
 import EhSettings
 import EhDatabase
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -54,8 +55,12 @@ struct ImageReaderView: View {
     /// 页面网格（对齐 Android 阅读器的「目录」）——
     /// 此前跳页只有底部那条 slider，200 页的本子要靠手感拖
     @State private var showPageGrid = false
-    /// 单页分享/存储用的临时文件（对齐 Android page_menu_share / save_to）
-    @State private var shareItem: ReaderShareItem?
+    @State private var pageExport: ReaderPageExport?
+    @State private var isExportingPageFile = false
+    @State private var pageExportTask: Task<Void, Never>?
+    #if os(iOS)
+    @State private var pageShare: ReaderPageExport?
+    #endif
     @State private var hasAppliedInitialPage = false
     @State private var isZoomed = false
     @State private var showTutorial = false
@@ -243,9 +248,18 @@ struct ImageReaderView: View {
                 autoPageEnabled: $autoPageEnabled
             )
         }
+        .fileExporter(isPresented: $isExportingPageFile,
+                      document: pageExport.map(ReaderPageExportDocument.init),
+                      contentTypes: [pageExport?.type ?? .image],
+                      defaultFilename: pageExport?.basename) { result in
+            pageExport = nil
+            if case .failure = result { EhToast.failure("无法存储图片") }
+        } onCancellation: {
+            pageExport = nil
+        }
         #if os(iOS)
-        .sheet(item: $shareItem) { item in
-            ShareSheet(items: [item.url])
+        .sheet(item: $pageShare) { export in
+            ReaderPageShareSheet(export: export)
         }
         #endif
         .sheet(isPresented: $showPageGrid) {
@@ -454,6 +468,8 @@ struct ImageReaderView: View {
     #endif
 
     private func cleanupReader() {
+        pageExportTask?.cancel()
+        pageExportTask = nil
         #if os(iOS)
         isReaderVisible = false
         ReaderIdleTimerOwnership.shared.remove(idleTimerReaderID)
@@ -793,8 +809,17 @@ struct ImageReaderView: View {
     /// 显示一个 spread (单页或双页合成) — 使用 ViewModel 合成图
     @ViewBuilder
     private func spreadPageView(spread: PageSpread) -> some View {
-        if let spread = vm.spreadPresentation(at: spread.id, direction: readingDirection) {
-            spreadImageView(spread)
+        if let presentation = vm.spreadPresentation(at: spread.id, direction: readingDirection) {
+            spreadImageView(presentation)
+                .contextMenu {
+                    if let second = spread.secondaryPage {
+                        let first = spread.primaryPage
+                        Menu("第 \(first + 1) 页") { pageMenu(index: first) }
+                        Menu("第 \(second + 1) 页") { pageMenu(index: second) }
+                    } else {
+                        pageMenu(index: spread.primaryPage)
+                    }
+                }
         } else {
             // 至少一页尚未加载 — 显示加载状态
             VStack(spacing: 12) {
@@ -1016,7 +1041,7 @@ struct ImageReaderView: View {
                 }
             }
             .contextMenu {
-                pageMenu(index: index, image: cachedImage)
+                pageMenu(index: index)
             }
         } else if vm.imageURLs[index] != nil {
             VStack(spacing: 8) {
@@ -1072,49 +1097,62 @@ struct ImageReaderView: View {
     // MARK: - Single Page Image (翻页模式单页)
 
     /// 单页菜单。四项与 Android GalleryActivity.showPageDialog 一一对应：
-    /// 刷新本页 / 分享 / 保存到相册 / 存储到文件。
-    @ViewBuilder
-    private func pageMenu(index: Int, image: PlatformImage) -> some View {
+    private enum PageExportDestination {
+        case file
         #if os(iOS)
+        case share, photos
+        #endif
+    }
+
+    @ViewBuilder
+    private func pageMenu(index: Int) -> some View {
         Button {
-            // 对齐 Android: removeCache(page) + forceRequest(page)
             Task { await vm.retryLoadPage(index) }
         } label: {
             Label("刷新本页", systemImage: "arrow.clockwise")
         }
 
+        #if os(iOS)
         Button {
-            if let url = ReaderImageSaver.temporaryFile(for: image, gid: gid, page: index) {
-                shareItem = ReaderShareItem(url: url)
-            } else {
-                EhToast.failure("无法准备图片")
-            }
+            exportPage(index, to: .share)
         } label: {
             Label("分享", systemImage: "square.and.arrow.up")
         }
-
         Button {
-            Task { await ReaderImageSaver.saveToPhotos(image) }
+            exportPage(index, to: .photos)
         } label: {
             Label("保存到相册", systemImage: "photo.badge.arrow.down")
         }
-
+        #endif
         Button {
-            // 「存储到文件」走的也是系统面板，那里有「存储到文件」这一项，
-            // 对应 Android 的 page_menu_save_to
-            if let url = ReaderImageSaver.temporaryFile(for: image, gid: gid, page: index) {
-                shareItem = ReaderShareItem(url: url)
-            }
+            exportPage(index, to: .file)
         } label: {
             Label("存储到文件", systemImage: "folder.badge.plus")
         }
-        #else
-        Button {
-            Task { await vm.retryLoadPage(index) }
-        } label: {
-            Label("刷新本页", systemImage: "arrow.clockwise")
+    }
+
+    private func exportPage(_ index: Int, to destination: PageExportDestination) {
+        guard pageExportTask == nil, !isExportingPageFile else { return }
+        pageExportTask = Task {
+            defer { if !Task.isCancelled { pageExportTask = nil } }
+            let source = await vm.pageExport(index)
+            guard !Task.isCancelled else { return }
+            guard let source else {
+                EhToast.failure("原始图片不在本机。刷新本页后再试。")
+                return
+            }
+            switch destination {
+            case .file:
+                pageExport = source
+                isExportingPageFile = true
+            #if os(iOS)
+            case .share:
+                pageShare = source
+            case .photos:
+                await ReaderPagePhotos.save(source)
+            #endif
+            }
         }
-        #endif
     }
 
     private func pageImage(index: Int) -> some View {
@@ -1150,7 +1188,7 @@ struct ImageReaderView: View {
                 // 单页菜单（对齐 Android GalleryActivity.showPageDialog）。
                 // 此前一项都没有：一页加载坏了只能退出重进，想留一张也没出口。
                 .contextMenu {
-                    pageMenu(index: index, image: cachedImage)
+                    pageMenu(index: index)
                 }
                 #else
                 ZoomableImageView(
@@ -1165,6 +1203,7 @@ struct ImageReaderView: View {
                         isZoomed = zoomed
                     }
                 )
+                .contextMenu { pageMenu(index: index) }
                 #endif
             } else if vm.imageURLs[index] != nil {
                 VStack(spacing: 8) {

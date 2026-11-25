@@ -13,8 +13,10 @@ import SQLite3
 enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
     static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
+    static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
     static let synthetic = GalleryInfo(
-        gid: 900010000001, token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
+        gid: encodedExportFixture ? 900010000031 : 900010000001,
+        token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
 
@@ -141,8 +143,25 @@ enum EhOfflineUIFixture {
                     .font: UIFont.systemFont(ofSize: 48), .foregroundColor: UIColor.white
                 ])
             }
-            guard let bytes = image.pngData() else { return false }
-            await manager.saveWhileReading(gallery: completed, pageIndex: page, data: bytes, extension: ".png")
+            let isEncodedExportPage = encodedExportFixture && page == 0
+            let sample = isEncodedExportPage ? image.jpegData(compressionQuality: 0.71) : image.pngData()
+            guard let bytes = sample else { return false }
+            if isEncodedExportPage,
+               let id = ProcessInfo.processInfo.environment["EH_FIXTURE_EXPORT_DESTINATION"],
+               UUID(uuidString: id) != nil {
+                do {
+                    let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                                appropriateFor: nil, create: true)
+                    try FileManager.default.createDirectory(
+                        at: documents.appendingPathComponent("export-fixture-" + id, isDirectory: true),
+                        withIntermediateDirectories: false
+                    )
+                    try bytes.write(to: FileManager.default.temporaryDirectory
+                        .appendingPathComponent("export-reference-" + id + ".jpg"), options: .atomic)
+                } catch { return false }
+            }
+            await manager.saveWhileReading(gallery: completed, pageIndex: page, data: bytes,
+                                           extension: isEncodedExportPage ? ".jpg" : ".png")
             if (clearFinished || sort), page == 0 {
                 await manager.saveWhileReading(gallery: paused, pageIndex: 0, data: bytes, extension: ".png")
             }

@@ -1147,6 +1147,7 @@ class ReaderViewModel {
                            Self.downsampledImage(data: data)
                        }).value {
                         guard ownsDownload(index, owner) else { return }
+                        SpiderDen.cacheImageData(data, gid: owner.gallery, page: index)
                         Self.imageCache.setObject(img, forKey: self.cacheKey(for: index), cost: Self.decodedCost(of: img))
                         cachedImages[index] = img
                         errorPages.remove(index)
@@ -1261,6 +1262,38 @@ class ReaderViewModel {
         Self.imageCache.setObject(image, forKey: key, cost: Self.decodedCost(of: image))
         cachedImages[index] = image
         return .loaded
+    }
+
+    /// Export only encoded bytes already held by the app. Do not resolve a
+    /// remote URL or use the decoded, possibly downsampled display image.
+    func pageExport(
+        _ index: Int,
+        cacheLookup: (@Sendable (Int64, Int) async -> Data?)? = nil
+    ) async -> ReaderPageExport? {
+        guard index >= 0, index < totalPages else { return nil }
+        let gallery = gid
+        let session = readerImageSession
+        let retry = retryGeneration[index, default: 0]
+        let localDirectory = downloadDir
+
+        let cached: Data?
+        if let cacheLookup {
+            cached = await cacheLookup(gallery, index)
+        } else {
+            cached = await SpiderDen.cachedReaderImageData(gid: gallery, page: index)
+        }
+        guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return nil }
+        // The reader tries the encoded disk cache before the local file.
+        if let cached, let export = ReaderPageExport(bytes: cached, gid: gallery, page: index) {
+            return export
+        }
+        guard let localDirectory else { return nil }
+        let localBytes = await ReaderPageExport.readLocalPage(in: localDirectory) { directory in
+            SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: index)
+        }
+        guard ownsImageRead(index, gallery: gallery, session: session, retry: retry),
+              let data = localBytes else { return nil }
+        return ReaderPageExport(bytes: data, gid: gallery, page: index)
     }
 
     private func ownsImageRead(_ index: Int, gallery: Int64, session: UInt64, retry: Int) -> Bool {
