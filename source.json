@@ -9,11 +9,19 @@
       "bundleIdentifier": "Stellatrix.ehviewer-apple",
       "developerName": "Felix Chaos",
       "subtitle": "E-Hentai / ExHentai 画廊客户端",
-      "localizedDescription": "用 SwiftUI 重写的 E-Hentai / ExHentai 画廊客户端，支持 iPhone、iPad 与 Mac。功能与交互对齐 Android 端的 EhViewer_CN_SXJ。",
+      "localizedDescription": "E-Hentai / ExHentai 画廊客户端，支持 iPhone、iPad 与 Mac。支持浏览、搜索、阅读、收藏及下载。",
       "iconURL": "https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/ehviewer%20apple/Assets.xcassets/AppLogo.imageset/AppLogo.png",
       "tintColor": "FFB340",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "1.3.7",
+          "date": "2026-11-25T14:56:29Z",
+          "localizedDescription": "## 导航与筛选\n- 点击画廊标签时，在来源范围内打开独立工作区，并保留上一层的页面、筛选和滚动位置。\n- iPhone 工作区切换仅移动页面内容。下载、本地收藏和云端收藏进入多选时，底部导航由批量操作替代。\n- 订阅搜索默认限制在订阅范围。快捷搜索保留已保存的搜索范围和高级筛选条件。取消高级筛选不改变当前条件。\n\n## 阅读与下载\n- iOS 纵向阅读支持双击和双指缩放。放大后仍可连续滚动。\n- 优化图片下载调度。超时页的重试不占用后续页的首次下载；缩略图分页按返回结果识别。已下载文件不会在续传时重复下载。\n- 批量暂停和恢复仅影响处于相应状态的下载任务。应用回到前台时恢复等待队列，不恢复手动暂停的任务。支持从图片文件夹、ZIP 或 CBZ 导入离线阅读。\n- 支持保存已加载的原始图片。同名画廊分别生成 ZIP 文件，不覆盖此前导出的文件。全部预览与评论加载失败后可重试。\n\n## 账号与设置\n- 区分未登录和用户名不可用状态。已登录时显示当前账号名称。头像可从设备上的照片或文件选取，仅保存在应用本地。\n- 代理只在确认应用后更改。通用请求和新下载使用同一代理配置。\n- 在启用蜂窝网络下载提醒时，列表、收藏、历史和详情的新增下载均需确认。\n\niPhone / iPad 的最低系统版本为 iOS / iPadOS 18.0。IPA 需重签。本版本不提供新的 macOS 安装包。",
+          "downloadURL": "https://github.com/felixchaos/EhViewer-Apple/releases/download/v1.3.7/EhViewer-1.3.7.ipa",
+          "size": 9250127,
+          "minOSVersion": "18.0"
+        },
         {
           "version": "1.3.6",
           "date": "2026-11-22T04:37:22Z",
