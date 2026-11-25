@@ -210,6 +210,9 @@ struct ImageReaderView: View {
         .onChange(of: wantsIdleTimerDisabled) { _, _ in
             updateIdleTimerOwnership()
         }
+        .onChange(of: AppSettings.shared.volumePage) { _, _ in
+            updateVolumePaging()
+        }
         .statusBarHidden(AppSettings.shared.readingFullscreen)
         .persistentSystemOverlays(AppSettings.shared.readingFullscreen ? .hidden : .automatic)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -240,6 +243,20 @@ struct ImageReaderView: View {
             failedToOpen = vm.totalPages == 0
             if !failedToOpen { recordReadingHistory() }
         }
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        .overlay(alignment: .trailing) {
+            if EhOfflineUIFixture.volumePagingFixture {
+                VStack {
+                    Button("Fixture volume down") { volumePageTurner.sendFixtureVolume(0.4) }
+                    Button("Fixture volume up") { volumePageTurner.sendFixtureVolume(0.6) }
+                    Text("Fixture page \(vm.currentPage + 1)")
+                }
+                .padding(8)
+                .foregroundStyle(.white)
+                .background(.black)
+            }
+        }
+        #endif
         .sheet(isPresented: $showSettings) {
             ReaderSettingsSheet(
                 readingDirection: $readingDirection,
@@ -433,13 +450,7 @@ struct ImageReaderView: View {
         if AppSettings.shared.customScreenLightness {
             setScreenBrightness(CGFloat(AppSettings.shared.screenLightness) / 100.0)
         }
-        // 音量键翻页 (媒体模式的外置翻页器) — 对齐 Android volume_page 设置
-        if AppSettings.shared.volumePage {
-            volumePageTurner.start(
-                onNext: { goToNextPage() },
-                onPrevious: { goToPreviousPage() }
-            )
-        }
+        updateVolumePaging()
         #endif
 
         timeTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
@@ -467,6 +478,17 @@ struct ImageReaderView: View {
     }
 
     #if os(iOS)
+    private func updateVolumePaging() {
+        if isReaderVisible && AppSettings.shared.volumePage {
+            volumePageTurner.start(
+                onNext: { goToNextPage() },
+                onPrevious: { goToPreviousPage() }
+            )
+        } else {
+            volumePageTurner.stop()
+        }
+    }
+
     private func updateIdleTimerOwnership() {
         ReaderIdleTimerOwnership.shared.update(idleTimerReaderID, isVisible: isReaderVisible,
                                                sceneIsActive: scenePhase == .active,
@@ -1417,6 +1439,8 @@ struct ImageReaderView: View {
                     Image(systemName: "gearshape")
                         .foregroundStyle(EhReaderChrome.label)
                 }
+                .accessibilityLabel("阅读设置")
+                .accessibilityIdentifier("reader-settings")
             }
             .font(.system(size: 15, weight: .medium))
             .padding(.horizontal, 14)

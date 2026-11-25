@@ -417,10 +417,15 @@ public final class AppSettings: @unchecked Sendable {
     // MARK: - 阅读器 (新增)
 
     /// 音量键翻页
-    @ObservationIgnored
     public var volumePage: Bool {
-        get { _defaults.bool(forKey: "volume_page") }
-        set { _defaults.set(newValue, forKey: "volume_page") }
+        get {
+            access(keyPath: \.volumePage)
+            return _defaults.bool(forKey: "volume_page")
+        }
+        set {
+            guard newValue != _defaults.bool(forKey: "volume_page") else { return }
+            withMutation(keyPath: \.volumePage) { _defaults.set(newValue, forKey: "volume_page") }
+        }
     }
 
     /// 反转音量键

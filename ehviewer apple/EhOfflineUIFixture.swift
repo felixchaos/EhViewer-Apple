@@ -12,6 +12,7 @@ import SQLite3
 @MainActor
 enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
+    static let volumePagingFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_VOLUME_PAGING"] == "1"
     static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
     static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
     static let readerLoadingMode: String? = {
@@ -141,7 +142,10 @@ enum EhOfflineUIFixture {
     }
 
     static func seedReaderFiles() async -> Bool {
-        if encodedExportFixture { AppSettings.shared.volumePage = false }
+        if encodedExportFixture || volumePagingFixture { AppSettings.shared.volumePage = false }
+        if volumePagingFixture {
+            AppSettings.shared.reverseVolumePage = false
+        }
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
         let progressKey = "reading_progress_\(synthetic.gid)"
         if readerLoadingMode?.hasPrefix("spread") == true || ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {

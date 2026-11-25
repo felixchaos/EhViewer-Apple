@@ -31,11 +31,10 @@ final class VolumeKeyPageTurner {
 
     private var observation: NSKeyValueObservation?
     private var volumeView: MPVolumeView?
-    private var isResetting = false
+    private var sessionID: UUID?
+    private var ignoreChangesUntil: TimeInterval = 0
     private var onNext: () -> Void = {}
     private var onPrevious: () -> Void = {}
-
-    var isRunning: Bool { observation != nil }
 
     // MARK: - 生命周期
 
@@ -44,9 +43,15 @@ final class VolumeKeyPageTurner {
     ///   - onNext: 下一页回调
     ///   - onPrevious: 上一页回调
     func start(onNext: @escaping () -> Void, onPrevious: @escaping () -> Void) {
-        guard observation == nil else { return }
+        guard sessionID == nil else { return }
+        let id = UUID()
+        sessionID = id
         self.onNext = onNext
         self.onPrevious = onPrevious
+
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.volumePagingFixture { return }
+        #endif
 
         let session = AVAudioSession.sharedInstance()
         // .ambient + .mixWithOthers: 不打断用户正在播放的音乐/播客
@@ -59,7 +64,7 @@ final class VolumeKeyPageTurner {
         observation = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
             guard let newValue = change.newValue else { return }
             Task { @MainActor [weak self] in
-                self?.handleVolumeChange(newValue)
+                self?.handleVolumeChange(newValue, session: id)
             }
         }
     }
@@ -68,7 +73,12 @@ final class VolumeKeyPageTurner {
     func stop() {
         // Closing a reader that never enabled volume-key paging must not
         // deactivate the app-wide audio session.
-        guard let observation else { return }
+        guard sessionID != nil else { return }
+        sessionID = nil
+        ignoreChangesUntil = 0
+        onNext = {}
+        onPrevious = {}
+        guard let observation else { return } // Simulator fixture did not acquire system audio.
         observation.invalidate()
         self.observation = nil
         volumeView?.removeFromSuperview()
@@ -82,9 +92,17 @@ final class VolumeKeyPageTurner {
 
     // MARK: - 内部实现
 
-    private func handleVolumeChange(_ newVolume: Float) {
-        // 忽略自己复位音量引起的回调
-        guard !isResetting else { return }
+    #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+    func sendFixtureVolume(_ newVolume: Float) {
+        guard EhOfflineUIFixture.volumePagingFixture, let id = sessionID else { return }
+        handleVolumeChange(newVolume, session: id)
+    }
+    #endif
+
+    private func handleVolumeChange(_ newVolume: Float, session: UUID) {
+        // A KVO delivery may already be queued when listening is disabled or restarted.
+        guard sessionID == session, AppSettings.shared.volumePage,
+              ProcessInfo.processInfo.systemUptime >= ignoreChangesUntil else { return }
 
         let delta = newVolume - Self.baseVolume
         guard abs(delta) > Self.threshold else { return }
@@ -100,13 +118,10 @@ final class VolumeKeyPageTurner {
     /// 把系统音量复位到基准值，使用户可以连续按同一个键
     private func resetVolume(animated: Bool) {
         guard let slider = volumeView?.subviews.compactMap({ $0 as? UISlider }).first else { return }
-        isResetting = true
+        // The slider applies the reset asynchronously; ignore its echo briefly.
+        ignoreChangesUntil = ProcessInfo.processInfo.systemUptime + 0.25
         slider.setValue(Self.baseVolume, animated: animated)
         slider.sendActions(for: .valueChanged)
-        // 复位是异步生效的，稍后再放开事件处理
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.isResetting = false
-        }
     }
 
     /// 把离屏 MPVolumeView 挂到当前窗口上
