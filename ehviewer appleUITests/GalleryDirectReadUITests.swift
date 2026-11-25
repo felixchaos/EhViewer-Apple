@@ -88,6 +88,80 @@ final class GalleryDirectReadUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["跳转到第 2 页"].waitForExistence(timeout: 5))
     }
 
+    @MainActor func testHomeResumeReopensLatestProgressWithoutRelaunch() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_DIRECT_COLD"] = "reset"
+        app.launch()
+        let resume = app.buttons["home-continue-reading"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 8))
+        XCTAssertTrue(resume.label.contains("Previous visit fixture") || resume.staticTexts["Previous visit fixture"].exists)
+        resume.tap()
+
+        let pages = app.buttons["reader-pages"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 8))
+        pages.tap()
+        XCTAssertTrue(app.navigationBars["跳转到第 1 页"].waitForExistence(timeout: 5))
+        app.buttons["2"].tap()
+        showReaderControls(app)
+        app.buttons["reader-close"].tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                object: app.buttons["reader-close"])
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 8), .completed)
+        XCTAssertTrue(resume.exists)
+        resume.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.50)).tap()
+        showReaderControls(app)
+        pages.tap()
+        XCTAssertTrue(app.navigationBars["跳转到第 2 页"].waitForExistence(timeout: 5))
+        app.buttons["完成"].tap()
+        app.buttons["reader-close"].tap()
+        let updated = NSPredicate { _, _ in
+            resume.label.contains("2 / 3 页") || resume.staticTexts["2 / 3 页 · 66%"].exists
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: updated, object: nil)], timeout: 5),
+                       .completed)
+    }
+
+    @MainActor func testNewDirectReadUpdatesHomeWithoutDisplacingScrolledRow() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_DIRECT_COLD"] = "scrolled-reset"
+        app.launch()
+        let resume = app.buttons["home-continue-reading"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 8))
+        XCTAssertTrue(resume.label.contains("Previous visit fixture") || resume.staticTexts["Previous visit fixture"].exists)
+        let row = app.staticTexts["First visit fixture"].firstMatch
+        let visibleArea = (app.frame.height * 0.24)...(app.frame.height * 0.84)
+        for _ in 0..<5 {
+            if row.exists, visibleArea.contains(row.frame.midY) { break }
+            app.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(row.exists)
+        XCTAssertTrue(visibleArea.contains(row.frame.midY))
+        let originalY = row.frame.midY
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
+        let read = app.buttons["直接阅读"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 6))
+        read.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        let close = app.buttons["reader-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 8))
+        close.tap()
+        let profile = app.buttons["我的"].firstMatch
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: profile)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 8), .completed)
+        XCTAssertEqual(row.frame.midY, originalY, accuracy: 2)
+
+        for _ in 0..<6 {
+            if resume.exists, resume.frame.midY > app.frame.height * 0.17 { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(resume.exists)
+        XCTAssertGreaterThan(resume.frame.midY, app.frame.height * 0.17)
+        XCTAssertTrue(resume.label.contains("First visit fixture") || resume.staticTexts["First visit fixture"].exists)
+    }
+
     @MainActor func testMissingMetadataAllowsRetryAndKeepsPreviousResumeOnFailure() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -57,7 +57,7 @@ struct ContinueReadingCard: View {
                 token: record.token,
                 pages: record.pages,
                 previewSet: nil,
-                initialPage: snapshot.progress
+                initialPage: nil
             )
         } label: {
             HStack(spacing: EhSpacing.row) {

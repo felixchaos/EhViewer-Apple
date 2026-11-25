@@ -33,8 +33,8 @@ enum EhOfflineUIFixture {
         guard let mode = coldReaderMode else { return }
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: "reader_tutorial_shown")
-        if mode == "reset" || mode == "missing-reset" {
-            let gallery = mode == "reset" ? coldGallery : missingCountGallery
+        if mode == "reset" || mode == "missing-reset" || mode == "scrolled-reset" {
+            let gallery = mode == "missing-reset" ? missingCountGallery : coldGallery
             try? EhDatabase.shared.deleteHistory(gid: gallery.gid)
             try? EhDatabase.shared.deleteLocalFavorite(gid: gallery.gid)
             defaults.removeObject(forKey: "reading_progress_\(gallery.gid)")
@@ -299,6 +299,13 @@ enum EhOfflineUIFixture {
                 missingCountGallery
             } else {
                 coldReaderMode == nil ? synthetic : coldGallery
+            }
+            if coldReaderMode == "scrolled-reset" {
+                let fillers = (0..<12).map { index in
+                    GalleryInfo(gid: 900010000150 + Int64(index), token: "fixture",
+                                title: "Resume list filler \(index)", pages: 3)
+                }
+                return GalleryListResult(galleries: Array(fillers.prefix(8)) + [gallery] + Array(fillers.dropFirst(8)))
             }
             return GalleryListResult(galleries: [gallery])
         }

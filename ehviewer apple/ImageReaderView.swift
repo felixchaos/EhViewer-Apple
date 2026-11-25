@@ -464,7 +464,14 @@ struct ImageReaderView: View {
         timeTimer?.invalidate()
         autoPageTask?.cancel()
         pageChangeTask?.cancel()
-        if vm.totalPages > 0 { vm.saveReadingProgress(for: gid) }
+        if vm.totalPages > 0 {
+            vm.saveReadingProgress(for: gid)
+            #if os(iOS)
+            if (UserDefaults.standard.object(forKey: "eh_last_reading_gid") as? NSNumber)?.int64Value == gid {
+                NotificationCenter.default.post(name: .continueReadingProgressSaved, object: nil)
+            }
+            #endif
+        }
     }
 
     /// Keep known history and local metadata when no detail has been loaded.

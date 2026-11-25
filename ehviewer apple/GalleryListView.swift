@@ -192,6 +192,8 @@ struct GalleryListView: View {
 
     #if os(iOS)
     @State private var continueReading: ContinueReadingSnapshot?
+    @State private var continueReadingRevision = 0
+    @State private var isRefreshingContinueReading = false
     #endif
 
     var body: some View {
@@ -266,10 +268,17 @@ struct GalleryListView: View {
             }
         }
         #if os(iOS)
-        .task {
+        .task(id: continueReadingRevision) {
             guard case .home = mode else { return }
             let snapshot = await ContinueReadingSnapshot.load()
-            if !Task.isCancelled { continueReading = snapshot }
+            guard !Task.isCancelled else { return }
+            continueReading = snapshot
+            isRefreshingContinueReading = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .continueReadingProgressSaved)) { _ in
+            guard case .home = mode else { return }
+            isRefreshingContinueReading = true
+            continueReadingRevision &+= 1
         }
         #endif
         .onChange(of: viewModel.galleries) { _, list in
@@ -578,6 +587,7 @@ struct GalleryListView: View {
             // Fix F2-1: \u9996\u9875\u9876\u90e8\u663e\u793a\u201c\u7ee7\u7eed\u9605\u8bfb\u201d\u5361\u7247
             if case .home = mode, let continueReading {
                 ContinueReadingCard(snapshot: continueReading)
+                    .disabled(isRefreshingContinueReading)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
             }

@@ -284,4 +284,5 @@ extension Notification.Name {
     static let galleryDownloadChanged = Notification.Name("galleryDownloadChanged")
     /// 浏览/阅读历史变化 (userInfo: gid)
     static let galleryHistoryChanged = Notification.Name("galleryHistoryChanged")
+    static let continueReadingProgressSaved = Notification.Name("continueReadingProgressSaved")
 }
