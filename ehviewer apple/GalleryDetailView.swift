@@ -77,8 +77,7 @@ struct GalleryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 headerSection
-                    // iPhone 上返回按钮是浮在内容之上的 overlay（导航栏被隐藏了），
-                    // 不让开就正好压在封面左上角：按钮本身 33pt 高，加上 4pt 顶距。
+                    // The floating Back target is 44 pt tall; keep it above the cover.
                     .padding(.top, backButtonClearance)
                 Divider()
                 actionBar
@@ -116,6 +115,7 @@ struct GalleryDetailView: View {
             // iPhone: 自定义返回按钮 (导航栏隐藏后)
             if horizontalSizeClass == .compact {
                 AppBackButton(action: { dismiss() }, style: .dark)
+                .accessibilityIdentifier("gallery-detail-back")
                 .padding(.top, 4)
                 .padding(.leading, 12)
             }
@@ -364,8 +364,8 @@ struct GalleryDetailView: View {
     /// 浮起返回按钮占掉的高度。iPhone 才有（iPad/Mac 用系统导航栏）。
     private var backButtonClearance: CGFloat {
         #if os(iOS)
-        // 17pt 图标 + 上下各 8pt 内边距 = 33pt，再加 overlay 自己的 4pt 顶距
-        horizontalSizeClass == .compact ? 41 : 0
+        // Include the overlay's 4 pt top inset and 4 pt of separation.
+        horizontalSizeClass == .compact ? AppBackButton.hitTargetSize + 8 : 0
         #else
         0
         #endif

@@ -28,6 +28,8 @@ import UIKit
 /// }
 /// ```
 struct AppBackButton: View {
+    static let hitTargetSize: CGFloat = 44
+
     let action: () -> Void
     
     /// 背景风格: 当页面有深色/图片背景时使用 dark, 普通页面用 light
@@ -43,14 +45,17 @@ struct AppBackButton: View {
             Image(systemName: "chevron.left")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(style == .dark ? .white : Color.primary)
-                .padding(8)
+                .frame(width: 34, height: 34)
                 .background(
                     style == .dark
                         ? AnyShapeStyle(.black.opacity(0.5))
                         : AnyShapeStyle(.ultraThinMaterial)
                 )
                 .clipShape(Circle())
+                .frame(width: Self.hitTargetSize, height: Self.hitTargetSize)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("返回")
     }
 }
