@@ -417,8 +417,9 @@ struct ImageReaderView: View {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if let fixture = EhOfflineUIFixture.readerLoadingMode {
-            readingDirection = fixture == "vertical" ? .topToBottom : .leftToRight
-            if fixture == "spread", !vm.isDoublePageEnabled { vm.toggleDoublePage() }
+            readingDirection = fixture == "vertical" ? .topToBottom
+                : (fixture == "spread-error" ? .rightToLeft : .leftToRight)
+            if fixture.hasPrefix("spread"), !vm.isDoublePageEnabled { vm.toggleDoublePage() }
         }
         #endif
         scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
@@ -820,8 +821,16 @@ struct ImageReaderView: View {
         return ZStack(alignment: .bottom) {
             if let presentation {
                 spreadImageView(presentation)
+                    #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(presentation.displayedPage.map { "第 \($0 + 1) 页图片" } ?? "双页图片")
+                    .accessibilityIdentifier(presentation.displayedPage.map { "reader-drawn-page-\($0 + 1)" }
+                                             ?? "reader-drawn-spread")
+                    #endif
                     .contextMenu {
-                        if let second = spread.secondaryPage {
+                        if let page = presentation.displayedPage {
+                            pageMenu(index: page)
+                        } else if let second = spread.secondaryPage {
                             let first = spread.primaryPage
                             Menu("第 \(first + 1) 页") { pageMenu(index: first) }
                             Menu("第 \(second + 1) 页") { pageMenu(index: second) }

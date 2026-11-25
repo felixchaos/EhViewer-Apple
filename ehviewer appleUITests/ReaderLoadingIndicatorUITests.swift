@@ -15,6 +15,41 @@ final class ReaderLoadingIndicatorUITests: XCTestCase {
         XCTAssertTrue(indicator.waitForNonExistence(timeout: 16))
     }
 
+    @MainActor func testSecondImageArrivingFirstIsDrawnWithoutASecondIndicator() throws {
+        let app = try openReader(mode: "spread-reverse")
+        let active = app.descendants(matching: .any).matching(identifier: "reader-image-loading")
+        let indicator = active.firstMatch
+        XCTAssertTrue(indicator.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue("50%", of: indicator, timeout: 10))
+        XCTAssertTrue(waitForValue("60%", of: indicator, timeout: 10))
+        let second = app.descendants(matching: .any)["reader-drawn-page-3"].firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 3))
+        XCTAssertTrue(second.frame.intersects(app.frame))
+        XCTAssertEqual(active.count, 1)
+        XCTAssertFalse(app.descendants(matching: .any)["reader-drawn-page-2"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["reader-drawn-spread"].firstMatch.waitForExistence(timeout: 12))
+        XCTAssertTrue(indicator.waitForNonExistence(timeout: 4))
+    }
+
+    @MainActor func testPrimaryFailureRetainsSecondImageAndOffersOneRetry() throws {
+        let app = try openReader(mode: "spread-error")
+        let second = app.descendants(matching: .any)["reader-drawn-page-3"].firstMatch
+        let retry = app.buttons.matching(identifier: "重新加载")
+        XCTAssertTrue(second.waitForExistence(timeout: 18))
+        XCTAssertTrue(retry.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(second.exists)
+        XCTAssertEqual(retry.count, 1)
+        XCTAssertFalse(app.descendants(matching: .any)["reader-image-loading"].exists)
+        XCTAssertTrue(app.staticTexts["第 2 页：合成测试图片读取失败"].exists)
+        retry.firstMatch.tap()
+        let loading = app.descendants(matching: .any).matching(identifier: "reader-image-loading")
+        XCTAssertTrue(loading.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.exists)
+        XCTAssertEqual(loading.count, 1)
+        XCTAssertTrue(app.descendants(matching: .any)["reader-drawn-spread"].firstMatch.waitForExistence(timeout: 16))
+        XCTAssertTrue(loading.firstMatch.waitForNonExistence(timeout: 4))
+    }
+
     @MainActor func testVerticalHasOneIndicatorWhileAdjacentImagesLoad() throws {
         try checkSingleIndicator(mode: "vertical")
     }

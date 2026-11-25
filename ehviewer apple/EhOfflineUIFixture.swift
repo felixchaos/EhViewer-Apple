@@ -16,7 +16,7 @@ enum EhOfflineUIFixture {
     static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
     static let readerLoadingMode: String? = {
         guard enabled, let mode = ProcessInfo.processInfo.environment["EH_FIXTURE_READER_LOADING"],
-              ["spread", "vertical", "horizontal"].contains(mode) else { return nil }
+              ["spread", "spread-reverse", "spread-error", "vertical", "horizontal"].contains(mode) else { return nil }
         return mode
     }()
     static let synthetic = GalleryInfo(
@@ -143,7 +143,7 @@ enum EhOfflineUIFixture {
     static func seedReaderFiles() async -> Bool {
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
         let progressKey = "reading_progress_\(synthetic.gid)"
-        if readerLoadingMode == "spread" || ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {
+        if readerLoadingMode?.hasPrefix("spread") == true || ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {
             UserDefaults.standard.set(1, forKey: progressKey)
         } else {
             UserDefaults.standard.removeObject(forKey: progressKey)

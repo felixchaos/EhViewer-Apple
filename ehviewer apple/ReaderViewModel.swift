@@ -445,6 +445,7 @@ class ReaderViewModel {
 
     struct SpreadPresentation {
         let image: PlatformImage
+        var displayedPage: Int? = nil // nil means a two-page composite
         /// The original iOS coordinate space, independently of the bounded raster.
         let logicalSize: CGSize?
     }
@@ -499,10 +500,16 @@ class ReaderViewModel {
 
         // Use the same shared-memory fallback as a single page: during
         // a rapid return the observable window may not be restored yet.
-        guard let primary = image(at: spread.primaryPage) else { return nil }
-        guard let secPage = spread.secondaryPage,
-              let secondary = image(at: secPage) else {
-            return SpreadPresentation(image: primary, logicalSize: nil)
+        let primary = errorPages.contains(spread.primaryPage) ? nil : image(at: spread.primaryPage)
+        let secondary = spread.secondaryPage.flatMap { errorPages.contains($0) ? nil : image(at: $0) }
+        guard let primary, let secondary else {
+            if let primary {
+                return SpreadPresentation(image: primary, displayedPage: spread.primaryPage, logicalSize: nil)
+            }
+            if let secondary, let page = spread.secondaryPage {
+                return SpreadPresentation(image: secondary, displayedPage: page, logicalSize: nil)
+            }
+            return nil
         }
 
         #if os(iOS)
@@ -1346,8 +1353,18 @@ class ReaderViewModel {
             do { try await Task.sleep(for: .seconds(5)) } catch { return }
             guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return }
             downloadProgress[index] = index == 2 ? 0.8 : 0.2
-            do { try await Task.sleep(for: .seconds(index == 2 ? 12 : 6)) } catch { return }
+            let reversed = EhOfflineUIFixture.readerLoadingMode != "spread"
+                && EhOfflineUIFixture.readerLoadingMode?.hasPrefix("spread") == true
+            let slowerPage = reversed ? 1 : 2
+            let delay = retry == 0 && slowerPage == index ? 12 : 6
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return }
+            if EhOfflineUIFixture.readerLoadingMode == "spread-error", index == 1, retry == 0 {
+                downloadProgress.removeValue(forKey: index)
+                errorPages.insert(index)
+                errorMessages[index] = "合成测试图片读取失败"
+                return
+            }
         }
         #endif
 
