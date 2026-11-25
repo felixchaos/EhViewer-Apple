@@ -11,7 +11,7 @@ import Foundation
 
 /// 全局速率限制器 — 所有网络请求共享同一实例
 /// - API 请求 (EhAPI): `await waitApiSlot()` → token bucket, 2 req/sec, burst 3
-/// - 图片下载 (SpiderQueen): `await acquireImageSlot()` / `releaseImageSlot()` → 全局最多 5 并发
+/// - 图片下载 (SpiderQueen): `try await acquireImageSlot()` / `releaseImageSlot()` → 全局最多 5 并发
 public actor EhRateLimiter {
     public static let shared = EhRateLimiter()
 
@@ -33,7 +33,13 @@ public actor EhRateLimiter {
     /// 当前活跃下载数
     private var activeImageCount = 0
     /// 等待队列 — FIFO
-    private var imageWaiters: [CheckedContinuation<Void, Never>] = []
+    private struct ImageWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private var imageWaiters: [ImageWaiter] = []
+
+    var queuedImageWaiterCount: Int { imageWaiters.count }
 
     // MARK: - API Slot
 
@@ -72,17 +78,30 @@ public actor EhRateLimiter {
     // MARK: - Image Slot
 
     /// 获取一个图片下载槽位 — 如果当前并发已满则挂起等待
-    public func acquireImageSlot() async {
+    public func acquireImageSlot() async throws {
+        try Task.checkCancellation()
         if activeImageCount < maxImageConcurrent {
             activeImageCount += 1
             return
         }
 
-        // 当前已满 → 挂起，加入等待队列
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            imageWaiters.append(cont)
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    cont.resume(throwing: CancellationError())
+                } else {
+                    imageWaiters.append(.init(id: id, continuation: cont))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelImageWaiter(id) }
         }
-        // 被 resume 时 activeImageCount 已在 releaseImageSlot 中递增
+    }
+
+    private func cancelImageWaiter(_ id: UUID) {
+        guard let index = imageWaiters.firstIndex(where: { $0.id == id }) else { return }
+        imageWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 
     /// 释放一个图片下载槽位 — 唤醒等待队列中的下一个
@@ -91,7 +110,7 @@ public actor EhRateLimiter {
             // 有等待者 → 不减 activeImageCount (槽位直接移交)
             let next = imageWaiters.removeFirst()
             // 注意: 不需要 activeImageCount 变化 — 槽位从释放者直接转移给等待者
-            next.resume()
+            next.continuation.resume()
         } else {
             activeImageCount -= 1
         }

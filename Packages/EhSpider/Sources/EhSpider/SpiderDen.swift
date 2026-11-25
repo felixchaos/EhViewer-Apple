@@ -26,7 +26,7 @@ public actor SpiderDen {
 
     private let gid: Int64
     private let downloadDir: URL
-    private var mode: SpiderMode = .read
+    private var mode: SpiderMode
 
     /// 简单的文件缓存（用于阅读模式）
     /// 审计修复 C-2: 使用 OSAllocatedUnfairLock 替代 nonisolated(unsafe)，消除数据竞争
@@ -137,9 +137,14 @@ public actor SpiderDen {
         }
     }
 
-    public init(galleryInfo: GalleryInfo) {
-        self.gid = galleryInfo.gid
-        self.downloadDir = Self.getGalleryDownloadDir(galleryInfo: galleryInfo)
+    public init(galleryInfo: GalleryInfo, mode: SpiderMode = .read) {
+        self.init(galleryID: galleryInfo.gid, mode: mode, downloadDirectory: Self.getGalleryDownloadDir(galleryInfo: galleryInfo))
+    }
+
+    init(galleryID: Int64, mode: SpiderMode, downloadDirectory: URL) {
+        self.gid = galleryID
+        self.mode = mode
+        self.downloadDir = downloadDirectory
     }
 
     // MARK: - 下载目录管理

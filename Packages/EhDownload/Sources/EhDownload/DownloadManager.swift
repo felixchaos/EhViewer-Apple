@@ -517,12 +517,12 @@ public actor DownloadManager {
         let transfer = makeTransfer(gallery, spiderInfo)
 
         // 统计已有的下载页数作为初始值
-        let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
+        let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages)
 
         // No suspension since we revalidated ownership after the callback.
         guard let setupIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
         downloadQueue[setupIndex].spider = transfer as? SpiderQueen
-        downloadQueue[setupIndex].downloadedPages = initialDownloaded
+        downloadQueue[setupIndex].downloadedPages = initialDownloaded.count
 
         let updater = SpiderInfoUpdater(
             directory: dir,
@@ -803,7 +803,7 @@ actor SpiderInfoUpdater: SpiderDelegate {
     private let totalPages: Int
     private weak var manager: DownloadManager?
 
-    private var downloadedCount: Int
+    private var completedPages: Set<Int>
     private var totalBytesDownloaded: Int64 = 0
     private var startTime: Date = Date()
     private var lastNotifyTime: Date = .distantPast
@@ -811,14 +811,14 @@ actor SpiderInfoUpdater: SpiderDelegate {
 
     fileprivate init(
         directory: URL, attempt: DownloadManager.Attempt, title: String,
-        total: Int, manager: DownloadManager, initialDownloaded: Int = 0
+        total: Int, manager: DownloadManager, initialDownloaded: Set<Int>
     ) {
         self.directory = directory
         self.attempt = attempt
         self.title = title
         self.totalPages = total
         self.manager = manager
-        self.downloadedCount = initialDownloaded
+        self.completedPages = initialDownloaded
         self.startTime = Date()
     }
 
@@ -836,7 +836,9 @@ actor SpiderInfoUpdater: SpiderDelegate {
     }
 
     func onPageLoaded(index: Int, imageUrl: String) async {
-        downloadedCount += 1
+        // Existing files are included in the initial snapshot. SpiderQueen
+        // also reports cache hits as loaded, so count each page only once.
+        guard (0..<totalPages).contains(index), completedPages.insert(index).inserted else { return }
 
         // 累计实际下载字节数
         let pageSize = getPageFileSize(index: index)
@@ -848,7 +850,7 @@ actor SpiderInfoUpdater: SpiderDelegate {
         let notify = now.timeIntervalSince(lastNotifyTime) >= notifyInterval
         if notify { lastNotifyTime = now }
         await manager?.reportPageProgress(for: attempt, title: title,
-                                          downloaded: downloadedCount, total: totalPages,
+                                          downloaded: completedPages.count, total: totalPages,
                                           speed: speed, notify: notify)
     }
 
@@ -866,9 +868,9 @@ actor SpiderInfoUpdater: SpiderDelegate {
         await manager?.reportDiskFull(for: attempt)
     }
 
-    func onDownloadProgress(downloaded: Int, total: Int) async {
-        downloadedCount = downloaded
-    }
+    // Queue progress comes from distinct onPageLoaded indexes; an
+    // aggregate callback cannot identify duplicates or already-saved pages.
+    func onDownloadProgress(downloaded: Int, total: Int) async {}
 }
 
 // MARK: - DownloadListener (下载事件监听器)

@@ -85,6 +85,32 @@ import EhSpider
         #expect(try store.getDownload(gid: sibling.gid)?.state == DownloadManager.stateFinish)
     }
 
+    @Test func resumingNeverCountsTheSamePageTwice() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = GalleryInfo(gid: 45, token: "neutral", title: "Partial fixture", pages: 2)
+        let dir = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: gallery.gid, title: gallery.bestTitle
+        ))
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data([1]).write(to: dir.appendingPathComponent("00000001.jpg"))
+        let transfer = HeldTransfer(gid: gallery.gid)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let listener = RecordingListener()
+        await manager.setListener(listener)
+        await manager.startDownload(gallery: gallery)
+        await transfer.waitUntilStarted()
+        #expect(await manager.getAllTasks().first?.downloadedPages == 1)
+        await transfer.emitPageLoaded(0)
+        #expect(await manager.getAllTasks().first?.downloadedPages == 1)
+        await transfer.emitPageLoaded(1)
+        await transfer.emitPageLoaded(1)
+        #expect(await manager.getAllTasks().first?.downloadedPages == 2)
+        await transfer.allowReturn()
+        await listener.waitUntilFinished()
+    }
+
     @Test func cancelledReadingSyncDoesNotCreateAFileOrDownloadRecord() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -173,6 +199,10 @@ private actor HeldTransfer: DownloadTransfer {
         mayReturn = true
         returnWaiter?.resume()
         returnWaiter = nil
+    }
+
+    func emitPageLoaded(_ index: Int) async {
+        await delegate?.onPageLoaded(index: index, imageUrl: "fixture")
     }
 
     func emitLateEvents() async {
