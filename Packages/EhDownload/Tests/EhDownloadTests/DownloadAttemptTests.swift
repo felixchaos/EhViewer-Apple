@@ -6,6 +6,87 @@ import EhSpider
 @testable import EhDownload
 
 @Suite(.timeLimit(.minutes(1))) struct DownloadAttemptTests {
+    @Test func batchCommandsPreserveIneligibleStatesAndCompletedFiles() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("downloads.sqlite")
+        let store = try EhDatabase(storageURL: databaseURL)
+        let complete = fixture(41)
+        let active = fixture(42)
+        let waiting = fixture(43)
+        let failed = fixture(44)
+        let completeDirectory = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: complete.gid, title: complete.bestTitle
+        ))
+        try FileManager.default.createDirectory(at: completeDirectory, withIntermediateDirectories: true)
+        let imageURL = completeDirectory.appendingPathComponent("00000001.jpg")
+        let original = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try original.write(to: imageURL)
+        for (gallery, state) in [(complete, DownloadManager.stateFinish), (failed, DownloadManager.stateFailed)] {
+            let task = DownloadTask(gallery: gallery, label: "Test group", state: state)
+            try store.insertDownload(DownloadTaskPersistence.record(for: task))
+        }
+        let transfer = HeldTransfer(gid: active.gid)
+        let listener = RecordingListener()
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        await manager.setListener(listener)
+        await manager.startDownload(gallery: active, label: "Active group")
+        await transfer.waitUntilStarted()
+        await manager.startDownload(gallery: waiting, label: "Waiting group")
+
+        await manager.pauseDownload(gid: complete.gid)
+        #expect(await manager.getTaskState(gid: complete.gid) == DownloadManager.stateFinish)
+        await manager.resumeDownload(gid: complete.gid)
+        await manager.pauseDownload(gid: failed.gid)
+        await manager.resumeDownload(gid: active.gid)
+        await manager.resumeDownload(gid: waiting.gid)
+
+        let byID = await Dictionary(uniqueKeysWithValues: manager.getAllTasks().map { ($0.gallery.gid, $0) })
+        #expect(byID[complete.gid]?.state == DownloadManager.stateFinish)
+        #expect(byID[complete.gid]?.label == "Test group")
+        #expect(byID[complete.gid]?.downloadedPages == 1)
+        #expect(byID[failed.gid]?.state == DownloadManager.stateFailed)
+        #expect(byID[waiting.gid]?.state == DownloadManager.stateWait)
+        #expect(byID[active.gid]?.state == DownloadManager.stateDownload)
+        #expect(await manager.getTaskState(gid: active.gid) == DownloadManager.stateDownload)
+        #expect(try Data(contentsOf: imageURL) == original)
+        #expect(try store.getDownload(gid: complete.gid)?.state == DownloadManager.stateFinish)
+        #expect(try store.getDownload(gid: failed.gid)?.state == DownloadManager.stateFailed)
+
+        await manager.pauseDownload(gid: waiting.gid)
+        #expect(await manager.getTaskState(gid: waiting.gid) == DownloadManager.stateNone)
+        #expect(try store.getDownload(gid: waiting.gid)?.label == "Waiting group")
+        let restored = DownloadManager(database: try EhDatabase(storageURL: databaseURL), directory: root)
+        #expect(await restored.getTaskState(gid: complete.gid) == DownloadManager.stateFinish)
+        #expect(await restored.localGalleryDirectory(gid: complete.gid) != nil)
+        #expect(await restored.getTaskState(gid: waiting.gid) == DownloadManager.stateNone)
+        #expect(await restored.getTaskState(gid: failed.gid) == DownloadManager.stateFailed)
+
+        // Keep even a broken candidate from starting a second transfer.
+        await manager.pauseAllDownloads()
+        await transfer.allowReturn()
+    }
+
+    @Test func resumingFailedTaskKeepsItsGroupAndUsesTheQueue() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = fixture(47)
+        let task = DownloadTask(gallery: gallery, label: "Original group", state: DownloadManager.stateFailed)
+        try store.insertDownload(DownloadTaskPersistence.record(for: task))
+        let transfer = HeldTransfer(gid: gallery.gid)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let listener = RecordingListener()
+        await manager.setListener(listener)
+        await manager.resumeDownload(gid: gallery.gid)
+        await transfer.waitUntilStarted()
+        #expect(await manager.getTaskState(gid: gallery.gid) == DownloadManager.stateDownload)
+        #expect(try store.getDownload(gid: gallery.gid)?.label == "Original group")
+        await transfer.allowReturn()
+        await listener.waitUntilFinished()
+        #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateFinish)
+    }
+
     @Test func pausedAttemptCannotCompleteResumedSameGallery() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

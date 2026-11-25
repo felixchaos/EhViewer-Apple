@@ -207,13 +207,7 @@ public actor DownloadManager {
         guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token) else { return }
         // 检查是否已在队列中
         if let existingIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }) {
-            let existingState = downloadQueue[existingIndex].state
-            if existingState == Self.stateNone || existingState == Self.stateFailed {
-                // 已暂停或已失败 → 重置为等待并恢复
-                downloadQueue[existingIndex].state = Self.stateWait
-                try? database.updateDownloadState(gid: gallery.gid, state: Self.stateWait)
-                processQueue()
-            }
+            resumeDownload(at: existingIndex)
             // stateWait / stateDownload / stateFinish → 不重复操作
             return
         }
@@ -230,16 +224,13 @@ public actor DownloadManager {
 
     /// 暂停下载
     public func pauseDownload(gid: Int64) {
-        guard !downloadQueue.contains(where: {
-            $0.gallery.gid == gid && OfflineGallery.isImported(gid: gid, token: $0.gallery.token)
-        }) else { return }
+        guard let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
+              downloadQueue[index].canPause else { return }
         let wasActive = activeAttempt?.gid == gid
         if wasActive { retireActiveAttempt() }
-        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) {
-            downloadQueue[index].state = Self.stateNone
-            downloadQueue[index].spider = nil
-            try? database.updateDownloadState(gid: gid, state: Self.stateNone)
-        }
+        downloadQueue[index].state = Self.stateNone
+        downloadQueue[index].spider = nil
+        try? database.updateDownloadState(gid: gid, state: Self.stateNone)
         if wasActive { processQueue() }
     }
 
@@ -250,7 +241,7 @@ public actor DownloadManager {
 
         // 暂停队列中所有等待/下载中的任务
         for i in downloadQueue.indices {
-            if downloadQueue[i].state == Self.stateWait || downloadQueue[i].state == Self.stateDownload {
+            if downloadQueue[i].canPause {
                 downloadQueue[i].state = Self.stateNone
                 downloadQueue[i].spider = nil
                 try? database.updateDownloadState(gid: downloadQueue[i].gallery.gid, state: Self.stateNone)
@@ -261,12 +252,16 @@ public actor DownloadManager {
 
     /// 恢复下载
     public func resumeDownload(gid: Int64) {
-        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }),
-           !OfflineGallery.isImported(gid: gid, token: downloadQueue[index].gallery.token) {
-            downloadQueue[index].state = Self.stateWait
-            try? database.updateDownloadState(gid: gid, state: Self.stateWait)
-            processQueue()
-        }
+        guard let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
+        resumeDownload(at: index)
+    }
+
+    private func resumeDownload(at index: Int) {
+        guard downloadQueue[index].canResume else { return }
+        let gid = downloadQueue[index].gallery.gid
+        downloadQueue[index].state = Self.stateWait
+        try? database.updateDownloadState(gid: gid, state: Self.stateWait)
+        processQueue()
     }
 
     /// 强制尝试处理队列 (外部调用)
@@ -760,6 +755,18 @@ public struct DownloadTask: Sendable {
     /// 下载速度 (字节/秒)
     public var speed: Int64
     public var spider: SpiderQueen?
+
+    /// Whether the currently queued or active transfer accepts Pause.
+    public var canPause: Bool {
+        (state == DownloadManager.stateWait || state == DownloadManager.stateDownload)
+            && !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token)
+    }
+
+    /// Whether a paused or failed online transfer accepts Resume.
+    public var canResume: Bool {
+        (state == DownloadManager.stateNone || state == DownloadManager.stateFailed)
+            && !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token)
+    }
 
     public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait, createdAt: Date = .init()) {
         self.gallery = gallery
