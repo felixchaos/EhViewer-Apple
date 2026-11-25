@@ -15,6 +15,7 @@ enum EhOfflineUIFixture {
     static let volumePagingFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_VOLUME_PAGING"] == "1"
     static let tallVolumeFixture = volumePagingFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_TALL_VOLUME"] == "1"
     static let readerGestureFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_READER_GESTURES"] == "1"
+    static let verticalGestureFixture = readerGestureFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_VERTICAL_GESTURES"] == "1"
     static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
     static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
     static let readerLoadingMode: String? = {
@@ -23,8 +24,8 @@ enum EhOfflineUIFixture {
         return mode
     }()
     static let synthetic = GalleryInfo(
-        gid: readerGestureFixture ? 900010000035 : (tallVolumeFixture ? 900010000034
-            : (readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001))),
+        gid: verticalGestureFixture ? 900010000036 : (readerGestureFixture ? 900010000035 : (tallVolumeFixture ? 900010000034
+            : (readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001)))),
         token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
@@ -173,13 +174,13 @@ enum EhOfflineUIFixture {
             : GalleryInfo(gid: 900010000011, token: "fixture", title: "Synthetic preserved download", pages: 2)
         for page in 0..<completed.pages {
             let color: UIColor = [.systemRed, .systemBlue, .systemGreen][page]
-            let height: CGFloat = tallVolumeFixture && page == 2 ? 1_440 : 180
+            let height: CGFloat = verticalGestureFixture ? 520 : (tallVolumeFixture && page == 2 ? 1_440 : 180)
             let renderer = UIGraphicsImageRenderer(size: CGSize(width: 120, height: height))
             let image = renderer.image { ctx in
                 color.setFill()
                 ctx.fill(CGRect(x: 0, y: 0, width: 120, height: height))
                 if height > 180 {
-                    for band in 0..<8 {
+                    for band in 0..<Int(ceil(height / 180)) {
                         [UIColor.systemBlue, .systemGreen, .systemPurple][band % 3].setFill()
                         ctx.fill(CGRect(x: 0, y: CGFloat(band * 180), width: 120, height: 180))
                         String(band + 1).draw(at: CGPoint(x: 36, y: band * 180 + 66), withAttributes: [

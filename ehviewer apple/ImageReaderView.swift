@@ -262,6 +262,13 @@ struct ImageReaderView: View {
                 .padding(8)
                 .foregroundStyle(.white)
                 .background(.black)
+            } else if EhOfflineUIFixture.verticalGestureFixture {
+                Text("Fixture vertical reader")
+                    .accessibilityValue(Text(verbatim: "\(tallFixtureOffset)|\(vm.currentPage + 1)"))
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(.black)
+                    .allowsHitTesting(false)
             }
         }
         #endif
@@ -388,19 +395,10 @@ struct ImageReaderView: View {
             }
         }
         #if os(iOS)
-        // 边缘侧滑返回 — 仅在工具栏可见时启用，避免与翻页手势冲突。
-        //
-        // 必须限制在左边缘 24pt 内：它此前铺满整屏且 allowsHitTesting(true)，
-        // 作为最上层 overlay 把顶栏按钮的点击全吃了——返回键点不动就是这个原因。
-        // 边缘侧滑本来也只需要边缘那一条。
-        .overlay(alignment: .leading) {
-            if showOverlay {
-                EdgeSwipeDismissView { closeReader() }
-                    .frame(width: 24)
-                    .frame(maxHeight: .infinity)
-                    .allowsHitTesting(true)
-            }
-        }
+        // Reader Back belongs to the physical left edge, even in fullscreen.
+        // Attaching to the reader instead of covering the edge lets vertical
+        // drags and taps still reach the image and controls there.
+        .gesture(ReaderBackEdgePan(onDismiss: closeReader))
         #endif
     }
 
@@ -442,7 +440,9 @@ struct ImageReaderView: View {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if EhOfflineUIFixture.tallVolumeFixture { readingDirection = .topToBottom }
-        if EhOfflineUIFixture.readerGestureFixture { readingDirection = .leftToRight }
+        if EhOfflineUIFixture.readerGestureFixture {
+            readingDirection = EhOfflineUIFixture.verticalGestureFixture ? .topToBottom : .leftToRight
+        }
         if let fixture = EhOfflineUIFixture.readerLoadingMode {
             readingDirection = fixture == "vertical" ? .topToBottom
                 : (fixture == "spread-error" ? .rightToLeft : .leftToRight)
@@ -1038,7 +1038,8 @@ struct ImageReaderView: View {
             .scrollBounceBehavior(.basedOnSize)
             #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
             .onScrollGeometryChange(for: Int.self, of: {
-                EhOfflineUIFixture.tallVolumeFixture ? Int($0.visibleRect.minY.rounded()) : 0
+                (EhOfflineUIFixture.tallVolumeFixture || EhOfflineUIFixture.verticalGestureFixture)
+                    ? Int($0.visibleRect.minY.rounded()) : 0
             }, action: { _, offset in tallFixtureOffset = offset })
             #endif
             .contentShape(Rectangle())
@@ -2086,64 +2087,45 @@ private struct SwiftUIZoomableImage: View {
 #endif
 
 #if os(iOS)
-/// UIScreenEdgePanGestureRecognizer — 在 fullScreenCover 中实现原生边缘右滑返回
-/// fullScreenCover 无 UINavigationController，需要自行添加手势
-struct EdgeSwipeDismissView: UIViewRepresentable {
+private struct ReaderBackEdgePan: UIGestureRecognizerRepresentable {
     let onDismiss: () -> Void
 
-    func makeUIView(context: Context) -> UIView {
-        let view = EdgeSwipeGestureView()
-        let edgeGesture = UIScreenEdgePanGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleEdgePan(_:))
-        )
-        edgeGesture.edges = .left
-        // 降低手势优先级，避免与 TabView 滑动冲突
-        edgeGesture.delegate = context.coordinator
-        view.addGestureRecognizer(edgeGesture)
-        return view
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = context.coordinator
+        return pan
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onDismiss: onDismiss)
-    }
-
-    /// 透明视图，仅在左边缘 30pt 内响应触摸
-    class EdgeSwipeGestureView: UIView {
-        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-            // 只拦截左边缘 30pt 的触摸
-            if point.x < 30 {
-                return self
-            }
-            return nil
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        guard pan.state == .ended, let view = pan.view else { return }
+        if pan.translation(in: view).x > 80 || pan.velocity(in: view).x > 500 {
+            onDismiss()
         }
     }
 
-    class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        let onDismiss: () -> Void
-
-        init(onDismiss: @escaping () -> Void) {
-            self.onDismiss = onDismiss
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view = gestureRecognizer.view else { return false }
+            let point = touch.location(in: view)
+            return view.bounds.contains(point) && point.x < view.bounds.minX + 24
         }
 
-        @objc func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
-            guard gesture.state == .ended else { return }
-            let translation = gesture.translation(in: gesture.view)
-            let velocity = gesture.velocity(in: gesture.view)
-            // 滑动距离 > 80pt 或速度 > 500 则触发返回
-            if translation.x > 80 || velocity.x > 500 {
-                onDismiss()
-            }
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return velocity.x > abs(velocity.y)
         }
 
-        // 允许与其他手势同时识别
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            return false
+        // For the same touch, page scrolling must wait for the edge pan to
+        // decide its direction. A recognized Back must not also turn a page.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let reader = gestureRecognizer.view, let target = other.view,
+                  let scroll = target as? UIScrollView, other === scroll.panGestureRecognizer else { return false }
+            return target.isDescendant(of: reader)
         }
     }
 }
