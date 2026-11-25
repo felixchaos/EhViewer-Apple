@@ -14,6 +14,7 @@ enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
     static let volumePagingFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_VOLUME_PAGING"] == "1"
     static let tallVolumeFixture = volumePagingFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_TALL_VOLUME"] == "1"
+    static let readerGestureFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_READER_GESTURES"] == "1"
     static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
     static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
     static let readerLoadingMode: String? = {
@@ -22,8 +23,8 @@ enum EhOfflineUIFixture {
         return mode
     }()
     static let synthetic = GalleryInfo(
-        gid: tallVolumeFixture ? 900010000034 : (readerLoadingMode != nil ? 900010000033
-            : (encodedExportFixture ? 900010000031 : 900010000001)),
+        gid: readerGestureFixture ? 900010000035 : (tallVolumeFixture ? 900010000034
+            : (readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001))),
         token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
@@ -144,7 +145,7 @@ enum EhOfflineUIFixture {
     }
 
     static func seedReaderFiles() async -> Bool {
-        if encodedExportFixture || volumePagingFixture { AppSettings.shared.volumePage = false }
+        if encodedExportFixture || volumePagingFixture || readerGestureFixture { AppSettings.shared.volumePage = false }
         if volumePagingFixture {
             AppSettings.shared.reverseVolumePage = false
         }

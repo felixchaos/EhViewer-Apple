@@ -97,6 +97,7 @@ struct ImageReaderView: View {
     @State private var pageChangeTask: Task<Void, Never>?
     #if os(iOS)
     @State private var singlePagePaging = ReaderPagingCommit()
+    @State private var zoomedSinglePages: Set<Int> = []
     @State private var spreadPaging = ReaderPagingCommit()
     // The model's spread index remains the committed one during a swipe
     // so keyboard, tap and grid actions don't start from a transient ID.
@@ -441,6 +442,7 @@ struct ImageReaderView: View {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if EhOfflineUIFixture.tallVolumeFixture { readingDirection = .topToBottom }
+        if EhOfflineUIFixture.readerGestureFixture { readingDirection = .leftToRight }
         if let fixture = EhOfflineUIFixture.readerLoadingMode {
             readingDirection = fixture == "vertical" ? .topToBottom
                 : (fixture == "spread-error" ? .rightToLeft : .leftToRight)
@@ -780,10 +782,13 @@ struct ImageReaderView: View {
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $vm.lazyCurrentPage)
                 // 图片缩放时禁用翻页滚动，让 SwiftUIZoomableImage 的拖动手势控制平移
-                .scrollDisabled(isZoomed)
                 #if os(iOS)
+                .scrollDisabled(zoomedSinglePages.contains(vm.currentPage))
                 .environment(\.layoutDirection, readingDirection == .rightToLeft ? .rightToLeft : .leftToRight)
-                .onDisappear { singlePagePaging = ReaderPagingCommit() }
+                .onDisappear {
+                    singlePagePaging = ReaderPagingCommit()
+                    zoomedSinglePages.removeAll()
+                }
                 .onChange(of: vm.currentPage) { _, newPage in
                     singlePagePaging.explicitPageChanged()
                     if vm.lazyCurrentPage != newPage {
@@ -809,6 +814,8 @@ struct ImageReaderView: View {
                         break
                     }
                 }
+                #else
+                .scrollDisabled(isZoomed)
                 #endif
             }
         }
@@ -1200,11 +1207,13 @@ struct ImageReaderView: View {
                 SwiftUIZoomableImage(
                     image: cachedImage,
                     isFullPage: true,
+                    pageIndex: index,
                     onSingleTap: { location, viewSize in
                         handleTapZone(location: location, viewSize: viewSize)
                     },
                     onZoomChanged: { zoomed in
-                        isZoomed = zoomed
+                        if zoomed { zoomedSinglePages.insert(index) }
+                        else { zoomedSinglePages.remove(index) }
                     }
                 )
                 // 单页菜单（对齐 Android GalleryActivity.showPageDialog）。
@@ -1846,6 +1855,7 @@ private struct SwiftUIZoomableImage: View {
     let image: PlatformImage
     /// 全屏页模式 (翻页阅读器) vs 流式模式 (垂直滚动)
     var isFullPage: Bool = false
+    let pageIndex: Int
     var onSingleTap: ((CGPoint, CGSize) -> Void)?
     var onZoomChanged: ((Bool) -> Void)?
 
@@ -1874,6 +1884,17 @@ private struct SwiftUIZoomableImage: View {
                 }
             }
             .onPreferenceChange(ViewSizePreferenceKey.self) { viewSize = $0 }
+            .onAppear { if isZoomed { onZoomChanged?(true) } }
+            .onDisappear { if isZoomed { onZoomChanged?(false) } }
+            #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+            .overlay(alignment: .topLeading) {
+                if EhOfflineUIFixture.readerGestureFixture {
+                    Text(isZoomed ? "Zoomed" : "Fit")
+                        .accessibilityIdentifier("reader-zoom-page-\(pageIndex + 1)")
+                        .allowsHitTesting(false)
+                }
+            }
+            #endif
             // ── 非缩放时的手势 (overlay 不拦截, 这些生效) ──
             // 单击/双击: 统一 SpatialTapGesture + 300ms 手动检测
             .gesture(
