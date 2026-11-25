@@ -495,6 +495,7 @@ struct GalleryDetailView: View {
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(EhFilledButtonStyle(height: EhSize.actionButtonHeight))
+            .accessibilityIdentifier("gallery-detail-read")
             .layoutPriority(1)
 
             EhSquareIconButton(
@@ -812,11 +813,10 @@ struct GalleryDetailView: View {
                 case .large(let items):
                     ForEach(items.sorted(by: { $0.position < $1.position }), id: \.position) { preview in
                         VStack(spacing: 4) {
-                            CachedAsyncImage(url: URL(string: preview.imageUrl)) { img in
+                            CachedAsyncImage(url: URL(string: preview.imageUrl), showProgress: false) { img in
                                 img.resizable().aspectRatio(contentMode: .fill)
                             } placeholder: {
                                 Color(.tertiarySystemFill)
-                                    .overlay { ProgressView() }
                             }
                             .frame(width: previewWidth, height: previewHeight)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
@@ -830,6 +830,8 @@ struct GalleryDetailView: View {
                                     initialPage: preview.position
                                 )
                             }
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityLabel("第 \(preview.position + 1) 页预览")
                             
                             // 页码标签 (对齐 Android: position + 1)
                             Text("\(preview.position + 1)")
@@ -1494,8 +1496,6 @@ struct SpritePreviewView: View {
                 if didFail {
                     Image(systemName: "photo")
                         .foregroundStyle(.tertiary)
-                } else {
-                    ProgressView()
                 }
             }
     }

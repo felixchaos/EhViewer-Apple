@@ -14,8 +14,13 @@ enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
     static let readerEnabled = ProcessInfo.processInfo.environment["EH_FIXTURE_LOCAL_READER"] == "1"
     static let encodedExportFixture = ProcessInfo.processInfo.environment["EH_FIXTURE_ENCODED_EXPORT"] == "1"
+    static let readerLoadingMode: String? = {
+        guard enabled, let mode = ProcessInfo.processInfo.environment["EH_FIXTURE_READER_LOADING"],
+              ["spread", "vertical", "horizontal"].contains(mode) else { return nil }
+        return mode
+    }()
     static let synthetic = GalleryInfo(
-        gid: encodedExportFixture ? 900010000031 : 900010000001,
+        gid: readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001),
         token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
     static let cloud = GalleryInfo(gid: 900010000002, token: "fixture", title: "Synthetic Cloud Gallery", favoriteSlot: 0)
@@ -96,7 +101,14 @@ enum EhOfflineUIFixture {
         AppSettings.shared.launchPage = (0...5).contains(fixturePage) ? fixturePage : 0
         try? EhDatabase.shared.deleteLocalFavorite(gid: synthetic.gid)
         try? EhDatabase.shared.deleteLocalFavorite(gid: cloud.gid)
-        GalleryCache.shared.putDetail(.init(info: synthetic))
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_STATIC_PREVIEWS"] == "1" {
+            let previews = (0..<3).map { position in
+                LargePreview(position: position, imageUrl: previewFixtureURL(position).absoluteString)
+            }
+            GalleryCache.shared.putDetail(.init(info: synthetic, previewPages: 1, previewSet: .large(previews)))
+        } else {
+            GalleryCache.shared.putDetail(.init(info: synthetic))
+        }
         GalleryCache.shared.putDetail(.init(info: cloud, isFavorited: true))
         if historyTagFixtureEnabled {
             try? EhDatabase.shared.insertHistory(.init(gid: historyGallery.gid, token: historyGallery.token,
@@ -119,10 +131,19 @@ enum EhOfflineUIFixture {
         }
     }
 
+    static func previewFixtureURL(_ index: Int) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("static-preview-fixture-\(index).png")
+    }
+
+    static func interceptPreview(_ url: URL) -> Bool {
+        enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_STATIC_PREVIEWS"] == "1"
+            && (0..<3).contains { previewFixtureURL($0) == url }
+    }
+
     static func seedReaderFiles() async -> Bool {
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
         let progressKey = "reading_progress_\(synthetic.gid)"
-        if ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {
+        if readerLoadingMode == "spread" || ProcessInfo.processInfo.environment["EH_FIXTURE_SAVED_READER_PAGE"] == "1" {
             UserDefaults.standard.set(1, forKey: progressKey)
         } else {
             UserDefaults.standard.removeObject(forKey: progressKey)

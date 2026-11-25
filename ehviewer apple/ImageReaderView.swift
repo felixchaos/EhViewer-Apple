@@ -415,6 +415,12 @@ struct ImageReaderView: View {
 
     private func setupReader() {
         readingDirection = ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection)
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if let fixture = EhOfflineUIFixture.readerLoadingMode {
+            readingDirection = fixture == "vertical" ? .topToBottom : .leftToRight
+            if fixture == "spread", !vm.isDoublePageEnabled { vm.toggleDoublePage() }
+        }
+        #endif
         scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
         startPosition = StartPosition(rawValue: AppSettings.shared.startPosition) ?? .topRight
         verticalPageInterval = AppSettings.shared.showPageInterval
@@ -807,41 +813,40 @@ struct ImageReaderView: View {
     // MARK: - Spread Page View (双页合成视图)
 
     /// 显示一个 spread (单页或双页合成) — 使用 ViewModel 合成图
-    @ViewBuilder
     private func spreadPageView(spread: PageSpread) -> some View {
-        if let presentation = vm.spreadPresentation(at: spread.id, direction: readingDirection) {
-            spreadImageView(presentation)
-                .contextMenu {
-                    if let second = spread.secondaryPage {
-                        let first = spread.primaryPage
-                        Menu("第 \(first + 1) 页") { pageMenu(index: first) }
-                        Menu("第 \(second + 1) 页") { pageMenu(index: second) }
-                    } else {
-                        pageMenu(index: spread.primaryPage)
+        let presentation = vm.spreadPresentation(at: spread.id, direction: readingDirection)
+        let active = spread.pages.contains(vm.currentPage)
+        let ready = spread.pages.allSatisfy { vm.isImageReady($0) && !vm.errorPages.contains($0) }
+        return ZStack(alignment: .bottom) {
+            if let presentation {
+                spreadImageView(presentation)
+                    .contextMenu {
+                        if let second = spread.secondaryPage {
+                            let first = spread.primaryPage
+                            Menu("第 \(first + 1) 页") { pageMenu(index: first) }
+                            Menu("第 \(second + 1) 页") { pageMenu(index: second) }
+                        } else {
+                            pageMenu(index: spread.primaryPage)
+                        }
                     }
+                if !ready, active {
+                    // Keep the first image readable while its partner loads.
+                    pageLoadingIndicator(for: spread.pages, active: true)
+                        .padding(10)
+                        .background(.black.opacity(0.78), in: .rect(cornerRadius: 12))
+                        .padding(.bottom, 100)
                 }
-        } else {
-            // 至少一页尚未加载 — 显示加载状态
-            VStack(spacing: 12) {
-                // 主页状态
-                pageLoadingIndicator(index: spread.primaryPage)
-
-                // 副页状态 (如果有)
-                if let sec = spread.secondaryPage {
-                    Divider().frame(width: 60).overlay(Color.white.opacity(0.3))
-                    pageLoadingIndicator(index: sec)
-                }
+            } else {
+                pageLoadingIndicator(for: spread.pages, active: active)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // 两页都交给看护。此前这里是一次性的 TaskGroup，和单页/垂直模式
-            // 修掉的是同一个毛病：预加载正在下其中一页时被翻页取消，
-            // 这个 .task 早就跑完了不会重来，合成图缺一页就永远出不来。
-            .task(id: spread.pages.map { "\(vm.imageURLs[$0] ?? "")_\(vm.retryGeneration[$0, default: 0])" }
-                            .joined(separator: "|")) {
-                await withTaskGroup(of: Void.self) { group in
-                    for p in spread.pages {
-                        group.addTask { await vm.superviseLoading(of: p) }
-                    }
+        }
+        .task(id: spread.pages.map { "\(vm.imageURLs[$0] ?? "")_\(vm.retryGeneration[$0, default: 0])" }
+                        .joined(separator: "|")) {
+            // The secondary page must keep loading even if its partner already rendered.
+            await withTaskGroup(of: Void.self) { group in
+                for p in spread.pages {
+                    group.addTask { await vm.superviseLoading(of: p) }
                 }
             }
         }
@@ -869,48 +874,80 @@ struct ImageReaderView: View {
         #endif
     }
 
-    /// 单页加载指示器 (复用于 spread 和单页模式)
+    /// One status for the displayed image or spread. A prefetched placeholder
+    /// may be partially visible, but must not start a second spinner.
     @ViewBuilder
-    private func pageLoadingIndicator(index: Int) -> some View {
-        if vm.errorPages.contains(index) {
+    private func pageLoadingIndicator(for pages: [Int], active: Bool) -> some View {
+        let failures = pages.filter { vm.errorPages.contains($0) }
+        if !failures.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.title3)
                     .foregroundStyle(.white)
-                Text(vm.errorMessages[index] ?? "加载失败")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
+                ForEach(failures, id: \.self) { index in
+                    let error = vm.errorMessages[index] ?? "加载失败"
+                    Text(pages.count > 1 ? "第 \(index + 1) 页：\(error)" : error)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
                 Button("重新加载") {
-                    Task { await vm.retryLoadPage(index) }
+                    Task {
+                        await withTaskGroup(of: Void.self) { group in
+                            for index in failures {
+                                group.addTask { await vm.retryLoadPage(index) }
+                            }
+                        }
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.white.opacity(0.9))
             }
-        } else if let progress = vm.downloadProgress[index], progress >= 0 {
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.3), lineWidth: 3)
-                    .frame(width: 48, height: 48)
-                Circle()
-                    .trim(from: 0, to: max(0.01, progress))
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .frame(width: 48, height: 48)
-                    .rotationEffect(.degrees(-90))
-                Text("\(Int(progress * 100))%")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-        } else if let retryCount = vm.retryingPages[index], retryCount > 0 {
+        } else if active {
+            let progress = loadingFraction(for: pages)
+            let retry = pages.compactMap { vm.retryingPages[$0] }.max()
             VStack(spacing: 4) {
-                ProgressView().tint(.white)
-                Text("重试 \(retryCount)/5")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
+                if let progress {
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.3), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: max(0.01, progress))
+                            .stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(min(99, Int(progress * 100)))%")
+                            .font(.system(size: 12, weight: .bold))
+                    }
+                    .frame(width: 48, height: 48)
+                    .foregroundStyle(.white)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .frame(width: 48, height: 48)
+                    if let retry, retry > 0 {
+                        Text("重试 \(retry)/5").font(.caption2).foregroundStyle(.white.opacity(0.6))
+                    }
+                }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(pages.count > 1 ? "正在加载双页图片" : "正在加载图片")
+            .accessibilityValue(progress.map { "\(min(99, Int($0 * 100)))%" } ?? "")
+            .accessibilityIdentifier("reader-image-loading")
         } else {
-            ProgressView().tint(.white)
+            Image(systemName: "photo")
+                .foregroundStyle(.white.opacity(0.32))
+                .accessibilityHidden(true)
         }
+    }
+
+    private func loadingFraction(for pages: [Int]) -> Double? {
+        let values = pages.compactMap { index -> Double? in
+            if vm.isImageReady(index) { return 1 }
+            guard let progress = vm.downloadProgress[index], progress.isFinite, progress >= 0 else { return nil }
+            return min(1, progress)
+        }
+        guard !values.isEmpty, values.count == pages.count else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 
     // MARK: - Vertical Scroll Reader
@@ -999,24 +1036,7 @@ struct ImageReaderView: View {
         // 预估占位高度 (典型漫画页比例 ~1.4:1)，减少图片加载时的布局跳动
         let estimatedHeight = containerWidth * 1.4
 
-        if vm.errorPages.contains(index) {
-            VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.title2)
-                    .foregroundStyle(.white)
-                Text(vm.errorMessages[index] ?? "加载失败")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
-                Button("重新加载") {
-                    Task { await vm.retryLoadPage(index) }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white.opacity(0.9))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: estimatedHeight)
-        } else if let cachedImage = vm.image(at: index) {
+        if !vm.errorPages.contains(index), let cachedImage = vm.image(at: index) {
             // Perf: 垂直滚动模式使用轻量渲染 — 不加载 SwiftUIZoomableImage 的
             // GeometryReader + PreferenceKey + 3 套手势识别器，大幅减少 LazyVStack 滑动开销
             let imgSize = cachedImage.size
@@ -1043,54 +1063,13 @@ struct ImageReaderView: View {
             .contextMenu {
                 pageMenu(index: index)
             }
-        } else if vm.imageURLs[index] != nil {
-            VStack(spacing: 8) {
-                if let progress = vm.downloadProgress[index], progress >= 0 {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.3), lineWidth: 3)
-                            .frame(width: 48, height: 48)
-                        Circle()
-                            .trim(from: 0, to: max(0.01, progress))
-                            .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                            .frame(width: 48, height: 48)
-                            .rotationEffect(.degrees(-90))
-                        Text("\(Int(progress * 100))%")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                } else {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                    Text("下载图片中...")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: estimatedHeight)
-            // 同上：看护到出结果为止，不是只试一次
-            .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
-                await vm.superviseLoading(of: index)
-            }
         } else {
-            VStack(spacing: 8) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .tint(.white)
-                if let retryCount = vm.retryingPages[index], retryCount > 0 {
-                    Text("重试 \(retryCount)/5")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.6))
+            pageLoadingIndicator(for: [index], active: index == (vm.verticalScrollPage ?? vm.currentPage))
+                .frame(maxWidth: .infinity)
+                .frame(height: estimatedHeight)
+                .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
+                    await vm.superviseLoading(of: index)
                 }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: estimatedHeight)
-            // 同上：解析地址这一步被取消后也要有人接着管
-            .task {
-                await vm.superviseLoading(of: index)
-            }
         }
     }
 
@@ -1157,23 +1136,7 @@ struct ImageReaderView: View {
 
     private func pageImage(index: Int) -> some View {
         Group {
-            if vm.errorPages.contains(index) {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                    Text(vm.errorMessages[index] ?? "加载失败")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                    Button("重新加载") {
-                        Task { await vm.retryLoadPage(index) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.white.opacity(0.9))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let cachedImage = vm.image(at: index) {
+            if !vm.errorPages.contains(index), let cachedImage = vm.image(at: index) {
                 #if os(iOS)
                 SwiftUIZoomableImage(
                     image: cachedImage,
@@ -1205,55 +1168,12 @@ struct ImageReaderView: View {
                 )
                 .contextMenu { pageMenu(index: index) }
                 #endif
-            } else if vm.imageURLs[index] != nil {
-                VStack(spacing: 8) {
-                    if let progress = vm.downloadProgress[index], progress >= 0 {
-                        ZStack {
-                            Circle()
-                                .stroke(Color.white.opacity(0.3), lineWidth: 3)
-                                .frame(width: 48, height: 48)
-                            Circle()
-                                .trim(from: 0, to: max(0.01, progress))
-                                .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                .frame(width: 48, height: 48)
-                                .rotationEffect(.degrees(-90))
-                            Text("\(Int(progress * 100))%")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                    } else {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                        Text("下载图片中...")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 看护到出结果为止。此前这里是一次性的 .task：下载被取消之后
-                // 占位符还在屏幕上（它从没消失过），id 也没变，于是不会重跑，
-                // 这一页就永远停在转圈上。
-                .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
-                    await vm.superviseLoading(of: index)
-                }
             } else {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                    if let retryCount = vm.retryingPages[index], retryCount > 0 {
-                        Text("重试 \(retryCount)/5")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.6))
+                pageLoadingIndicator(for: [index], active: index == vm.currentPage)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task(id: "\(vm.imageURLs[index] ?? "")_\(vm.retryGeneration[index, default: 0])") {
+                        await vm.superviseLoading(of: index)
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 解析 pToken / 图片地址这一步同样会被翻页取消，
-                // 一样交给看护，不然卡在这一层也是永久转圈
-                .task {
-                    await vm.superviseLoading(of: index)
-                }
             }
         }
     }

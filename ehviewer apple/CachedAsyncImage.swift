@@ -169,6 +169,13 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         isLoading = true
         defer { isLoading = false }
 
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.interceptPreview(url) {
+            try? await Task.sleep(for: .seconds(20))
+            return
+        }
+        #endif
+
         // 1. 内存图片缓存 (最快, 避免重复解码)
         if let memCached = ThumbnailMemoryCache.shared.get(url) {
             self.image = memCached

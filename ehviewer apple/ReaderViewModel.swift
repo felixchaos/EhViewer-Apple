@@ -1340,6 +1340,17 @@ class ReaderViewModel {
         let retry = retryGeneration[index, default: 0]
         let key = cacheKey(for: index)
 
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.readerLoadingMode != nil, gallery == EhOfflineUIFixture.synthetic.gid {
+            // Deliberately hold a real local image read at two repeatable phases.
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return }
+            downloadProgress[index] = index == 2 ? 0.8 : 0.2
+            do { try await Task.sleep(for: .seconds(index == 2 ? 12 : 6)) } catch { return }
+            guard ownsImageRead(index, gallery: gallery, session: session, retry: retry) else { return }
+        }
+        #endif
+
         let worker = Task.detached(priority: .userInitiated) {
             guard !Task.isCancelled else { return nil as PlatformImage? }
             if let decode { return decode(url) }
