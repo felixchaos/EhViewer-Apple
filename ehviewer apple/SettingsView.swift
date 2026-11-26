@@ -679,6 +679,18 @@ struct SettingsView: View {
 
     private var readingSection: some View {
         Section("阅读") {
+            Picker("在线阅读清晰度", selection: Binding(
+                get: { AppSettings.shared.imageResolution },
+                set: {
+                    AppSettings.shared.imageResolution = $0
+                    EhConfigSync.apply()
+                }
+            )) {
+                ForEach(ImageResolution.allCases) { resolution in
+                    Text(resolution.displayName).tag(resolution)
+                }
+            }
+
             Picker("阅读方向", selection: Binding(
                 get: { ReadingDirection(persistedRawValue: AppSettings.shared.readingDirection) },
                 set: { direction in

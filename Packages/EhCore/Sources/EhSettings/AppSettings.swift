@@ -115,15 +115,26 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
-    /// 图片分辨率 (对应 Android EhConfig.IMAGE_SIZE_*)
-    /// "a" = 自动, "780", "980", "1280", "1600", "2400"
-    @ObservationIgnored
+    /// Site image resolution used by online reading. Download tasks use their
+    /// own snapshotted preference and isolated site session.
     public var imageResolution: ImageResolution {
         get {
+            access(keyPath: \.imageResolution)
             let raw = _defaults.string(forKey: "image_resolution") ?? "a"
             return ImageResolution(rawValue: raw) ?? .auto
         }
-        set { _defaults.set(newValue.rawValue, forKey: "image_resolution") }
+        set {
+            guard newValue != imageResolution else { return }
+            // A user who has never opened download settings should keep their
+            // inherited default even when changing online reading resolution.
+            if _defaults.string(forKey: "default_download_quality").flatMap(DownloadQuality.init(rawValue:)) == nil {
+                let inherited = defaultDownloadQuality
+                defaultDownloadQuality = inherited
+            }
+            withMutation(keyPath: \.imageResolution) {
+                _defaults.set(newValue.rawValue, forKey: "image_resolution")
+            }
+        }
     }
 
     // MARK: - 缓存
