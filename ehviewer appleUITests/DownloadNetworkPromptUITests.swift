@@ -76,7 +76,10 @@ final class DownloadNetworkPromptUITests: XCTestCase {
         choice.tap()
         XCTAssertTrue(choice.isSelected)
         app.buttons["download-setup-submit"].tap()
-        XCTAssertTrue(app.staticTexts["本地图片已保留。可在下载设置中恢复原任务。"].waitForExistence(timeout: 3))
+        let conflict = app.descendants(matching: .any)["download-setup-retained-conflict"].firstMatch
+        XCTAssertTrue(conflict.waitForExistence(timeout: 6))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        app.buttons["download-setup-back"].tap()
 
         app.buttons["我的"].firstMatch.tap()
         let rows = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex

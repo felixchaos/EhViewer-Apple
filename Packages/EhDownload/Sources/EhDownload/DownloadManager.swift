@@ -250,6 +250,26 @@ public actor DownloadManager {
         case offlineImport, retainedFiles, unavailable
     }
 
+    /// Non-mutating preflight for the download setup page. The queue repeats
+    /// the same check at submission, and the runner checks again before IO.
+    public func retainedDownloadConflict(galleries: [GalleryInfo], quality: DownloadQuality) -> Bool {
+        galleries.contains { gallery in
+            guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
+                  !downloadQueue.contains(where: { $0.gallery.gid == gallery.gid }) else { return false }
+            return (try? retainedDownloadConflicts(with: gallery, quality: quality)) == true
+        }
+    }
+
+    private func retainedDownloadConflicts(with gallery: GalleryInfo, quality: DownloadQuality) throws -> Bool {
+        if pendingFileDeletion?.gid == gallery.gid { return false }
+        let directory = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        // A retired transfer can still finish writing. Use only the same
+        // proven policy until that runner has drained.
+        if runner?.attempt.gid == gallery.gid,
+           DownloadFolderQuality.recorded(in: directory) != quality { return true }
+        return try !DownloadFolderQuality.canUse(directory, quality: quality)
+    }
+
     /// Classify and apply the request under one actor turn. An existing
     /// transfer retains its label, progress and files.
     @discardableResult
@@ -272,17 +292,9 @@ public actor DownloadManager {
         }
 
         let selected = quality ?? AppSettings.shared.defaultDownloadQuality
-        let directory = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
-        let waitingForDeletion = pendingFileDeletion?.gid == gallery.gid
         let task = DownloadTask(gallery: gallery, label: label, quality: selected)
         do {
-            if !waitingForDeletion {
-                // A retired transfer can still finish writing. Use only the
-                // same proven policy until that runner has drained.
-                if runner?.attempt.gid == gallery.gid,
-                   DownloadFolderQuality.recorded(in: directory) != selected { return .retainedFiles }
-                guard try DownloadFolderQuality.canUse(directory, quality: selected) else { return .retainedFiles }
-            }
+            if try retainedDownloadConflicts(with: gallery, quality: selected) { return .retainedFiles }
             try database.insertDownload(DownloadTaskPersistence.record(for: task))
         } catch {
             return .unavailable

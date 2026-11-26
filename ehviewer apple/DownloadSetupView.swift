@@ -2,6 +2,7 @@ import SwiftUI
 import EhModels
 import EhSettings
 import EhDatabase
+import EhDownload
 
 @MainActor
 struct DownloadSetupRequest {
@@ -49,6 +50,8 @@ struct DownloadSetupView: View {
     @State private var rememberLabel = false
     @State private var requiresConsent = DownloadNetworkPrompt.requiresConfirmation
     @State private var submitted = false
+    @State private var retainedConflict = false
+    @State private var submission: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,7 +80,11 @@ struct DownloadSetupView: View {
                     if requiresConsent { networkWarning }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("本次清晰度").font(.headline).accessibilityAddTraits(.isHeader)
-                        DownloadQualityChoices(selection: quality) { quality = $0 }
+                        DownloadQualityChoices(selection: quality) {
+                            quality = $0
+                            retainedConflict = false
+                        }
+                        .disabled(submitted)
                     }
                     if !request.labels.isEmpty { labelChoices }
                     Text("已有下载任务沿用原清晰度。")
@@ -89,6 +96,15 @@ struct DownloadSetupView: View {
                 .frame(maxWidth: .infinity)
             }
             Divider()
+            if retainedConflict {
+                Label("本地图片已保留。可在下载设置中恢复原任务。", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(EhColor.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("download-setup-retained-conflict")
+            }
             HStack(spacing: 10) {
                 Text(quality.title)
                     .foregroundStyle(.secondary)
@@ -112,6 +128,7 @@ struct DownloadSetupView: View {
         .tint(EhColor.accent)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EhColor.groupedBackground.ignoresSafeArea())
+        .onDisappear { submission?.cancel() }
     }
 
     private var summary: some View {
@@ -189,12 +206,29 @@ struct DownloadSetupView: View {
             return
         }
         submitted = true
-        if !request.labels.isEmpty && rememberLabel {
-            AppSettings.shared.hasDefaultDownloadLabel = true
-            AppSettings.shared.defaultDownloadLabel = label
+        retainedConflict = false
+        let selected = quality
+        submission = Task { @MainActor in
+            let conflict = await DownloadManager.shared.retainedDownloadConflict(galleries: request.galleries,
+                                                                                quality: selected)
+            guard !Task.isCancelled else { return }
+            if conflict {
+                retainedConflict = true
+                submitted = false
+                return
+            }
+            if !requiresConsent && DownloadNetworkPrompt.requiresConfirmation {
+                requiresConsent = true
+                submitted = false
+                return
+            }
+            if !request.labels.isEmpty && rememberLabel {
+                AppSettings.shared.hasDefaultDownloadLabel = true
+                AppSettings.shared.defaultDownloadLabel = label
+            }
+            request.submit(selected, label)
+            close()
         }
-        request.submit(quality, label)
-        close()
     }
 }
 
