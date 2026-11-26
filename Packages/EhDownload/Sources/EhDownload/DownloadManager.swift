@@ -117,12 +117,21 @@ public actor DownloadManager {
         do {
             let records = try database.getAllDownloads()
             return records.map { record in
-                DownloadTaskPersistence.restore(record) { gallery in
+                var task = DownloadTaskPersistence.restore(record) { gallery in
                     let dir = downloadDirectory.appendingPathComponent(
                         Self.galleryDirectoryName(gid: gallery.gid, title: gallery.bestTitle)
                     )
+                    if let quality = record.quality.flatMap(DownloadQuality.init(rawValue:)),
+                       DownloadFolderQuality.recorded(in: dir) != quality { return 0 }
                     return SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
                 }
+                if record.state == Self.stateFinish, let quality = task.quality {
+                    let dir = downloadDirectory.appendingPathComponent(
+                        Self.galleryDirectoryName(gid: task.gallery.gid, title: task.gallery.bestTitle)
+                    )
+                    if DownloadFolderQuality.recorded(in: dir) != quality { task.downloadedPages = 0 }
+                }
+                return task
             }
         } catch {
             print("Failed to load downloads from database: \(error)")
@@ -222,8 +231,9 @@ public actor DownloadManager {
               try database.getDownload(gid: info.gid) == nil,
               !downloadQueue.contains(where: { $0.gallery.gid == info.gid }) else { return false }
         let title = String(directory.lastPathComponent.dropFirst(prefix.count))
-        guard directory.lastPathComponent == Self.galleryDirectoryName(gid: info.gid, title: title)
-        else { return false }
+        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true,
+              directory.lastPathComponent == Self.galleryDirectoryName(gid: info.gid, title: title) else { return false }
         let gallery = GalleryInfo(gid: info.gid, token: info.token, title: title, pages: info.pages)
         let pages = SpiderInfoFile.getDownloadedPages(in: directory, totalPages: info.pages).count
         var task = DownloadTask(gallery: gallery, state: pages == info.pages ? Self.stateFinish : Self.stateNone,
@@ -579,12 +589,16 @@ public actor DownloadManager {
         let gallery = downloadQueue[index].gallery
         let quality = downloadQueue[index].quality
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        // Legacy transfers retain their historical path (notably for very
+        // long titles). New quality tasks use one path for verification and IO.
+        let transferDirectory = quality == nil && directoryOverride == nil
+            ? SpiderDen.getGalleryDownloadDir(galleryInfo: gallery) : dir
         await listener?.onDownloadStart(gid: gallery.gid, title: gallery.bestTitle)
         guard activeAttempt == attempt else { return }
 
         // Recheck after any deferred deletion, and before the spider can
         // credit old files. A failed guard never touches numbered pages.
-        guard (try? DownloadFolderQuality.prepare(dir, quality: quality)) == true else {
+        guard (try? DownloadFolderQuality.prepare(transferDirectory, quality: quality)) == true else {
             guard let failedIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
             downloadQueue[failedIndex].state = Self.stateFailed
             downloadQueue[failedIndex].downloadedPages = 0
@@ -613,7 +627,7 @@ public actor DownloadManager {
         // 创建 SpiderQueen
         let transfer = makeTransfer?(gallery, spiderInfo, quality)
             ?? SpiderQueen(galleryInfo: gallery, spiderInfo: spiderInfo, mode: .download,
-                           downloadQuality: quality, downloadDirectory: dir)
+                           downloadQuality: quality, downloadDirectory: transferDirectory)
 
         // 统计已有的下载页数作为初始值
         let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages)
@@ -729,13 +743,20 @@ public actor DownloadManager {
 
     // MARK: - 下载状态真实检查 (Fix D-2, B-1)
 
+    private func readableDirectory(for task: DownloadTask) -> URL? {
+        let dir = galleryDirectory(gid: task.gallery.gid, title: task.gallery.bestTitle)
+        // A replacement may be queued behind deletion, while mismatched
+        // files still occupy the path. Do not expose them as its download.
+        if let quality = task.quality, DownloadFolderQuality.recorded(in: dir) != quality { return nil }
+        return dir
+    }
+
     /// 检查画廊是否已完整下载 — 验证数据库状态 AND 磁盘上每一页都存在
     /// (仅目录存在不足以判定完成: 下载中断后目录同样存在, 会被误判为"已下载")
     public func isGalleryFullyDownloaded(gid: Int64) -> Bool {
         guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }),
-              task.state == Self.stateFinish else { return false }
-        let dir = galleryDirectory(gid: gid, title: task.gallery.bestTitle)
-        guard FileManager.default.fileExists(atPath: dir.path) else { return false }
+              task.state == Self.stateFinish, let dir = readableDirectory(for: task),
+              FileManager.default.fileExists(atPath: dir.path) else { return false }
         let pages = task.gallery.pages
         guard pages > 0 else { return false }
         return SpiderInfoFile.getDownloadedPages(in: dir, totalPages: pages).count >= pages
@@ -744,8 +765,8 @@ public actor DownloadManager {
     /// 已下载的页数 (磁盘真实文件数, 与下载状态无关)
     public func getDownloadedPageCount(gid: Int64) -> Int {
         guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }),
-              task.gallery.pages > 0 else { return 0 }
-        let dir = galleryDirectory(gid: gid, title: task.gallery.bestTitle)
+              task.gallery.pages > 0,
+              let dir = readableDirectory(for: task) else { return 0 }
         return SpiderInfoFile.getDownloadedPages(in: dir, totalPages: task.gallery.pages).count
     }
 
@@ -832,7 +853,7 @@ public actor DownloadManager {
     /// 获取已下载画廊的目录路径 (由 ReaderViewModel 调用，替代硬编码路径)
     public func getDownloadedGalleryDirectory(gid: Int64) -> URL? {
         guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }) else { return nil }
-        return galleryDirectory(gid: gid, title: task.gallery.bestTitle)
+        return readableDirectory(for: task)
     }
 
     /// 本地画廊目录 — 只要有下载记录且目录里至少有一张图就返回
@@ -840,8 +861,8 @@ public actor DownloadManager {
     /// 这样部分下载 / 下载中断的画廊也能优先读本地，缺失的页再回退网络
     public func localGalleryDirectory(gid: Int64) -> URL? {
         guard let task = downloadQueue.first(where: { $0.gallery.gid == gid }) else { return nil }
-        let dir = galleryDirectory(gid: gid, title: task.gallery.bestTitle)
-        guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
+        guard let dir = readableDirectory(for: task),
+              FileManager.default.fileExists(atPath: dir.path) else { return nil }
         let pages = task.gallery.pages
         guard pages > 0,
               !SpiderInfoFile.getDownloadedPages(in: dir, totalPages: pages).isEmpty else { return nil }
