@@ -10,10 +10,10 @@
 
 | 平台 | 系统要求 | 获取方式 |
 | --- | --- | --- |
-| iPhone / iPad | iOS / iPadOS 18.0+ | [最新版 IPA](https://github.com/felixchaos/EhViewer-Apple/releases/latest)，需自行重签 |
-| Mac | 当前源码要求 macOS 26.2+ | 用 Xcode 构建当前版；也可下载 [v1.3.1 的 DMG](https://github.com/felixchaos/EhViewer-Apple/releases/tag/v1.3.1) |
+| iPhone / iPad | iOS / iPadOS 18.0+ | 从 [最新发布](https://github.com/felixchaos/EhViewer-Apple/releases/latest) 下载 IPA，重签后安装 |
+| Mac | 当前源码要求 macOS 26.2+ | 使用 Xcode 构建；历史 DMG 见 [Releases](https://github.com/felixchaos/EhViewer-Apple/releases) |
 
-各版本实际提供的安装包以 [Releases](https://github.com/felixchaos/EhViewer-Apple/releases) 为准。v1.3.1 的 Mac 包不包含之后的修复。不提供 App Store 或 TestFlight 版本。
+最新发布仅提供 iPhone / iPad 的 IPA，不含 Mac 安装包。历史 DMG 不包含后续修复，安装要求以对应的发布说明为准。不提供 App Store 或 TestFlight 版本。
 
 ### iPhone / iPad
 
@@ -30,13 +30,15 @@ https://raw.githubusercontent.com/felixchaos/EhViewer-Apple/main/source.json
 
 ## 主要功能
 
-- **浏览与搜索**：首页、热门、排行、订阅标签、快捷搜索、高级搜索、标签中文翻译和屏蔽规则。可在来源范围内按标签筛选，独立工作区保留上一层状态。排行使用 E 站接口。
-- **阅读**：横向翻页、纵向滚动和双页布局；iOS 横向与纵向阅读支持缩放。可续读并把已加载的原始图片文件存到本地。导航和阅读器随 iPhone Duo 内外屏及可用窗口宽度调整。
-- **检查更新**：iPhone / iPad 查找 IPA，Mac 只查找 Mac 安装包；Mac 不会提示安装 IPA。
-- **下载和离线阅读**：管理下载队列、暂停与续传、按分类和排序查看下载。可从「下载」导入图片文件夹或普通 ZIP / CBZ 离线阅读。
-- **账号**：访客浏览、网页登录、Cookie 导入、本地及云端收藏。可编辑本地头像。ExHentai 等功能取决于站点权限。
-
-- **从安卓导入**：在「我的 → 收藏」选择 Android EhViewer 导出的 SQLite 备份，可预览并单向导入本地收藏和阅读历史，不覆盖已有记录。不导入书签、阅读页码、下载文件或账号资料。
+| 功能 | 说明 |
+| --- | --- |
+| 浏览与搜索 | 支持首页、热门、排行、订阅标签、高级搜索以及标签翻译和屏蔽。订阅页默认搜订阅，可切换至全站。快捷搜索保留搜索范围和高级筛选条件。 |
+| 标签筛选 | 点按标签后在当前来源内打开独立工作区；返回后保留原页面的筛选与滚动位置。排行使用 E 站接口。 |
+| 阅读 | 支持横向翻页、连续纵向滚动、双页布局和续读。iPhone / iPad 上的横向与纵向阅读均支持缩放。可导出应用已取得的图片文件；导出不另行下载站点原图。 |
+| 下载与离线 | 支持队列、暂停与续传、分类、排序及批量操作。从「下载」导入图片文件夹、ZIP 或 CBZ；不支持加密、分卷或 ZIP64 压缩包。已完成的下载可打包为 ZIP 分享。 |
+| 账号与收藏 | 支持访客浏览、网页登录、Cookie 导入、本地及云端收藏。已登录时显示可用的账号名称；自定义头像仅保存在本地。ExHentai 访问取决于站点权限。 |
+| 安卓数据导入 | 在「我的 → 收藏」选择 Android EhViewer 导出的 SQLite 备份，可预览并单向导入本地收藏和阅读历史，不覆盖已有记录。不导入书签、阅读页码、下载文件或账号资料。 |
+| 检查更新 | iPhone / iPad 查找 IPA；Mac 只查找 macOS 安装包。 |
 
 ## 从源码构建
 
