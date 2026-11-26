@@ -20,7 +20,8 @@ import UIKit
 
 /// 阅读器要处理的按键动作
 enum ReaderKeyAction {
-    case previousPage
+    case pageUp
+    case pageDown
     case nextPage
     case firstPage
     case lastPage
@@ -87,8 +88,8 @@ final class KeyCommandView: UIView {
             (UIKeyCommand.inputRightArrow, .arrowRight),
             (UIKeyCommand.inputUpArrow,    .arrowUp),
             (UIKeyCommand.inputDownArrow,  .arrowDown),
-            (UIKeyCommand.inputPageUp,     .previousPage),
-            (UIKeyCommand.inputPageDown,   .nextPage),
+            (UIKeyCommand.inputPageUp,     .pageUp),
+            (UIKeyCommand.inputPageDown,   .pageDown),
             (UIKeyCommand.inputHome,       .firstPage),
             (UIKeyCommand.inputEnd,        .lastPage),
             (UIKeyCommand.inputEscape,     .dismiss),
@@ -116,10 +117,22 @@ final class KeyCommandView: UIView {
         onKey?(action)
     }
 
+    #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+    /// Exercises the registered UIKit command and selector; does not emulate hardware HID delivery.
+    static func sendFixtureKey(_ input: String, onKey: @escaping (ReaderKeyAction) -> Void) {
+        let catcher = KeyCommandView(frame: .zero)
+        catcher.onKey = onKey
+        if let command = catcher.keyCommands?.first(where: { $0.input == input }) {
+            catcher.handleKey(command)
+        }
+    }
+    #endif
+
     // UIKeyCommand.propertyList 只能放 plist 类型，用字符串编码枚举
     private static func key(for action: ReaderKeyAction) -> String {
         switch action {
-        case .previousPage: return "prev"
+        case .pageUp:       return "page-up"
+        case .pageDown:     return "page-down"
         case .nextPage:     return "next"
         case .firstPage:    return "first"
         case .lastPage:     return "last"
@@ -133,7 +146,8 @@ final class KeyCommandView: UIView {
 
     private static func actionFromKey(_ raw: String) -> ReaderKeyAction? {
         switch raw {
-        case "prev":    return .previousPage
+        case "page-up": return .pageUp
+        case "page-down": return .pageDown
         case "next":    return .nextPage
         case "first":   return .firstPage
         case "last":    return .lastPage

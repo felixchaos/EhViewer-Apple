@@ -75,6 +75,48 @@ final class ReaderVolumePagingUITests: XCTestCase {
         setPaging(false, in: app)
     }
 
+    @MainActor func testPageAndArrowKeysUseTheSameVerticalStepAsVolume() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_VOLUME_PAGING"] == "1")
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
+        app.launchEnvironment["EH_FIXTURE_VOLUME_PAGING"] = "1"
+        app.launchEnvironment["EH_FIXTURE_TALL_VOLUME"] = "1"
+        app.launchEnvironment["EH_FIXTURE_KEY_COMMANDS"] = "1"
+        app.launch()
+
+        let row = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        row.tap()
+        let read = app.buttons["gallery-detail-read"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        read.tap()
+        let finalPage = app.staticTexts["Fixture page 3"]
+        let scroll = app.staticTexts["Fixture scroll"]
+        XCTAssertTrue(finalPage.waitForExistence(timeout: 8))
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+
+        setPaging(true, in: app)
+        let start = try XCTUnwrap(waitForOffset(scroll) { $0 > 500 })
+        app.buttons["Fixture volume down"].tap()
+        let volumeOffset = try XCTUnwrap(waitForOffset(scroll) { $0 - start > 450 })
+        app.buttons["Fixture volume up"].tap()
+        XCTAssertNotNil(waitForOffset(scroll) { abs($0 - start) < 30 })
+        setPaging(false, in: app)
+
+        for (down, up) in [("Fixture PgDn", "Fixture PgUp"), ("Fixture Down", "Fixture Up")] {
+            app.buttons[down].tap()
+            let offset = try XCTUnwrap(waitForOffset(scroll) { $0 - start > 450 },
+                                      "The keyboard must advance inside the final image.")
+            XCTAssertEqual(Double(offset), Double(volumeOffset), accuracy: 30)
+            XCTAssertTrue(finalPage.exists)
+            app.buttons[up].tap()
+            XCTAssertNotNil(waitForOffset(scroll) { abs($0 - start) < 30 })
+            XCTAssertTrue(finalPage.exists)
+        }
+    }
+
     @MainActor private func waitForOffset(_ element: XCUIElement, until matches: (Int) -> Bool) -> Int? {
         let deadline = Date().addingTimeInterval(5)
         repeat {

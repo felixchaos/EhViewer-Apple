@@ -267,6 +267,12 @@ struct ImageReaderView: View {
                     Text("Fixture page \(vm.currentPage + 1)")
                     if EhOfflineUIFixture.tallVolumeFixture {
                         Text("Fixture scroll").accessibilityValue(String(fixtureScrollMetrics.y))
+                        if ProcessInfo.processInfo.environment["EH_FIXTURE_KEY_COMMANDS"] == "1" {
+                            Button("Fixture PgDn") { KeyCommandView.sendFixtureKey(UIKeyCommand.inputPageDown, onKey: handleReaderKey) }
+                            Button("Fixture PgUp") { KeyCommandView.sendFixtureKey(UIKeyCommand.inputPageUp, onKey: handleReaderKey) }
+                            Button("Fixture Down") { KeyCommandView.sendFixtureKey(UIKeyCommand.inputDownArrow, onKey: handleReaderKey) }
+                            Button("Fixture Up") { KeyCommandView.sendFixtureKey(UIKeyCommand.inputUpArrow, onKey: handleReaderKey) }
+                        }
                     }
                 }
                 .padding(8)
@@ -504,15 +510,15 @@ struct ImageReaderView: View {
     private func updateVolumePaging() {
         if isReaderVisible && AppSettings.shared.volumePage {
             volumePageTurner.start(
-                onNext: { stepFromMediaKey(forward: true) },
-                onPrevious: { stepFromMediaKey(forward: false) }
+                onNext: { stepFromPagingKey(forward: true) },
+                onPrevious: { stepFromPagingKey(forward: false) }
             )
         } else {
             volumePageTurner.stop()
         }
     }
 
-    private func stepFromMediaKey(forward: Bool) {
+    private func stepFromPagingKey(forward: Bool) {
         if readingDirection == .topToBottom,
            verticalMediaScroll.step(forward: forward, pageSpacing: verticalPageInterval ? 8 * verticalZoom : 0) {
             return
@@ -640,15 +646,14 @@ struct ImageReaderView: View {
     /// 把硬件按键映射成翻页动作 —— 方向键要按当前阅读方向解释
     private func handleReaderKey(_ action: ReaderKeyAction) {
         switch action {
-        case .previousPage: goToPreviousPage()
+        case .pageUp, .arrowUp: stepFromPagingKey(forward: false)
+        case .pageDown, .arrowDown: stepFromPagingKey(forward: true)
         case .nextPage:     goToNextPage()
         case .firstPage:    goToPage(0)
         case .lastPage:     goToPage(vm.totalPages - 1)
         case .dismiss:      closeReader()
         case .arrowLeft:    handleKeyNavigation(forward: readingDirection == .rightToLeft)
         case .arrowRight:   handleKeyNavigation(forward: readingDirection != .rightToLeft)
-        case .arrowUp:      goToPreviousPage()
-        case .arrowDown:    goToNextPage()
         }
     }
     #endif
