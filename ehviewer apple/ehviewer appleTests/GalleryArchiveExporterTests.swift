@@ -15,14 +15,26 @@ struct GalleryArchiveExporterTests {
             try Data(repeating: value, count: 32).write(to: dir.appendingPathComponent("00000001.png"))
         }
 
-        let first = try await GalleryArchiveExporter.exportZip(from: left, title: "Same title", stagingRoot: staging)
+        for name in [".ehviewer", "extra.txt", "cover.png", "00000003.png"] {
+            try Data("synthetic non-page bytes".utf8).write(to: left.appendingPathComponent(name))
+        }
+
+        try Data(repeating: 17, count: 32).write(to: left.appendingPathComponent("00000002.jpg"))
+
+        let first = try await GalleryArchiveExporter.exportZip(from: left, pageCount: 2, title: "Same title", stagingRoot: staging)
         let before = try Data(contentsOf: first)
-        let second = try await GalleryArchiveExporter.exportZip(from: right, title: "Same title", stagingRoot: staging)
+        let second = try await GalleryArchiveExporter.exportZip(from: right, pageCount: 1, title: "Same title", stagingRoot: staging)
         let after = try Data(contentsOf: first)
         let other = try Data(contentsOf: second)
         #expect(first.lastPathComponent == second.lastPathComponent)
         #expect(first != second)
         #expect(before.starts(with: [0x50, 0x4b]))
+        #expect(before.range(of: Data("00000001.png".utf8)) != nil)
+        #expect(before.range(of: Data("00000002.jpg".utf8)) != nil)
+        for name in [".ehviewer", "extra.txt", "cover.png", "00000003.png", "__MACOSX"] {
+            #expect(before.range(of: Data(name.utf8)) == nil)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: first.deletingLastPathComponent().path) == [first.lastPathComponent])
         #expect(before == after)
         #expect(before != other)
     }
