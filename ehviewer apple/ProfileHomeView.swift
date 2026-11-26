@@ -355,7 +355,7 @@ struct ProfileHomeView: View {
 
 enum ProfileRoute: Hashable {
     case account, myTags, filters, hosts, news
-    case appearance, listAndThumbnail, downloads, reading, favorites, privacy, network, tagDatabase
+    case appearance, listAndThumbnail, downloads, reading, favorites, privacy, network, tagDatabase, about
 
     @ViewBuilder
     var destination: some View {
@@ -375,6 +375,7 @@ enum ProfileRoute: Hashable {
         case .privacy:          SettingsView(scope: .privacy)
         case .network:          SettingsView(scope: .network)
         case .tagDatabase:      SettingsView(scope: .tagDatabase)
+        case .about:            SettingsView(scope: .about)
         }
     }
 }
@@ -406,6 +407,7 @@ private struct SettingsEntry {
         .init(route: .privacy, symbol: "lock", title: "隐私与锁定", tint: EhColor.danger) { nil },
         .init(route: .network, symbol: "network", title: "网络与容灾", tint: EhColor.warning) { nil },
         .init(route: .tagDatabase, symbol: "character.book.closed", title: "标签翻译数据库", tint: EhColor.info) { nil },
+        .init(route: .about, symbol: "info.circle", title: "关于与更新", tint: EhColor.info) { nil },
     ]
 }
 

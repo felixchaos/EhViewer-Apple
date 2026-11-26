@@ -27,6 +27,8 @@ struct SettingsView: View {
     @Environment(AppState.self) private var inheritedAppState: AppState?
     @State private var standaloneAppState = AppState()
     private var profile: AccountProfileStore { .shared }
+    private var updateChecker: AppUpdateChecker { .shared }
+    @AppStorage(AppUpdateChecker.automaticCheckKey) private var automaticallyChecksForUpdates = true
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
@@ -46,6 +48,7 @@ struct SettingsView: View {
         case privacy         // 隐私与锁定
         case network         // 网络与容灾
         case tagDatabase     // 标签翻译数据库
+        case about
 
         var title: String {
             switch self {
@@ -58,6 +61,7 @@ struct SettingsView: View {
             case .privacy:       return "隐私与锁定"
             case .network:       return "网络与容灾"
             case .tagDatabase:   return "标签翻译数据库"
+            case .about:         return "关于与更新"
             }
         }
     }
@@ -127,6 +131,8 @@ struct SettingsView: View {
                 filterSection
             case .tagDatabase:
                 advancedSection
+            case .about:
+                aboutSection
             }
         }
         .navigationTitle(scope.title)
@@ -1135,19 +1141,33 @@ struct SettingsView: View {
                 }
             }
 
-            // 检查更新 (对齐 Android Settings -> 检查更新)
+            NavigationLink {
+                whatsNewView
+            } label: {
+                Text("新特性")
+            }
+            .accessibilityIdentifier("about-whats-new")
+
             Button {
-                AppUpdateChecker.shared.checkManually()
+                Task { await updateChecker.checkManually() }
             } label: {
                 HStack {
                     Text("检查更新")
                     Spacer()
-                    if AppUpdateChecker.shared.isChecking {
-                        ProgressView()
+                    if updateChecker.isChecking {
+                        ProgressView().accessibilityLabel("正在检查更新")
                     }
                 }
             }
-            .disabled(AppUpdateChecker.shared.isChecking)
+            .disabled(updateChecker.isChecking)
+            .accessibilityIdentifier("about-check-for-updates")
+
+            if let result = updateChecker.manualResult, !updateChecker.isChecking {
+                updateResult(result)
+            }
+
+            Toggle("启动时自动检查更新", isOn: $automaticallyChecksForUpdates)
+                .accessibilityIdentifier("about-automatic-update-check")
 
             Button("源代码") {
                 openURL(URL(string: "https://github.com/felixchaos/EhViewer-Apple")!)
@@ -1165,37 +1185,88 @@ struct SettingsView: View {
             // 因为 @Observable 宏使 didSet 在 init() 中也会触发，导致 GalleryListView 误刷新
             NotificationCenter.default.post(name: GalleryActionService.siteChangedNotification, object: nil)
         }
-        .alert("发现新版本", isPresented: Bindable(AppUpdateChecker.shared).showUpdateAlert) {
-            if let info = AppUpdateChecker.shared.updateAvailable {
-                Button("前往下载") {
-                    openURL(info.downloadURL)
+    }
+
+    @ViewBuilder
+    private func updateResult(_ result: AppUpdateChecker.ManualResult) -> some View {
+        switch result {
+        case .update(let info):
+            VStack(alignment: .leading, spacing: 8) {
+                Text("可更新至 v\(info.version)")
+                    .font(.headline)
+                Text(AppUpdatePlatform.current.installationHint)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                NavigationLink("查看发行说明") {
+                    List {
+                        Section("v\(info.version)") {
+                            releaseNotesContent(info.releaseNotes, url: info.releaseURL)
+                        }
+                    }
+                    .navigationTitle("发行说明")
                 }
-                Button("取消", role: .cancel) {}
+                Link("下载安装包", destination: info.downloadURL)
             }
-        } message: {
-            if let info = AppUpdateChecker.shared.updateAvailable {
-                Text("v\(info.version)\n\n\(AppUpdatePlatform.current.installationHint)\n\n\(info.releaseNotes)")
+        case .noNewerRelease:
+            Text("没有版本号更高的兼容安装包。")
+                .foregroundStyle(.secondary)
+        case .noCompatibleRelease:
+            Text("未找到适用于此设备的安装包。")
+                .foregroundStyle(.secondary)
+        case .unavailable:
+            Text("无法检查更新。请检查网络后重试。")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var whatsNewView: some View {
+        List {
+            Section("当前构建") {
+                Text("v\(updateChecker.currentVersion)（构建 \(updateChecker.currentBuild)）")
+            }
+            Section {
+                switch updateChecker.highlightsState {
+                case .loading:
+                    ProgressView("正在载入发行说明")
+                case .published(let release):
+                    releaseNotesContent(release.text, url: release.url)
+                case .unpublished:
+                    Text("当前版本尚无公开发行说明。")
+                        .foregroundStyle(.secondary)
+                case .unavailable:
+                    Text("无法载入发行说明。")
+                        .foregroundStyle(.secondary)
+                    Button("重试") { Task { await updateChecker.loadHighlights() } }
+                }
+            } header: {
+                Text("发行说明")
+            } footer: {
+                Text("说明来自同版本号的公开发行版，内部构建可能不同。")
             }
         }
-        .alert("检查更新", isPresented: .init(
-            get: {
-                if let err = AppUpdateChecker.shared.checkError {
-                    return err != ""
-                }
-                return false
-            },
-            set: { newValue in
-                if !newValue { AppUpdateChecker.shared.checkError = nil }
-            }
-        )) {
-            Button("确定", role: .cancel) {}
-        } message: {
-            if AppUpdateChecker.shared.checkError == "already_latest" {
-                Text("当前没有适用的新版（v\(AppUpdateChecker.shared.currentVersion)）")
-            } else {
-                Text(AppUpdateChecker.shared.checkError ?? "")
-            }
+        .navigationTitle("新特性")
+        .task { await updateChecker.loadHighlights() }
+    }
+
+    @ViewBuilder
+    private func releaseNotesContent(_ notes: String?, url: URL) -> some View {
+        if let notes {
+            Text(verbatim: Self.plainReleaseNotes(notes))
+                .textSelection(.enabled)
+        } else {
+            Text("此版本未提供发行说明。")
+                .foregroundStyle(.secondary)
         }
+        Link("在 GitHub 查看", destination: url)
+    }
+
+    private static func plainReleaseNotes(_ notes: String) -> String {
+        notes.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            let content = line.drop(while: { $0 == "#" })
+            let text = String(content == line ? line : content.drop(while: { $0 == " " }))
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            return (try? AttributedString(markdown: text, options: options)).map { String($0.characters) } ?? text
+        }.joined(separator: "\n")
     }
 
     private var licensesView: some View {

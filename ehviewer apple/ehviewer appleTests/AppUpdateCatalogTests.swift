@@ -83,6 +83,36 @@ struct AppUpdateCatalogTests {
         if case .noCompatibleRelease = result {} else { Issue.record("Unexpected package") }
     }
 
+    @Test func highlightsUseOnlyExactPublishedVersionEvenWithoutAPlatformAsset() throws {
+        var invalidLink = release("v1.3.7", ["EhViewer.ipa"])
+        invalidLink["html_url"] = "\(origin)/tag/v1.3.8"
+        let page = try JSONSerialization.data(withJSONObject: [
+            release("v1.3.8", ["EhViewer.ipa"]),
+            release("v1.3.7", ["EhViewer.ipa"], draft: true),
+            release("v1.3.7", ["EhViewer.ipa"], prerelease: true),
+            invalidLink,
+            release("v1.3.7", []),
+        ])
+        let match = try AppUpdateCatalog.highlights(releasePages: [page], currentVersion: "1.3.7")
+        let notes = try #require(match)
+        #expect(notes.version == "1.3.7")
+        #expect(notes.text == "notes")
+        #expect(notes.url.lastPathComponent == "v1.3.7")
+        #expect(try AppUpdateCatalog.highlights(releasePages: [page], currentVersion: "1.3.6") == nil)
+    }
+
+    @Test func neverOffersSameMarketingVersionOrAnAssetUnderTheWrongTag() throws {
+        var otherTagAsset = release("v1.3.8", ["EhViewer.ipa"])
+        otherTagAsset["assets"] = release("v1.3.6", ["EhViewer.ipa"])["assets"]
+        let page = try JSONSerialization.data(withJSONObject: [
+            otherTagAsset, release("v1.3.7", ["EhViewer.ipa"])
+        ])
+        let result = try AppUpdateCatalog.select(
+            releasePages: [page], platform: .iOS, currentVersion: "1.3.7", systemVersion: "27.0.1"
+        )
+        if case .alreadyLatest = result {} else { Issue.record("Unknown newer builds must not be inferred") }
+    }
+
     private func update(_ result: AppUpdateCatalog.Result) -> AppUpdateInfo? {
         if case .update(let info) = result { return info }
         return nil
