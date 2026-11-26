@@ -86,8 +86,12 @@ public actor SpiderQueen {
         if let downloadQuality, let storage = configuration.httpCookieStorage {
             // Use Foundation's domain-matched cookie handling, including on redirects.
             // A task-specific image preference never mutates the reader's session.
+            let sites = [EhURL.domainE, EhURL.domainEX]
             for cookie in sourceCookies.cookies ?? [] where cookie.name != "uconfig" {
-                storage.setCookie(cookie)
+                let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                if sites.contains(where: { domain == $0 || domain.hasSuffix("." + $0) }) {
+                    storage.setCookie(cookie)
+                }
             }
             for site in [EhSite.eHentai, .exHentai] {
                 guard let url = URL(string: EhURL.host(for: site)), let host = url.host else { continue }

@@ -16,6 +16,11 @@ struct DownloadQualityTests {
             ]))
             source.setCookie(cookie)
         }
+        let unrelated = try #require(HTTPCookie(properties: [
+            .name: "not-for-downloads", .value: "synthetic", .domain: ".fixture.invalid", .path: "/",
+        ]))
+        source.setCookie(unrelated)
+        #expect(source.cookies(for: foreign)?.count == 1)
         let first = SpiderQueen.sessionConfiguration(inactivity: 15, proxy: .init(), downloadQuality: .x780,
                                                      sourceCookies: source)
         let second = SpiderQueen.sessionConfiguration(inactivity: 15, proxy: .init(), downloadQuality: .original,
