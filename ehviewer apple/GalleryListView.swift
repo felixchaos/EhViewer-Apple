@@ -649,6 +649,7 @@ struct GalleryListView: View {
         // Perf P0-3: 一次性读取配置，避免每个 Row 重复读 UserDefaults
         let showJpn = AppSettings.shared.showJpnTitle
         let fixThumb = AppSettings.shared.fixThumbUrl
+        let isBatchSelecting = selectionBindings?.isSelecting.wrappedValue == true
         let list = List {
             #if os(iOS)
             if browseSource != nil && !isPushed {
@@ -687,7 +688,7 @@ struct GalleryListView: View {
                 // 而且每行右侧多出的 20pt 会挤压元信息行。把链接藏成零透明的底层，
                 // 行本身画在它上面——点按仍由链接接收。
                 Group {
-                    if let sel = selectionBindings, sel.isSelecting.wrappedValue {
+                    if isBatchSelecting, let sel = selectionBindings {
                         // 多选中：整行点按切换选中，不再进详情
                         HStack(spacing: 0) {
                             Image(systemName: sel.selected.wrappedValue.contains(gallery.gid)
@@ -697,7 +698,8 @@ struct GalleryListView: View {
                                                  ? EhColor.accent : EhColor.tertiaryLabel)
                                 .padding(.leading, EhSpacing.page)
                             GalleryRow(
-                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb
+                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                showsContextMenu: false
                             )
                         }
                         .contentShape(Rectangle())
@@ -726,22 +728,25 @@ struct GalleryListView: View {
                 }
                 .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    // 下载 (对齐 Android onItemLongClick: Download)
-                    Button {
-                        requestDownload(gallery)
-                    } label: {
-                        Label("下载", systemImage: "arrow.down.circle")
-                    }
-                    .tint(.blue)
+                    if !isBatchSelecting {
+                        // 下载 (对齐 Android onItemLongClick: Download)
+                        Button {
+                            requestDownload(gallery)
+                        } label: {
+                            Label("下载", systemImage: "arrow.down.circle")
+                        }
+                        .tint(.blue)
+                        .accessibilityIdentifier("gallery-row-swipe-download")
 
-                    // 收藏 / 取消收藏 (对齐 Android onItemLongClick)
-                    Button {
-                        toggleFavorite(gallery)
-                    } label: {
-                        Label(isFavorited(gallery) ? "取消收藏" : "收藏",
-                              systemImage: isFavorited(gallery) ? "heart.slash" : "heart")
+                        // 收藏 / 取消收藏 (对齐 Android onItemLongClick)
+                        Button {
+                            toggleFavorite(gallery)
+                        } label: {
+                            Label(isFavorited(gallery) ? "取消收藏" : "收藏",
+                                  systemImage: isFavorited(gallery) ? "heart.slash" : "heart")
+                        }
+                        .tint(isFavorited(gallery) ? .gray : .red)
                     }
-                    .tint(isFavorited(gallery) ? .gray : .red)
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
@@ -1700,6 +1705,7 @@ struct GalleryRow: View {
     let gallery: GalleryInfo
     let showJpnTitle: Bool
     let fixThumbUrl: Bool
+    var showsContextMenu = true
     /// 由父视图处理：收藏可能需要弹收藏夹选择器，下载需要移动网络确认，
     /// 这些都不是一行自己能决定的。
     var onRequestRead: ((GalleryInfo) -> Void)? = nil
@@ -1736,54 +1742,65 @@ struct GalleryRow: View {
         return URL(string: urlStr)
     }
 
+    @ViewBuilder
     var body: some View {
+        if showsContextMenu {
+            rowContent.contextMenu { contextActions }
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap,
                      highlightedTags: highlightedTags)
             .contentShape(Rectangle())
-        .contextMenu {
-            if let onRequestRead {
-                Button {
-                    onRequestRead(gallery)
-                } label: {
-                    Label("直接阅读", systemImage: "book")
-                }
-                .accessibilityIdentifier("gallery-row-read-directly")
-            }
+    }
 
-            // 下载
+    @ViewBuilder
+    private var contextActions: some View {
+        if let onRequestRead {
             Button {
-                onRequestDownload(gallery)
+                onRequestRead(gallery)
             } label: {
-                Label("下载", systemImage: "arrow.down.circle")
+                Label("直接阅读", systemImage: "book")
             }
-            .accessibilityIdentifier("gallery-row-download")
-
-            // 收藏 / 取消收藏
-            Button {
-                onRequestFavorite(gallery)
-            } label: {
-                let favorited = GalleryStatusCache.shared.isFavorited(gallery)
-                Label(favorited ? "取消收藏" : "收藏",
-                      systemImage: favorited ? "heart.slash" : "heart")
-            }
-            .accessibilityIdentifier("gallery-row-favorite")
-
-            Divider()
-
-            // 复制链接
-            Button {
-                GalleryActionService.shared.copyLink(gid: gallery.gid, token: gallery.token)
-            } label: {
-                Label("复制链接", systemImage: "doc.on.doc")
-            }
-
-            // 分享 (仅 iOS)
-            #if os(iOS)
-            ShareLink(item: URL(string: GalleryActionService.shared.galleryURL(gid: gallery.gid, token: gallery.token))!) {
-                Label("分享", systemImage: "square.and.arrow.up")
-            }
-            #endif
+            .accessibilityIdentifier("gallery-row-read-directly")
         }
+
+        // 下载
+        Button {
+            onRequestDownload(gallery)
+        } label: {
+            Label("下载", systemImage: "arrow.down.circle")
+        }
+        .accessibilityIdentifier("gallery-row-download")
+
+        // 收藏 / 取消收藏
+        Button {
+            onRequestFavorite(gallery)
+        } label: {
+            let favorited = GalleryStatusCache.shared.isFavorited(gallery)
+            Label(favorited ? "取消收藏" : "收藏",
+                  systemImage: favorited ? "heart.slash" : "heart")
+        }
+        .accessibilityIdentifier("gallery-row-favorite")
+
+        Divider()
+
+        // 复制链接
+        Button {
+            GalleryActionService.shared.copyLink(gid: gallery.gid, token: gallery.token)
+        } label: {
+            Label("复制链接", systemImage: "doc.on.doc")
+        }
+
+        // 分享 (仅 iOS)
+        #if os(iOS)
+        ShareLink(item: URL(string: GalleryActionService.shared.galleryURL(gid: gallery.gid, token: gallery.token))!) {
+            Label("分享", systemImage: "square.and.arrow.up")
+        }
+        #endif
     }
 }
 

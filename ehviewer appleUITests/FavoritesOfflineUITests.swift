@@ -405,6 +405,55 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
     }
 
+    @MainActor func testCloudFavoriteBatchSelectionSuppressesSingleRowGestures() {
+        continueAfterFailure = false
+        let app = launch(cloud: "empty", launchPage: 3, workspaces: true)
+        let slot = app.buttons["favorites-slot-0"].firstMatch
+        XCTAssertTrue(slot.waitForExistence(timeout: 8))
+        slot.tap()
+        let item = app.staticTexts["Workspace cloud origin"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 8))
+        let point = item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        // Positive control: the same press target exposes row actions in browse mode.
+        point.press(forDuration: 0.8)
+        let copy = app.buttons["复制链接"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.13)).tap()
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
+
+        let actions = app.buttons["cloud-favorite-actions"].firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        let done = app.buttons["favorites-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+
+        point.press(forDuration: 0.8)
+        XCTAssertFalse(copy.isHittable, "Batch selection must not expose the row context menu.")
+        XCTAssertTrue(done.isHittable, "A batch row long press must not present an overlay.")
+
+        func swipeRow() {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0))
+            let y = item.frame.midY - app.frame.minY
+            start.withOffset(CGVector(dx: 0, dy: y)).press(
+                forDuration: 0.05, thenDragTo: end.withOffset(CGVector(dx: 0, dy: y)),
+                withVelocity: .fast, thenHoldForDuration: 0
+            )
+        }
+        let download = app.buttons["gallery-row-swipe-download"].firstMatch
+        swipeRow()
+        XCTAssertFalse(download.isHittable, "Batch mode must not expose a single-gallery download.")
+        XCTAssertTrue(done.isHittable)
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+        swipeRow()
+        XCTAssertTrue(download.waitForExistence(timeout: 5))
+        XCTAssertTrue(download.isHittable, "The same swipe shows row actions after leaving batch mode.")
+    }
+
     @MainActor func testLocalFavoriteSelectionReplacesFloatingNavigation() {
         let app = launch(cloud: "empty", launchPage: 3, workspaces: true)
         let slot = app.buttons["favorites-slot--2"].firstMatch
