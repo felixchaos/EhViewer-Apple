@@ -476,6 +476,60 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
     }
 
+    @MainActor func testLocalFavoriteBatchNamesRetainedConflictAndPreservesSelection() {
+        checkFavoriteDownloadConflict(cloud: false)
+    }
+
+    @MainActor func testCloudFavoriteBatchNamesRetainedConflictAndPreservesSelection() {
+        checkFavoriteDownloadConflict(cloud: true)
+    }
+
+    @MainActor private func checkFavoriteDownloadConflict(cloud: Bool) {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_WORKSPACES"] = "1"
+        app.launchEnvironment["EH_FIXTURE_CLOUD"] = "empty"
+        app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = "3"
+        app.launchEnvironment["EH_FIXTURE_FAVORITE_DOWNLOAD_CONFLICT"] = "1"
+        app.launch()
+        let slot = app.buttons[cloud ? "favorites-slot-0" : "favorites-slot--2"].firstMatch
+        XCTAssertTrue(slot.waitForExistence(timeout: 8))
+        slot.tap()
+        let retained = app.staticTexts["Retained favorite fixture"].firstMatch
+        let clean = app.staticTexts["Clean favorite fixture"].firstMatch
+        XCTAssertTrue(retained.waitForExistence(timeout: 8))
+        XCTAssertTrue(clean.waitForExistence(timeout: 8))
+        let menus = app.buttons.matching(identifier: cloud ? "cloud-favorite-actions" : "local-favorite-actions")
+        menus.firstMatch.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        XCTAssertTrue(app.buttons["favorites-selection-done"].firstMatch.waitForExistence(timeout: 8))
+        retained.tap()
+        clean.tap()
+        let batch = app.buttons[cloud ? "下载选中 (2)" : "批量下载 (2)"].firstMatch
+        let menu = menus.allElementsBoundByIndex.last(where: \.isHittable)
+        XCTAssertNotNil(menu)
+        menu?.tap()
+        XCTAssertTrue(batch.waitForExistence(timeout: 8))
+        batch.tap()
+        let quality = app.buttons["download-quality-original"].firstMatch
+        XCTAssertTrue(quality.waitForExistence(timeout: 8))
+        quality.tap()
+        app.buttons["download-setup-submit"].firstMatch.tap()
+        let conflict = app.staticTexts["download-setup-conflict-900010000110"].firstMatch
+        XCTAssertTrue(conflict.waitForExistence(timeout: 8))
+        XCTAssertEqual(conflict.label, "Retained favorite fixture")
+        XCTAssertFalse(app.staticTexts["download-setup-conflict-900010000111"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        app.buttons["download-setup-back"].firstMatch.tap()
+        let returnMenu = menus.allElementsBoundByIndex.last(where: \.isHittable)
+        XCTAssertNotNil(returnMenu)
+        returnMenu?.tap()
+        XCTAssertTrue(batch.waitForExistence(timeout: 8), "Both selected galleries must still be selected.")
+    }
+
     @MainActor func testDownloadSelectionReplacesTabsAndDoesNotPauseCompletedItem() {
         let app = launch(cloud: "empty", launchPage: 4, localReader: true, downloadSort: true)
         let completed = app.staticTexts["Sort Fixture Zebra"].firstMatch

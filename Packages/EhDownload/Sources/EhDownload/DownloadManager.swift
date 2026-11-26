@@ -252,10 +252,13 @@ public actor DownloadManager {
 
     /// Non-mutating preflight for the download setup page. The queue repeats
     /// the same check at submission, and the runner checks again before IO.
-    public func retainedDownloadConflict(galleries: [GalleryInfo], quality: DownloadQuality) -> Bool {
-        galleries.contains { gallery in
-            guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
-                  !downloadQueue.contains(where: { $0.gallery.gid == gallery.gid }) else { return false }
+    public func retainedDownloadConflicts(galleries: [GalleryInfo], quality: DownloadQuality) -> [GalleryInfo] {
+        let existing = Set(downloadQueue.map { $0.gallery.gid })
+        var seen = Set<Int64>()
+        return galleries.filter { gallery in
+            guard seen.insert(gallery.gid).inserted,
+                  !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
+                  !existing.contains(gallery.gid) else { return false }
             return (try? retainedDownloadConflicts(with: gallery, quality: quality)) == true
         }
     }

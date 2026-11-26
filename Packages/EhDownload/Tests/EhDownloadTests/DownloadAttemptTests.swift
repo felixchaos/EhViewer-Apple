@@ -385,6 +385,10 @@ import EhSpider
 
         await manager.deleteDownload(gid: gallery.gid, deleteFiles: false)
         #expect(await manager.startDownload(gallery: gallery, quality: .original) == .retainedFiles)
+        let clean = fixture(105)
+        let conflicts = await manager.retainedDownloadConflicts(galleries: [clean, gallery, gallery], quality: .original)
+        #expect(conflicts.map(\.gid) == [gallery.gid])
+        #expect(try store.getDownload(gid: clean.gid) == nil)
         gallery.pages = 0
         #expect(await manager.startDownload(gallery: gallery, quality: .original) == .retainedFiles)
         #expect(try Data(contentsOf: oldImage) == oldBytes)

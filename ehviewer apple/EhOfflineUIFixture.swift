@@ -95,6 +95,13 @@ enum EhOfflineUIFixture {
         return "image-fixture-" + id
     }
 
+    private static let favoriteConflictEnabled =
+        ProcessInfo.processInfo.environment["EH_FIXTURE_FAVORITE_DOWNLOAD_CONFLICT"] == "1"
+    private static let retainedFavorite = GalleryInfo(gid: 900010000110, token: "fixture",
+                                                      title: "Retained favorite fixture", pages: 1, favoriteSlot: 0)
+    private static let cleanFavorite = GalleryInfo(gid: 900010000111, token: "fixture",
+                                                   title: "Clean favorite fixture", pages: 1, favoriteSlot: 0)
+
     private static let historyTagFixtureEnabled =
         ProcessInfo.processInfo.environment["EH_FIXTURE_HISTORY_TAG"] == "1"
     private static let historyTag = "route fixture"
@@ -143,6 +150,16 @@ enum EhOfflineUIFixture {
         if ProcessInfo.processInfo.environment["EH_FIXTURE_RETAINED_DOWNLOAD"] == "1" {
             seedRetainedDownload()
         }
+        for gallery in [retainedFavorite, cleanFavorite] {
+            try? EhDatabase.shared.deleteLocalFavorite(gid: gallery.gid)
+            if favoriteConflictEnabled {
+                try? EhDatabase.shared.deleteDownload(gid: gallery.gid)
+                try? EhDatabase.shared.insertLocalFavorite(
+                    .init(gid: gallery.gid, token: gallery.token, title: gallery.bestTitle, pages: gallery.pages)
+                )
+            }
+        }
+        if favoriteConflictEnabled { seedRetainedDownloadFiles(for: retainedFavorite) }
         try? EhDatabase.shared.deleteLocalFavorite(gid: workspaceLocalGid)
         if workspaceFixture {
             var local = LocalFavoriteRecord(gid: workspaceLocalGid, token: "fixture", title: "Workspace local favorite")
@@ -165,6 +182,13 @@ enum EhOfflineUIFixture {
 
     private static func seedRetainedDownload() {
         let gallery = GalleryInfo(gid: 900010000109, token: "fixture", title: "Retained quality fixture", pages: 1)
+        seedRetainedDownloadFiles(for: gallery)
+        try? EhDatabase.shared.insertHistory(.init(gid: gallery.gid, token: gallery.token,
+                                                   title: gallery.bestTitle, pages: gallery.pages, date: Date()))
+        GalleryCache.shared.putDetail(.init(info: gallery))
+    }
+
+    private static func seedRetainedDownloadFiles(for gallery: GalleryInfo) {
         let directory = DownloadManager.shared.galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
         let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 96)).image { context in
             UIColor.systemBlue.setFill()
@@ -173,9 +197,7 @@ enum EhOfflineUIFixture {
         try? EhDatabase.shared.deleteDownload(gid: gallery.gid)
         try? SpiderInfoFile.write(.init(gid: gallery.gid, token: gallery.token, pages: gallery.pages), to: directory)
         try? image.pngData()?.write(to: directory.appendingPathComponent("00000001.png"), options: .atomic)
-        try? EhDatabase.shared.insertHistory(.init(gid: gallery.gid, token: gallery.token,
-                                                   title: gallery.bestTitle, pages: gallery.pages, date: Date()))
-        GalleryCache.shared.putDetail(.init(info: gallery))
+
     }
 
     static func previewFixtureURL(_ index: Int) -> URL {
@@ -348,6 +370,9 @@ enum EhOfflineUIFixture {
             let second = "group:\"fixture second$\""
             if components.path == "/favorites.php" {
                 guard value("favcat") == "0" else { return GalleryListResult() }
+                if favoriteConflictEnabled {
+                    return GalleryListResult(galleries: [retainedFavorite, cleanFavorite])
+                }
                 if let term = value("f_search") {
                     guard value("st") == "on", term.contains(first) else {
                         return GalleryListResult(galleries: [.init(title: "Incorrect favorites request")])

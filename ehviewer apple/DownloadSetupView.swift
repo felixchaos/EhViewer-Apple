@@ -50,7 +50,7 @@ struct DownloadSetupView: View {
     @State private var rememberLabel = false
     @State private var requiresConsent = DownloadNetworkPrompt.requiresConfirmation
     @State private var submitted = false
-    @State private var retainedConflict = false
+    @State private var retainedConflicts: [GalleryInfo] = []
     @State private var submission: Task<Void, Never>?
 
     var body: some View {
@@ -82,7 +82,7 @@ struct DownloadSetupView: View {
                         Text("本次清晰度").font(.headline).accessibilityAddTraits(.isHeader)
                         DownloadQualityChoices(selection: quality) {
                             quality = $0
-                            retainedConflict = false
+                            retainedConflicts = []
                         }
                         .disabled(submitted)
                     }
@@ -96,15 +96,7 @@ struct DownloadSetupView: View {
                 .frame(maxWidth: .infinity)
             }
             Divider()
-            if retainedConflict {
-                Label("本地图片已保留。可在下载设置中恢复原任务。", systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(EhColor.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .accessibilityIdentifier("download-setup-retained-conflict")
-            }
+            if !retainedConflicts.isEmpty { retainedWarning }
             HStack(spacing: 10) {
                 Text(quality.title)
                     .foregroundStyle(.secondary)
@@ -129,6 +121,32 @@ struct DownloadSetupView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EhColor.groupedBackground.ignoresSafeArea())
         .onDisappear { submission?.cancel() }
+    }
+
+    private var retainedWarning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("本地图片已保留。可在下载设置中恢复原任务。", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(EhColor.warning)
+                .accessibilityIdentifier("download-setup-retained-conflict")
+            if request.galleries.count > 1 {
+                Text("未提交本次下载。以下项目的本地图片与所选清晰度不匹配，或清晰度无法确认。")
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(retainedConflicts, id: \.gid) { gallery in
+                            Text(gallery.bestTitle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("download-setup-conflict-\(gallery.gid)")
+                        }
+                    }
+                }
+                .frame(maxHeight: retainedConflicts.count == 1 ? 45 : 92)
+            }
+        }
+        .font(.footnote)
+        .frame(maxWidth: 520, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
     }
 
     private var summary: some View {
@@ -206,14 +224,14 @@ struct DownloadSetupView: View {
             return
         }
         submitted = true
-        retainedConflict = false
+        retainedConflicts = []
         let selected = quality
         submission = Task { @MainActor in
-            let conflict = await DownloadManager.shared.retainedDownloadConflict(galleries: request.galleries,
+            let conflicts = await DownloadManager.shared.retainedDownloadConflicts(galleries: request.galleries,
                                                                                 quality: selected)
             guard !Task.isCancelled else { return }
-            if conflict {
-                retainedConflict = true
+            if !conflicts.isEmpty {
+                retainedConflicts = conflicts
                 submitted = false
                 return
             }
