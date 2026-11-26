@@ -15,7 +15,7 @@ final class DetailTagLayoutUITests: XCTestCase {
 
         let previous = app.buttons["fixture before long tag"].firstMatch
         let longTag = String(repeating: "fixture long tag ", count: 8) + "end"
-        let oversized = app.buttons[longTag].firstMatch
+        let oversized = app.buttons.matching(NSPredicate(format: "label == %@", longTag)).firstMatch
         let following = app.buttons["fixture after long tag"].firstMatch
         XCTAssertTrue(previous.waitForExistence(timeout: 8))
         XCTAssertTrue(oversized.waitForExistence(timeout: 8))

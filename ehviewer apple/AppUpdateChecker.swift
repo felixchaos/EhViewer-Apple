@@ -315,6 +315,27 @@ final class AppUpdateChecker {
     }
 
     private func fetch(_ url: URL, timeout: TimeInterval) async throws -> Data {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if EhOfflineUIFixture.enabled {
+            guard ProcessInfo.processInfo.environment["EH_FIXTURE_PUBLIC_UPDATES"] == "1" else {
+                throw URLError(.notConnectedToInternet)
+            }
+            if url == AppUpdateCatalog.feedURL { return Data(#"{"apps":[]}"#.utf8) }
+            let releases = "https://github.com/felixchaos/EhViewer-Apple/releases"
+            let newer = "v99.0.0"
+            let current = "v" + currentVersion
+            let rows: [[String: Any]] = [
+                ["tag_name": newer, "html_url": "\(releases)/tag/\(newer)", "draft": false,
+                 "prerelease": false, "body": "Synthetic next release",
+                 "assets": [["name": "EhViewer-99.0.0.ipa",
+                             "browser_download_url": "\(releases)/download/\(newer)/EhViewer-99.0.0.ipa",
+                             "size": 40, "state": "uploaded"]]],
+                ["tag_name": current, "html_url": "\(releases)/tag/\(current)", "draft": false,
+                 "prerelease": false, "body": "Synthetic installed-release highlights", "assets": []]
+            ]
+            return try JSONSerialization.data(withJSONObject: rows)
+        }
+        #endif
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("EhViewer-Apple/\(currentVersion)", forHTTPHeaderField: "User-Agent")

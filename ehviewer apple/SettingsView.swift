@@ -1224,6 +1224,10 @@ struct SettingsView: View {
             Section("当前构建") {
                 Text("v\(updateChecker.currentVersion)（构建 \(updateChecker.currentBuild)）")
             }
+            Section("功能简介") {
+                Text("在「下载」中长按已完成的画廊，可将 ZIP 文件隔空投送。")
+                Text("可手动检查兼容的安装包，或开启启动时自动检查。")
+            }
             Section {
                 switch updateChecker.highlightsState {
                 case .loading:

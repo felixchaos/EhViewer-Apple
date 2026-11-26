@@ -597,11 +597,16 @@ final class FavoritesOfflineUITests: XCTestCase {
         completed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
         XCTAssertTrue(airDrop.waitForExistence(timeout: 5))
         airDrop.coordinate(withNormalizedOffset: CGVector(dx: 0.33, dy: 0.5)).tap()
-        let archivePreview = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Sort Fixture Zebra.zip")
-        ).firstMatch
-        XCTAssertTrue(archivePreview.waitForExistence(timeout: 10),
-                      "Expected ZIP preview in the native share sheet.\n\(app.debugDescription)")
+        let activity = app.otherElements["ActivityListView"].firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 10))
+        let archiveName = activity.descendants(matching: .any).matching(identifier: "LP.CaptionBar.TopCaption").firstMatch
+        let archiveType = activity.descendants(matching: .any).matching(identifier: "LP.CaptionBar.BottomCaption").firstMatch
+        XCTAssertTrue(archiveName.waitForExistence(timeout: 5))
+        XCTAssertTrue(archiveName.label.hasPrefix("Sort Fixture Zebra"))
+        XCTAssertTrue(archiveType.label.localizedCaseInsensitiveContains("zip"))
+        activity.buttons["header.closeButton"].tap()
+        XCTAssertTrue(activity.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(completed.isHittable)
         XCTAssertFalse(app.alerts["分享失败"].exists)
     }
 
