@@ -826,6 +826,7 @@ struct GalleryDetailView: View {
         Text(text)
             .font(EhFont.caption)
             .foregroundStyle(EhColor.label)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background {
@@ -1410,38 +1411,53 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = layout(in: proposal.width ?? 300, subviews: subviews)
-        return result.size
+        layout(in: proposal.width ?? 300, subviews: subviews).size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = layout(in: bounds.width, subviews: subviews)
-        for (index, offset) in result.offsets.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + offset.x, y: bounds.minY + offset.y), proposal: .unspecified)
+        let layout = layout(in: bounds.width, subviews: subviews)
+        for (index, placement) in layout.placements.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + placement.offset.x, y: bounds.minY + placement.offset.y),
+                proposal: placement.proposal
+            )
         }
     }
 
-    private func layout(in width: CGFloat, subviews: Subviews) -> (offsets: [CGPoint], size: CGSize) {
-        var offsets: [CGPoint] = []
-        var x: CGFloat = 0
+    private struct Placement {
+        let offset: CGPoint
+        let proposal: ProposedViewSize
+    }
+
+    private func layout(in width: CGFloat, subviews: Subviews) -> (placements: [Placement], size: CGSize) {
+        let limit = max(0, width)
+        var placements: [Placement] = []
+        var rowWidth: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
         var maxWidth: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > width, x > 0 {
+            let ideal = subview.sizeThatFits(.unspecified)
+            // Measure and place long tags using the same finite width so one
+            // label cannot widen its containing vertical scroll view.
+            let bounded = ideal.width > limit
+            let proposal = bounded ? ProposedViewSize(width: limit, height: nil) : .unspecified
+            let measured = bounded ? subview.sizeThatFits(proposal) : ideal
+            let itemWidth = min(measured.width, limit)
+            var x = placements.isEmpty || rowWidth == 0 ? 0 : rowWidth + spacing
+            if x > 0, x + itemWidth > limit {
                 x = 0
                 y += rowHeight + spacing
                 rowHeight = 0
             }
-            offsets.append(CGPoint(x: x, y: y))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
-            maxWidth = max(maxWidth, x)
+            placements.append(.init(offset: CGPoint(x: x, y: y), proposal: proposal))
+            rowHeight = max(rowHeight, measured.height)
+            rowWidth = x + itemWidth
+            maxWidth = max(maxWidth, rowWidth)
         }
 
-        return (offsets, CGSize(width: maxWidth, height: y + rowHeight))
+        return (placements, CGSize(width: maxWidth, height: y + rowHeight))
     }
 }
 

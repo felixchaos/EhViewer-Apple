@@ -117,6 +117,11 @@ enum EhOfflineUIFixture {
                 LargePreview(position: position, imageUrl: previewFixtureURL(position).absoluteString)
             }
             GalleryCache.shared.putDetail(.init(info: synthetic, previewPages: 1, previewSet: .large(previews)))
+        } else if ProcessInfo.processInfo.environment["EH_FIXTURE_LONG_DETAIL_TAGS"] == "1" {
+            let longTag = String(repeating: "fixture long tag ", count: 8) + "end"
+            let tags = ["fixture before long tag", longTag, "fixture after long tag"]
+                + (1...20).map { "fixture tag \($0)" }
+            GalleryCache.shared.putDetail(.init(info: synthetic, tags: [.init(groupName: "artist", tags: tags)]))
         } else {
             GalleryCache.shared.putDetail(.init(info: synthetic))
         }
