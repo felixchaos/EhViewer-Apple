@@ -110,8 +110,8 @@ enum EhColor {
     // 材质负责模糊，这一层负责压暗/提亮到设计稿的观感。
 
     static let glass = Color.ehDynamic(
-        light: 0xFAFAFC, lightAlpha: 0.90,
-        dark: 0x2C2C30, darkAlpha: 0.86
+        light: 0xFAFAFC, lightAlpha: 0.20,
+        dark: 0x2C2C30, darkAlpha: 0.24
     )
 
     /// 玻璃层的描边

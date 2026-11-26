@@ -22,6 +22,17 @@ extension View {
     }
 }
 
+#if os(iOS)
+private struct WorkspaceChromeClip: Shape {
+    let bottomOverflow: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY,
+                    width: rect.width, height: rect.height + bottomOverflow))
+    }
+}
+#endif
+
 /// Window-local stack. A push keeps the previous shell mounted with the
 /// same identity so it can restore its exact tab, scroll and detail state.
 struct MainTabView: View {
@@ -75,9 +86,12 @@ struct MainTabView: View {
                     .transition(distance > 0 ? .offset(x: distance) : .opacity)
                 }
             }
-            .clipped()
             #if os(iOS)
-            // One stable chrome instance; only the workspace layers above it move.
+            // Clip the status-bar edge and horizontal workspace transitions,
+            // but keep the page backdrop behind the floating bottom chrome.
+            .clipShape(WorkspaceChromeClip(
+                bottomOverflow: compact ? EhSize.tabBarHeight + EhSize.tabBarBottomInset + geometry.safeAreaInsets.bottom : 0
+            ))
             .ehFloatingTabBar(
                 items: MainTab.bottomTabs.map {
                     .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
@@ -88,6 +102,8 @@ struct MainTabView: View {
                     if tab == .home { active.homeReselect = UUID() }
                 }
             )
+            #else
+            .clipped()
             #endif
         }
     }

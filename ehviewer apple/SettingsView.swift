@@ -135,6 +135,7 @@ struct SettingsView: View {
                 aboutSection
             }
         }
+        .toggleStyle(EhSettingsSwitchStyle())
         .navigationTitle(scope.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { vm.checkLoginState() }

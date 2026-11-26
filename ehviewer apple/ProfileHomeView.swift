@@ -17,6 +17,11 @@ import EhDownload
 
 struct ProfileHomeView: View {
     @Environment(AppState.self) private var appState
+    #if os(iOS)
+    @Environment(\.ehFloatingTabBarClearance) private var floatingTabBarClearance
+    #else
+    private let floatingTabBarClearance: CGFloat = 0
+    #endif
 
     @State private var quota: HomeDetail?
     @State private var cacheBytes: Int64 = 0
@@ -45,8 +50,8 @@ struct ProfileHomeView: View {
                 }
                 .padding(.horizontal, EhSpacing.page)
                 .padding(.top, 4)
-                .padding(.bottom, 24)
             }
+            .contentMargins(.bottom, 24 + floatingTabBarClearance, for: .scrollContent)
             .background(EhColor.groupedBackground)
             .ehCompactHeader()
             .scrollContentBackground(.hidden)
@@ -254,6 +259,8 @@ struct ProfileHomeView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(entry.title)
+                    .accessibilityValue(entry.value() ?? "")
                     .accessibilityIdentifier(entry.route == .favorites ? "settings-favorites-entry" : "")
 
                     if index < SettingsEntry.all.count - 1 {

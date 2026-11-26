@@ -29,6 +29,19 @@ struct EhHidesTabBarKey: PreferenceKey {
     }
 }
 
+private struct EhFloatingTabBarClearanceKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    /// End-of-scroll clearance for a retained NavigationStack whose native
+    /// scroll viewport can extend behind the window's floating controls.
+    var ehFloatingTabBarClearance: CGFloat {
+        get { self[EhFloatingTabBarClearanceKey.self] }
+        set { self[EhFloatingTabBarClearanceKey.self] = newValue }
+    }
+}
+
 private struct EhTabBarDriverActiveKey: EnvironmentKey {
     static let defaultValue = true
 }
@@ -187,6 +200,8 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.ehFloatingTabBarClearance,
+                         isEnabled ? EhSize.tabBarHeight + EhSize.tabBarBottomInset : 0)
             .onPreferenceChange(EhHidesTabBarKey.self) { isHiddenByDestination = $0 }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !shouldHide {
@@ -198,6 +213,9 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
             // 必须作用在 safeAreaInset 的**结果**上：被键盘推动的是这个容器，
             // 加在内层的浮条自身没有效果。
             .ignoresSafeArea(.keyboard, edges: .bottom)
+            .background {
+                EhColor.background.ignoresSafeArea(.container, edges: .bottom)
+            }
             .animation(.easeInOut(duration: 0.22), value: shouldHide)
     }
 }

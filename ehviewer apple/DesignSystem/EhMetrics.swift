@@ -138,16 +138,13 @@ extension View {
     /// 模糊交给系统材质而不是自绘 `.blur`，因为材质走的是优化过的合成路径；
     /// 上面再叠一层半透明色把观感压到设计稿的值。
     func ehGlass(cornerRadius: CGFloat) -> some View {
-        self.background {
-            ZStack {
-                Rectangle().fill(.ultraThinMaterial)
-                Rectangle().fill(EhColor.glass)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(EhColor.glassStroke, lineWidth: 0.5)
-            }
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return self.background {
+            shape.fill(.ultraThinMaterial)
+                .overlay { shape.fill(EhColor.glass) }
+                .overlay { shape.strokeBorder(EhColor.glassStroke, lineWidth: 0.5) }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 
