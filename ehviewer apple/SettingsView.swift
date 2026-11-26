@@ -1192,9 +1192,11 @@ struct SettingsView: View {
         switch result {
         case .update(let info):
             VStack(alignment: .leading, spacing: 8) {
-                Text("可更新至 v\(info.version)")
+                Text("发现新版本 v\(info.version)")
                     .font(.headline)
-                Text(AppUpdatePlatform.current.installationHint)
+                Text(info.minimumSystemVersionVerified
+                     ? AppUpdatePlatform.current.installationHint
+                     : "未能确认最低系统版本。安装前请核对发行说明。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 NavigationLink("查看发行说明") {
@@ -1208,10 +1210,10 @@ struct SettingsView: View {
                 Link("下载安装包", destination: info.downloadURL)
             }
         case .noNewerRelease:
-            Text("没有版本号更高的兼容安装包。")
+            Text("未找到可提供的更高版本。")
                 .foregroundStyle(.secondary)
         case .noCompatibleRelease:
-            Text("未找到适用于此设备的安装包。")
+            Text("未找到符合平台和已知系统要求的安装包。")
                 .foregroundStyle(.secondary)
         case .unavailable:
             Text("无法检查更新。请检查网络后重试。")
@@ -1226,7 +1228,7 @@ struct SettingsView: View {
             }
             Section("功能简介") {
                 Text("在「下载」中长按已完成的画廊，可将 ZIP 文件隔空投送。")
-                Text("可手动检查兼容的安装包，或开启启动时自动检查。")
+                Text("可手动检查更新，或开启启动时自动检查。")
             }
             Section {
                 switch updateChecker.highlightsState {

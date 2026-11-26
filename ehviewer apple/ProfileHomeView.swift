@@ -443,7 +443,9 @@ struct UpdateBanner: View {
                 Text("有新版本 \(info.version)")
                     .font(EhFont.body.weight(.semibold))
                     .foregroundStyle(EhColor.label)
-                Text(AppUpdatePlatform.current.installationHint)
+                Text(info.minimumSystemVersionVerified
+                     ? AppUpdatePlatform.current.installationHint
+                     : "未能确认最低系统版本。")
                     .font(EhFont.footnote)
                     .foregroundStyle(EhColor.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)

@@ -51,6 +51,7 @@ struct AppUpdateInfo: Sendable {
     let releaseNotes: String
     let releaseURL: URL
     let downloadURL: URL
+    let minimumSystemVersionVerified: Bool
 }
 
 enum AppUpdatePlatform {
@@ -112,25 +113,28 @@ enum AppUpdateCatalog {
             guard let parts = versionParts(version),
                   let releaseURL = trustedURL(release.htmlUrl, pathPrefix: repositoryPath + "tag/"),
                   releaseURL.path == repositoryPath + "tag/" + release.tagName,
-                  let asset = release.assets.compactMap({ asset -> (priority: Int, url: URL)? in
+                  let asset = release.assets.compactMap({ asset -> (priority: Int, url: URL, minimumVerified: Bool)? in
                       guard asset.state == nil || asset.state == "uploaded", asset.size > 0,
                             let priority = platform.priority(for: asset.name),
                             let url = trustedURL(asset.browserDownloadUrl, pathPrefix: repositoryPath + "download/"),
                             url.path == repositoryPath + "download/" + release.tagName + "/" + asset.name
                       else { return nil }
+                      var minimumVerified = false
                       if platform == .iOS,
                          let minimum = minVersions.first(where: { $0.downloadURL == asset.browserDownloadUrl })?.minOSVersion,
-                         let required = versionParts(minimum), let osVersion, compare(osVersion, required) < 0 {
-                          return nil
+                         let required = versionParts(minimum), let osVersion {
+                          guard compare(osVersion, required) >= 0 else { return nil }
+                          minimumVerified = true
                       }
-                      return (priority, url)
+                      return (priority, url, minimumVerified)
                   }).min(by: { a, b in
                       a.priority == b.priority ? a.url.absoluteString < b.url.absoluteString : a.priority < b.priority
                   }) else { continue }
             if let best, compare(parts, best.parts) <= 0 { continue }
             best = (parts, AppUpdateInfo(
                 version: version, releaseNotes: release.body ?? "暂无更新说明",
-                releaseURL: releaseURL, downloadURL: asset.url
+                releaseURL: releaseURL, downloadURL: asset.url,
+                minimumSystemVersionVerified: asset.minimumVerified
             ))
         }
         guard let best else { return .noCompatibleRelease }

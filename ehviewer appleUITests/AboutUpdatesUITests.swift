@@ -28,7 +28,8 @@ final class AboutUpdatesUITests: XCTestCase {
         let check = app.buttons["about-check-for-updates"]
         XCTAssertTrue(check.waitForExistence(timeout: 8))
         check.tap()
-        XCTAssertTrue(app.staticTexts["可更新至 v99.0.0"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["发现新版本 v99.0.0"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["未能确认最低系统版本。安装前请核对发行说明。"].exists)
         XCTAssertTrue(app.buttons["查看发行说明"].exists)
     }
 }

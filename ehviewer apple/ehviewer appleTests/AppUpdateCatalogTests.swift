@@ -63,11 +63,30 @@ struct AppUpdateCatalogTests {
             releasePages: [page], feed: feed, platform: .iOS, currentVersion: "1.3.4", systemVersion: "27.0.1"
         )))
         #expect(lower.version == "1.3.8")
+        #expect(!lower.minimumSystemVersionVerified)
         #expect(higher.version == "1.3.10")
+        #expect(higher.minimumSystemVersionVerified)
         #expect(higher.downloadURL.pathExtension == "ipa")
         #expect(AppUpdatePlatform.iOS.installationHint.contains("IPA"))
         #expect(AppUpdatePlatform.iOS.installationHint.contains("重新签名"))
         #expect(!AppUpdatePlatform.macOS.installationHint.contains("SideStore"))
+    }
+
+    @Test(arguments: ["missing", "stale", "malformed"])
+    func ipaWithoutExactValidMinimumIsNotMarkedVerified(feedCase: String) throws {
+        let page = try JSONSerialization.data(withJSONObject: [release("v2.0.0", ["EhViewer.ipa"])])
+        let assetTag = feedCase == "stale" ? "v1.3.7" : "v2.0.0"
+        let feed: Data? = feedCase == "missing" ? nil : try JSONSerialization.data(withJSONObject: [
+            "apps": [["bundleIdentifier": "Stellatrix.ehviewer-apple", "versions": [[
+                "downloadURL": "\(origin)/download/\(assetTag)/EhViewer.ipa",
+                "minOSVersion": feedCase == "malformed" ? "unknown" : "18.0",
+            ]]]]
+        ])
+        let info = try #require(update(AppUpdateCatalog.select(
+            releasePages: [page], feed: feed, platform: .iOS, currentVersion: "1.3.7", systemVersion: "18.0"
+        )))
+        #expect(info.version == "2.0.0")
+        #expect(!info.minimumSystemVersionVerified)
     }
 
     @Test func invalidOrForeignDownloadCannotBecomeUpdate() throws {

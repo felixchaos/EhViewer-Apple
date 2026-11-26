@@ -16,6 +16,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import sys
 import urllib.request
 import zipfile
@@ -39,7 +40,6 @@ def fetch_releases():
 # AltStore / SideStore 用 minOSVersion 判断能否装到当前设备，填错就装不上。
 # 这个值随版本变（1.3.2 起是 18.0，更早是 26.2），所以直接从 ipa 的 Info.plist
 # 里读，而不是写死一个常量——写死过一次，结果 1.3.2 对 iOS 18 用户不可见。
-FALLBACK_MIN_OS = "26.2"
 
 
 def min_os_version(ipa_url):
@@ -64,13 +64,12 @@ def min_os_version(ipa_url):
             if not name:
                 raise LookupError("ipa 内找不到 Payload/*.app/Info.plist")
             value = plistlib.loads(z.read(name)).get("MinimumOSVersion")
-            if not value:
-                raise LookupError("Info.plist 中没有 MinimumOSVersion")
-            return str(value)
-    except Exception as exc:  # noqa: BLE001 — 单个版本读失败不该让整个清单挂掉
-        # 退回到保守值：宁可少offer给一部分本可安装的设备，也不能 offer 给装不上的
-        print(f"⚠️  读取 {ipa_url} 的 MinimumOSVersion 失败({exc})，回退 {FALLBACK_MIN_OS}", file=sys.stderr)
-        return FALLBACK_MIN_OS
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value):
+                raise ValueError("Info.plist 缺少有效的 MinimumOSVersion")
+            return value
+    except (OSError, LookupError, ValueError, zipfile.BadZipFile) as exc:
+        # 不发布推测值。整份清单在所有版本校验通过后才写入。
+        raise RuntimeError(f"无法核验 {ipa_url} 的 MinimumOSVersion：{exc}") from exc
 
 
 def build_versions(releases):
@@ -100,7 +99,11 @@ def build_versions(releases):
 
 def main():
     releases = fetch_releases()
-    versions = build_versions(releases)
+    try:
+        versions = build_versions(releases)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if not versions:
         print("没有找到带 .ipa 的正式发布，不生成清单", file=sys.stderr)
         return 1
