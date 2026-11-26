@@ -31,6 +31,7 @@ let package = Package(
             dependencies: [
                 "EhSpider",
                 .product(name: "EhModels", package: "EhCore"),
+                .product(name: "EhSettings", package: "EhCore"),
             ]
         ),
     ]

@@ -61,7 +61,7 @@ import Testing
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try EhDatabase(inMemory: true)
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in
             preconditionFailure("The local-data test must never start a transfer")
         })
         let selected = GalleryInfo(gid: 1, token: "one", title: "Visible", pages: 2)

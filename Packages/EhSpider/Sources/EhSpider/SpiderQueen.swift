@@ -41,6 +41,7 @@ public actor SpiderQueen {
 
     private let receive: @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private let imageRequestTimeout: TimeInterval
+    private let downloadQuality: DownloadQuality?
 
     /// 在全局速率限制下发起网络请求 — 防止跨实例并发失控 (V-09)
     /// 所有 SpiderQueen 实例共享同一个 EhRateLimiter，全局最多 5 个并发图片请求
@@ -67,19 +68,40 @@ public actor SpiderQueen {
 
     // MARK: - 生命周期
 
-    public init(galleryInfo: GalleryInfo, spiderInfo: SpiderInfo, mode: Mode = .read) {
+    public init(galleryInfo: GalleryInfo, spiderInfo: SpiderInfo, mode: Mode = .read,
+                downloadQuality: DownloadQuality? = nil) {
         let inactivity = TimeInterval(max(10, min(120, AppSettings.shared.downloadTimeout)))
         let configuration = Self.sessionConfiguration(inactivity: inactivity,
-                                                      proxy: AppSettings.shared.appliedProxy)
+                                                      proxy: AppSettings.shared.appliedProxy, downloadQuality: downloadQuality)
         let session = URLSession(configuration: configuration)
         let den = SpiderDen(galleryInfo: galleryInfo, mode: mode == .download ? .download : .read)
         self.init(galleryInfo: galleryInfo, spiderInfo: spiderInfo, mode: mode, spiderDen: den,
-                  imageRequestTimeout: inactivity) { request in try await session.data(for: request) }
+                  imageRequestTimeout: inactivity, downloadQuality: downloadQuality) { request in try await session.data(for: request) }
     }
 
-    static func sessionConfiguration(inactivity: TimeInterval, proxy: ProxySettings) -> URLSessionConfiguration {
-        let configuration = URLSessionConfiguration.default
-        configuration.httpCookieStorage = .shared
+    static func sessionConfiguration(inactivity: TimeInterval, proxy: ProxySettings,
+                                     downloadQuality: DownloadQuality? = nil,
+                                     sourceCookies: HTTPCookieStorage = .shared) -> URLSessionConfiguration {
+        let configuration = downloadQuality == nil ? URLSessionConfiguration.default : URLSessionConfiguration.ephemeral
+        if let downloadQuality, let storage = configuration.httpCookieStorage {
+            // Use Foundation's domain-matched cookie handling, including on redirects.
+            // A task-specific image preference never mutates the reader's session.
+            for cookie in sourceCookies.cookies ?? [] where cookie.name != "uconfig" {
+                storage.setCookie(cookie)
+            }
+            for site in [EhSite.eHentai, .exHentai] {
+                guard let url = URL(string: EhURL.host(for: site)), let host = url.host else { continue }
+                let current = sourceCookies.cookies(for: url)?.first { $0.name == "uconfig" }?.value
+                if let cookie = HTTPCookie(properties: [
+                    .name: "uconfig", .value: downloadQuality.siteConfiguration(overriding: current),
+                    .domain: "." + host, .path: "/", .secure: "TRUE",
+                ]) {
+                    storage.setCookie(cookie)
+                }
+            }
+        } else {
+            configuration.httpCookieStorage = sourceCookies
+        }
         configuration.connectionProxyDictionary = proxy.connectionProxyDictionary
         configuration.timeoutIntervalForRequest = inactivity
         configuration.timeoutIntervalForResource = inactivity * 4
@@ -88,7 +110,7 @@ public actor SpiderQueen {
 
     init(
         galleryInfo: GalleryInfo, spiderInfo: SpiderInfo, mode: Mode, spiderDen: SpiderDen,
-        imageRequestTimeout: TimeInterval, receive: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+        imageRequestTimeout: TimeInterval, downloadQuality: DownloadQuality? = nil, receive: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
     ) {
         self.galleryInfo = galleryInfo
         self.spiderInfo = spiderInfo
@@ -96,6 +118,7 @@ public actor SpiderQueen {
         self.spiderDen = spiderDen
         self.receive = receive
         self.imageRequestTimeout = imageRequestTimeout
+        self.downloadQuality = downloadQuality
 
         let pageCount = max(0, galleryInfo.pages)
         self.pageStates = Array(repeating: Self.stateNone, count: pageCount)
@@ -221,7 +244,7 @@ public actor SpiderQueen {
             do {
                 try Task.checkCancellation()
                 // 0. 检查是否已在缓存/下载目录中 (快速路径)
-                if await spiderDen.contain(index: index) {
+                if await spiderDen.contain(index: index, allowReaderCache: downloadQuality == nil) {
                     pageStates[index] = Self.stateFinish
                     if let fileUrl = await spiderDen.getImageFileURL(index: index) {
                         imageUrls[index] = fileUrl.absoluteString
@@ -260,7 +283,7 @@ public actor SpiderQueen {
 
                 // 2.5 如果用户启用了"下载原始图片"且有原图 URL，优先使用 (对齐 Android downloadOriginImage)
                 let finalImageUrl: String
-                if AppSettings.shared.downloadOriginImage,
+                if downloadQuality.map({ $0 == .original }) ?? AppSettings.shared.downloadOriginImage,
                    let origin = originImageUrl, !origin.isEmpty {
                     finalImageUrl = origin
                 } else {

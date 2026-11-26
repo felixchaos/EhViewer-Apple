@@ -24,6 +24,7 @@ struct GalleryListView: View {
     @Environment(\.ehBrowseOriginIsCurrent) private var browseOriginIsCurrent
     @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
     @Environment(\.ehWorkspaceIsActive) private var workspaceIsActive
+    @Environment(\.ehDownloadSetupNavigation) private var downloadSetup
     @State private var needsSiteRefresh = false
     private var workspaceRoute: TagWorkspaceRoute?
     private var tagOriginOverride: TagWorkspaceOrigin?
@@ -361,21 +362,6 @@ struct GalleryListView: View {
             if let slot = userInfo["cloudSlot"] as? Int {
                 viewModel.applyCloudFavoriteChange(gid: gid, slot: slot, mode: mode)
             }
-        }
-        // These actions belong to the list, independent of its layout host.
-        .downloadNetworkPrompt($downloadNetworkConfirmation)
-        .sheet(item: $pendingDownload, onDismiss: {
-            guard let (gallery, label) = labeledDownload else { return }
-            labeledDownload = nil
-            confirmDownload(gallery, label: label)
-        }) { gallery in
-            DownloadLabelPicker(
-                onSelect: { label in
-                    labeledDownload = (gallery, label)
-                    pendingDownload = nil
-                },
-                onCancel: { pendingDownload = nil }
-            )
         }
         .sheet(item: $pendingFavorite) { gallery in
             FavoriteSlotPicker(
@@ -921,9 +907,6 @@ struct GalleryListView: View {
     /// 等待选择收藏夹的画廊（没有设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
     /// 待选下载标签的画廊（对齐 Android 的下载标签对话框）
-    @State private var pendingDownload: GalleryInfo?
-    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
-    @State private var labeledDownload: (GalleryInfo, String?)?
 
 
 
@@ -1134,21 +1117,11 @@ struct GalleryListView: View {
         GallerySearchQuery.exactTag(tag)
     }
 
-    /// 下载。建过下载标签且没设默认时先问放哪个标签——
-    /// 对齐 Android CommonOperations.startDownload。
     private func requestDownload(_ gallery: GalleryInfo) {
-        if GalleryActionService.shared.downloadLabelChoiceNeeded() {
-            pendingDownload = gallery
-        } else {
-            confirmDownload(gallery)
-        }
-    }
-
-    private func confirmDownload(_ gallery: GalleryInfo, label: String? = nil) {
         guard workspaceIsActive else { return }
-        DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
-            Task { await GalleryActionService.shared.startDownload(gallery: gallery, label: label) }
-        }
+        downloadSetup?(DownloadSetupRequest(galleries: [gallery], chooseLabel: true) { quality, label in
+            Task { await GalleryActionService.shared.startDownload(gallery: gallery, label: label, quality: quality) }
+        })
     }
 
     @ViewBuilder private var advancedSearchSheet: some View {

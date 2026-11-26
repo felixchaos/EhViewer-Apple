@@ -735,6 +735,7 @@ public struct DownloadRecord: Codable, FetchableRecord, PersistableRecord, Senda
     public var legacy: Int
     public var date: Date
     public var label: String?
+    public var quality: String?
 
     public init(gid: Int64, token: String, title: String, titleJpn: String? = nil,
                 thumb: String? = nil, category: Int = 0, posted: String? = nil,

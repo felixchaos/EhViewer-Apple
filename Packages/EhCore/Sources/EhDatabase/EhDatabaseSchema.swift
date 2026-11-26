@@ -165,6 +165,12 @@ enum EhDatabaseSchema {
             }
         }
 
+        migrator.registerMigration("v5") { db in
+            try db.alter(table: "download") { t in
+                t.add(column: "quality", .text)
+            }
+        }
+
         return migrator
     }
 }

@@ -23,7 +23,7 @@ final class DownloadNetworkPrompt {
         }
     }
 
-    private static var requiresConfirmation: Bool {
+    static var requiresConfirmation: Bool {
         #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
         if EhOfflineUIFixture.enabled,
            ProcessInfo.processInfo.environment["EH_FIXTURE_DOWNLOAD_NETWORK_CONFIRMATION"] == "1" {

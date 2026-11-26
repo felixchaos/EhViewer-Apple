@@ -39,6 +39,7 @@ struct MainTabView: View {
     typealias Tab = MainTab
     @State private var workspaces = [WorkspaceLayer()]
     @State private var outgoingLayer: UUID?
+    @State private var downloadSetup: DownloadSetupRequest?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var active: WorkspaceLayer { workspaces.last! }
@@ -74,24 +75,41 @@ struct MainTabView: View {
                     .offset(x: current ? 0 : -distance * 0.26)
                     .opacity(current || outgoingLayer == workspace.id ? 1 : 0)
                     .zIndex(Double(workspaces.firstIndex { $0.id == workspace.id } ?? 0))
-                    .allowsHitTesting(current)
+                    .allowsHitTesting(current && downloadSetup == nil)
                     .accessibilityElement(children: .contain)
-                    .accessibilityHidden(!current)
+                    .accessibilityHidden(!current || downloadSetup != nil)
                     .ehSuspendTabBarDriver(!current)
                     .environment(\.ehWorkspaceIsActive, current)
                     .environment(\.ehTagWorkspaceNavigation, TagWorkspaceNavigation { route in
                         guard active.id == workspace.id else { return }
                         push(route)
                     })
+                    .environment(\.ehDownloadSetupNavigation, DownloadSetupNavigation { request in
+                        guard active.id == workspace.id, downloadSetup == nil, !request.galleries.isEmpty else { return }
+                        transition { downloadSetup = request }
+                    })
                     .transition(distance > 0 ? .offset(x: distance) : .opacity)
                 }
             }
             #if os(iOS)
-            // Clip the status-bar edge and horizontal workspace transitions,
-            // but keep the page backdrop behind the floating bottom chrome.
+            // Preserve the status-bar edge and horizontal workspace boundary,
+            // while letting the page extend behind floating bottom controls.
             .clipShape(WorkspaceChromeClip(
                 bottomOverflow: compact ? EhSize.tabBarHeight + EhSize.tabBarBottomInset + geometry.safeAreaInsets.bottom : 0
             ))
+            #else
+            .clipped()
+            #endif
+            .overlay {
+                if let downloadSetup {
+                    DownloadSetupView(request: downloadSetup) {
+                        transition { self.downloadSetup = nil }
+                    }
+                    .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            #if os(iOS)
+            .transformPreference(EhHidesTabBarKey.self) { $0 = $0 || downloadSetup != nil }
             .ehFloatingTabBar(
                 items: MainTab.bottomTabs.map {
                     .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
@@ -102,8 +120,6 @@ struct MainTabView: View {
                     if tab == .home { active.homeReselect = UUID() }
                 }
             )
-            #else
-            .clipped()
             #endif
         }
     }

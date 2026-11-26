@@ -2,6 +2,7 @@ import Foundation
 import EhModels
 import EhDatabase
 import EhSpider
+import EhSettings
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -59,7 +60,7 @@ public actor DownloadManager {
     private let database: EhDatabase
     private nonisolated let directoryOverride: URL?
     private let isApplicationActive: @MainActor @Sendable () -> Bool
-    private let makeTransfer: @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer
+    private let makeTransfer: @Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer
 
     /// 下载监听器（用于通知集成）
     public weak var listener: DownloadListener?
@@ -93,8 +94,8 @@ public actor DownloadManager {
             false
             #endif
         },
-        makeTransfer: @escaping @Sendable (GalleryInfo, SpiderInfo) -> any DownloadTransfer = {
-            SpiderQueen(galleryInfo: $0, spiderInfo: $1, mode: .download)
+        makeTransfer: @escaping @Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer = {
+            SpiderQueen(galleryInfo: $0, spiderInfo: $1, mode: .download, downloadQuality: $2)
         }
     ) {
         self.database = database
@@ -221,7 +222,7 @@ public actor DownloadManager {
     /// Classify and apply the request under one actor turn. An existing
     /// transfer retains its label, progress and files.
     @discardableResult
-    public func startDownload(gallery: GalleryInfo, label: String? = nil) async -> StartOutcome {
+    public func startDownload(gallery: GalleryInfo, label: String? = nil, quality: DownloadQuality? = nil) async -> StartOutcome {
         guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token) else {
             return .offlineImport
         }
@@ -239,7 +240,7 @@ public actor DownloadManager {
             }
         }
 
-        let task = DownloadTask(gallery: gallery, label: label)
+        let task = DownloadTask(gallery: gallery, label: label, quality: quality ?? AppSettings.shared.defaultDownloadQuality)
         do {
             try database.insertDownload(DownloadTaskPersistence.record(for: task))
         } catch {
@@ -545,6 +546,7 @@ public actor DownloadManager {
               let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
 
         let gallery = downloadQueue[index].gallery
+        let quality = downloadQueue[index].quality
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
         await listener?.onDownloadStart(gid: gallery.gid, title: gallery.bestTitle)
         guard activeAttempt == attempt else { return }
@@ -565,7 +567,7 @@ public actor DownloadManager {
         }
 
         // 创建 SpiderQueen
-        let transfer = makeTransfer(gallery, spiderInfo)
+        let transfer = makeTransfer(gallery, spiderInfo, quality)
 
         // 统计已有的下载页数作为初始值
         let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages)
@@ -717,6 +719,8 @@ public actor DownloadManager {
         guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
               !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
               pendingFileDeletion?.gid != gallery.gid else { return false }
+        // Reader cache bytes have no download-quality provenance.
+        guard !downloadQueue.contains(where: { $0.gallery.gid == gallery.gid && $0.quality != nil }) else { return false }
 
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
         // 已经有这一页就不重复写 (可能是之前下载过的)
@@ -805,6 +809,7 @@ public struct DownloadTask: Sendable {
     public let recordIdentity = UUID()
     public let gallery: GalleryInfo
     public let createdAt: Date
+    public let quality: DownloadQuality?
     public var label: String?
     public var state: Int
     public var downloadedPages: Int
@@ -824,9 +829,11 @@ public struct DownloadTask: Sendable {
             && !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token)
     }
 
-    public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait, createdAt: Date = .init()) {
+    public init(gallery: GalleryInfo, label: String? = nil, state: Int = DownloadManager.stateWait,
+                createdAt: Date = .init(), quality: DownloadQuality? = nil) {
         self.gallery = gallery
         self.createdAt = createdAt
+        self.quality = quality
         self.label = label
         self.state = state
         self.downloadedPages = 0

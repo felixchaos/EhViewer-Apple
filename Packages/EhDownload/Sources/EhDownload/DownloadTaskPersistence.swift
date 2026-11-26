@@ -1,5 +1,6 @@
 import EhDatabase
 import EhModels
+import EhSettings
 import Foundation
 
 /// The persisted representation of a queue entry. Filesystem discovery and I/O
@@ -17,6 +18,7 @@ enum DownloadTaskPersistence {
             pages: gallery.pages, state: task.state, label: task.label, date: date ?? task.createdAt
         )
         record.simpleTags = gallery.simpleTags
+        record.quality = task.quality?.rawValue
         return record
     }
 
@@ -29,7 +31,8 @@ enum DownloadTaskPersistence {
             rating: record.rating, pages: record.pages,
             simpleTags: record.simpleTags, simpleLanguage: record.simpleLanguage
         )
-        var task = DownloadTask(gallery: gallery, label: record.label, state: record.state, createdAt: record.date)
+        var task = DownloadTask(gallery: gallery, label: record.label, state: record.state, createdAt: record.date,
+                                quality: record.quality.flatMap(DownloadQuality.init(rawValue:)))
         // Preserve reported queue state. Reader offline readiness separately
         // checks the actual files; this value does not promise they're present.
         if record.state == DownloadManager.stateFinish {

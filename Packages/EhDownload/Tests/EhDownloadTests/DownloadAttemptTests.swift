@@ -29,7 +29,7 @@ import EhSpider
         }
         let transfer = HeldTransfer(gid: active.gid)
         let listener = RecordingListener()
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in transfer })
         await manager.setListener(listener)
         await manager.startDownload(gallery: active, label: "Active group")
         await transfer.waitUntilStarted()
@@ -93,7 +93,7 @@ import EhSpider
         }
         let transfer = HeldTransfer(gid: active.gid)
         let factory = TransferSequence([transfer])
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in factory.take() })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in factory.take() })
 
         async let first = manager.startDownload(gallery: active, label: "First label")
         async let second = manager.startDownload(gallery: active, label: "First label")
@@ -144,7 +144,7 @@ import EhSpider
             BEGIN SELECT RAISE(ABORT, 'Synthetic state write failure'); END;
             """, nil, nil, nil) == SQLITE_OK)
         let transfer = HeldTransfer(gid: new.gid)
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in transfer })
 
         #expect(await manager.startDownload(gallery: new) == .unavailable)
         #expect(await manager.startDownload(gallery: paused) == .unavailable)
@@ -166,7 +166,7 @@ import EhSpider
         let task = DownloadTask(gallery: gallery, label: "Original group", state: DownloadManager.stateFailed)
         try store.insertDownload(DownloadTaskPersistence.record(for: task))
         let transfer = HeldTransfer(gid: gallery.gid)
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in transfer })
         let listener = RecordingListener()
         await manager.setListener(listener)
         await manager.resumeDownload(gid: gallery.gid)
@@ -203,7 +203,7 @@ import EhSpider
         let activation = SimulatedActivation()
         let manager = DownloadManager(database: store, directory: root, isApplicationActive: {
             activation.isActive
-        }, makeTransfer: { _, _ in factory.take() })
+        }, makeTransfer: { _, _, _ in factory.take() })
         await manager.setListener(listener)
         await manager.startDownload(gallery: gallery, label: "Existing label")
         await old.waitUntilStarted()
@@ -260,7 +260,7 @@ import EhSpider
         let resumed = HeldTransfer(gid: gallery.gid)
         let factory = TransferSequence([old, resumed])
         let listener = RecordingListener()
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in factory.take() })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in factory.take() })
         await manager.setListener(listener)
 
         await manager.startDownload(gallery: gallery)
@@ -303,7 +303,7 @@ import EhSpider
         let next = HeldTransfer(gid: sibling.gid)
         let factory = TransferSequence([old, next])
         let listener = RecordingListener()
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in factory.take() })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in factory.take() })
         await manager.setListener(listener)
 
         await manager.startDownload(gallery: gallery)
@@ -341,7 +341,7 @@ import EhSpider
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data([1]).write(to: dir.appendingPathComponent("00000001.jpg"))
         let transfer = HeldTransfer(gid: gallery.gid)
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in transfer })
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in transfer })
         let listener = RecordingListener()
         await manager.setListener(listener)
         await manager.startDownload(gallery: gallery)
@@ -356,12 +356,44 @@ import EhSpider
         await listener.waitUntilFinished()
     }
 
+    @Test func qualityIsSubmittedToTransferAndRetainedForExistingTasks() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("queue.sqlite")
+        let store = try EhDatabase(storageURL: databaseURL)
+        let gallery = fixture(123456)
+        let firstTransfer = HeldTransfer(gid: gallery.gid)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, quality in
+            #expect(quality == .x1280)
+            return firstTransfer
+        })
+        #expect(await manager.startDownload(gallery: gallery, quality: .x1280) == .enqueued)
+        await firstTransfer.waitUntilStarted()
+        #expect(await manager.startDownload(gallery: gallery, quality: .x780) == .alreadyDownloading)
+        #expect(!(await manager.saveWhileReading(gallery: gallery, pageIndex: 0, data: Data([1]), extension: ".jpg")))
+        await manager.pauseAllDownloads()
+        await firstTransfer.allowReturn()
+
+        let secondTransfer = HeldTransfer(gid: gallery.gid)
+        let restored = DownloadManager(database: try EhDatabase(storageURL: databaseURL), directory: root,
+                                       makeTransfer: { _, _, quality in
+            #expect(quality == .x1280)
+            return secondTransfer
+        })
+        #expect(await restored.getAllTasks().first?.quality == .x1280)
+        #expect(await restored.startDownload(gallery: gallery, quality: .original) == .resumed)
+        await secondTransfer.waitUntilStarted()
+        #expect(try store.getDownload(gid: gallery.gid)?.quality == "1280")
+        await restored.pauseAllDownloads()
+        await secondTransfer.allowReturn()
+    }
+
     @Test func cancelledReadingSyncDoesNotCreateAFileOrDownloadRecord() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try EhDatabase(inMemory: true)
         let gallery = fixture(44)
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in
             fatalError("Reading sync must not start a transfer")
         })
 

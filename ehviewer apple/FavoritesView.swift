@@ -45,7 +45,7 @@ struct FavoritesView: View {
     @State private var showMoveSheet = false
     @State private var showDeleteConfirm = false
     @State private var isBatchProcessing = false
-    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
+    @Environment(\.ehDownloadSetupNavigation) private var downloadSetup
 
     /// 外部选择绑定（嵌入模式）
     private var externalSelection: Binding<GalleryInfo?>?
@@ -69,7 +69,7 @@ struct FavoritesView: View {
     }
 
     var body: some View {
-        favoritesContent.downloadNetworkPrompt($downloadNetworkConfirmation)
+        favoritesContent
     }
 
     @ViewBuilder private var favoritesContent: some View {
@@ -225,15 +225,15 @@ struct FavoritesView: View {
     /// 批量下载选中的云端收藏
     private func batchDownloadCloud() {
         let selected = cloudGalleries.filter { cloudSelection.contains($0.gid) }
-        DownloadNetworkPrompt.request(galleryCount: selected.count, in: $downloadNetworkConfirmation) {
+        downloadSetup?(DownloadSetupRequest(galleries: selected) { quality, _ in
             Task {
                 for info in selected {
-                    await GalleryActionService.shared.startDownload(gallery: info)
+                    await GalleryActionService.shared.startDownload(gallery: info, quality: quality)
                 }
                 isCloudSelecting = false
                 cloudSelection.removeAll()
             }
-        }
+        })
     }
 
     /// 批量移动 / 移出。slot == -1 表示移出收藏。
@@ -613,15 +613,15 @@ struct FavoritesView: View {
 
     private func batchDownloadSelected() {
         let selected = localFavorites.filter { selectedGids.contains($0.gid) }.map { $0.toGalleryInfo() }
-        DownloadNetworkPrompt.request(galleryCount: selected.count, in: $downloadNetworkConfirmation) {
+        downloadSetup?(DownloadSetupRequest(galleries: selected) { quality, _ in
             Task {
                 for gallery in selected {
-                    await GalleryActionService.shared.startDownload(gallery: gallery)
+                    await GalleryActionService.shared.startDownload(gallery: gallery, quality: quality)
                 }
             }
             isSelectMode = false
             selectedGids.removeAll()
-        }
+        })
     }
 
     private func batchMoveToCloud(slot: Int) {

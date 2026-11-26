@@ -839,24 +839,12 @@ struct SettingsView: View {
             // 下载延迟 (对齐 Android Settings.KEY_DOWNLOAD_DELAY)
             Stepper("下载延迟: \(vm.downloadDelay) ms", value: $vm.downloadDelay, in: 0...2000, step: 100)
 
-            // 图片分辨率 —— 走 uconfig Cookie (xr)，改完立即同步
-            Picker("图片分辨率", selection: Binding(
-                get: { AppSettings.shared.imageResolution },
-                set: {
-                    AppSettings.shared.imageResolution = $0
-                    EhConfigSync.apply()
-                }
-            )) {
-                ForEach(ImageResolution.allCases) { resolution in
-                    Text(resolution.displayName).tag(resolution)
-                }
+            NavigationLink {
+                DefaultDownloadQualityView()
+            } label: {
+                LabeledContent("默认下载清晰度", value: AppSettings.shared.defaultDownloadQuality.title)
             }
-
-            // 下载原图 (对齐 Android Settings.KEY_DOWNLOAD_ORIGIN_IMAGE)
-            Toggle("下载原始图片", isOn: Binding(
-                get: { AppSettings.shared.downloadOriginImage },
-                set: { AppSettings.shared.downloadOriginImage = $0 }
-            ))
+            .accessibilityIdentifier("download-default-quality-entry")
 
             // 阅读时同步下载 (对齐 Android 上游 2026-06-16 sync_download_while_reading)
             Toggle("阅读时自动下载", isOn: Binding(

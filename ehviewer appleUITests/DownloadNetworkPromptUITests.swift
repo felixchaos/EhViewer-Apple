@@ -1,25 +1,13 @@
 import XCTest
 
 final class DownloadNetworkPromptUITests: XCTestCase {
-    @MainActor func testHistoryLongPressRequiresTheSameConsentAsDetails() {
+    @MainActor func testHistoryAndDetailsShowInlineConsentWithoutEnqueueingOnBack() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
-        app.launchEnvironment["EH_FIXTURE_DOWNLOAD_NETWORK_CONFIRMATION"] = "1"
-        app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1"
-        app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = "5"
-        app.launch()
-
+        let app = launchHistory(metered: true)
         let history = app.staticTexts["Synthetic tag history item"].firstMatch
         XCTAssertTrue(history.waitForExistence(timeout: 8))
-        history.press(forDuration: 0.8)
-        let download = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex
-        guard let action = download.last(where: \.isHittable) else {
-            XCTFail("History download context menu item is missing.")
-            return
-        }
-        action.tap()
-        cancelNetworkPrompt(in: app)
+        openHistoryDownload(in: app, history: history)
+        cancelSetup(in: app, metered: true)
         XCTAssertTrue(history.isHittable)
 
         history.tap()
@@ -27,15 +15,85 @@ final class DownloadNetworkPromptUITests: XCTestCase {
         XCTAssertTrue(detailDownload.waitForExistence(timeout: 8))
         XCTAssertTrue(detailDownload.isEnabled, "Cancellation must not enqueue the history download.")
         detailDownload.tap()
-        cancelNetworkPrompt(in: app)
+        cancelSetup(in: app, metered: true)
         XCTAssertTrue(detailDownload.isEnabled, "Cancellation must not enqueue the detail download.")
     }
 
-    @MainActor private func cancelNetworkPrompt(in app: XCUIApplication) {
-        let prompt = app.alerts["下载网络确认"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 6))
-        XCTAssertTrue(prompt.buttons["继续下载"].exists)
-        prompt.buttons["取消"].tap()
-        XCTAssertTrue(prompt.waitForNonExistence(timeout: 6))
+    @MainActor func testSettingsDefaultAndOneTimeSelectionAreIndependent() {
+        continueAfterFailure = false
+        let app = launchHistory(metered: false)
+        let profile = app.buttons["我的"].firstMatch
+        XCTAssertTrue(profile.waitForExistence(timeout: 8))
+        profile.tap()
+        let download = app.buttons["下载"].firstMatch
+        XCTAssertTrue(download.waitForExistence(timeout: 6))
+        // The row also shares its name with the floating tab. Require the
+        // settings destination rather than converting an AX tap into evidence.
+        let rows = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex
+        guard let settingsRow = rows.first(where: { $0.isHittable && $0.frame.midY < app.frame.maxY * 0.83 }) else {
+            XCTFail("未找到下载设置入口")
+            return
+        }
+        settingsRow.tap()
+        let defaultEntry = app.buttons["download-default-quality-entry"].firstMatch
+        XCTAssertTrue(defaultEntry.waitForExistence(timeout: 6))
+        defaultEntry.tap()
+        let defaultQuality = app.buttons["download-quality-1600"]
+        XCTAssertTrue(defaultQuality.waitForExistence(timeout: 6))
+        defaultQuality.tap()
+        XCTAssertTrue(defaultQuality.isSelected)
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(defaultEntry.exists)
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+
+        let historyTab = app.buttons["历史"].firstMatch
+        XCTAssertTrue(historyTab.waitForExistence(timeout: 6))
+        historyTab.tap()
+        let history = app.staticTexts["Synthetic tag history item"].firstMatch
+        XCTAssertTrue(history.waitForExistence(timeout: 8))
+        openHistoryDownload(in: app, history: history)
+        XCTAssertTrue(defaultQuality.waitForExistence(timeout: 6))
+        XCTAssertTrue(defaultQuality.isSelected)
+        let once = app.buttons["download-quality-780"]
+        once.tap()
+        XCTAssertTrue(once.isSelected)
+        XCTAssertFalse(defaultQuality.isSelected)
+        cancelSetup(in: app, metered: false)
+        openHistoryDownload(in: app, history: history)
+        XCTAssertTrue(defaultQuality.waitForExistence(timeout: 6))
+        XCTAssertTrue(defaultQuality.isSelected, "A one-time selection must not overwrite the saved default.")
+        cancelSetup(in: app, metered: false)
+    }
+
+    @MainActor private func launchHistory(metered: Bool) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_DOWNLOAD_NETWORK_CONFIRMATION"] = metered ? "1" : "0"
+        app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = "5"
+        app.launch()
+        return app
+    }
+
+    @MainActor private func openHistoryDownload(in app: XCUIApplication, history: XCUIElement) {
+        history.press(forDuration: 0.8)
+        let download = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex
+        guard let action = download.last(where: \.isHittable) else {
+            XCTFail("History download context menu item is missing.")
+            return
+        }
+        action.tap()
+    }
+
+    @MainActor private func cancelSetup(in app: XCUIApplication, metered: Bool) {
+        let back = app.buttons["download-setup-back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 6))
+        XCTAssertFalse(app.alerts["下载网络确认"].exists)
+        XCTAssertEqual(app.buttons["download-setup-submit"].label, metered ? "继续下载" : "加入下载队列")
+        if metered {
+            XCTAssertTrue(app.staticTexts["当前使用蜂窝网络或受限网络。"].exists)
+        }
+        back.tap()
+        XCTAssertTrue(back.waitForNonExistence(timeout: 6))
     }
 }

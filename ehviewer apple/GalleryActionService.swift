@@ -207,10 +207,10 @@ final class GalleryActionService {
     }
 
     /// Show the committed queue result rather than assuming every request enqueued a task.
-    func startDownload(gallery: GalleryInfo, label: String? = nil) async {
+    func startDownload(gallery: GalleryInfo, label: String? = nil, quality: DownloadQuality? = nil) async {
         let resolved = label ?? (AppSettings.shared.hasDefaultDownloadLabel
                                  ? AppSettings.shared.defaultDownloadLabel : nil)
-        let outcome = await DownloadManager.shared.startDownload(gallery: gallery, label: resolved)
+        let outcome = await DownloadManager.shared.startDownload(gallery: gallery, label: resolved, quality: quality)
         switch outcome {
         case .enqueued, .resumed:
             NotificationCenter.default.post(name: .galleryDownloadChanged, object: nil,

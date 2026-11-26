@@ -13,6 +13,7 @@ import EhSettings
 
 struct HistoryView: View {
     @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
+    @Environment(\.ehDownloadSetupNavigation) private var downloadSetup
     private let workspaceRoute: TagWorkspaceRoute?
     @State private var vm = HistoryViewModel()
     @State private var searchText = ""
@@ -22,7 +23,6 @@ struct HistoryView: View {
     @State private var resumeItem: ReaderLaunchItem?
     /// 待选收藏夹的画廊（没设默认收藏夹时）
     @State private var pendingFavorite: GalleryInfo?
-    @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
 
     /// 被推入父导航栈时，不创建自己的 NavigationStack，避免嵌套
     private var isPushed: Bool = false
@@ -48,7 +48,6 @@ struct HistoryView: View {
                 }
             }
         }
-        .downloadNetworkPrompt($downloadNetworkConfirmation)
         .task {
             vm.loadHistory()
         }
@@ -256,9 +255,9 @@ struct HistoryView: View {
                         // 对齐 Android HistoryScene 长按菜单
                         Button {
                             let gallery = record.toGalleryInfo()
-                            DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
-                                Task { await GalleryActionService.shared.startDownload(gallery: gallery) }
-                            }
+                            downloadSetup?(DownloadSetupRequest(galleries: [gallery]) { quality, _ in
+                                Task { await GalleryActionService.shared.startDownload(gallery: gallery, quality: quality) }
+                            })
                         } label: {
                             Label("下载", systemImage: "arrow.down.circle")
                         }

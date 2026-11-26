@@ -21,7 +21,7 @@ import Testing
         do {
             let store = try EhDatabase(storageURL: databaseURL)
             try store.insertDownload(DownloadTaskPersistence.record(
-                for: DownloadTask(gallery: queued, label: "Study", state: DownloadManager.stateWait),
+                for: DownloadTask(gallery: queued, label: "Study", state: DownloadManager.stateWait, quality: .x1600),
                 date: now
             ))
             try store.insertDownload(DownloadTaskPersistence.record(
@@ -54,6 +54,8 @@ import Testing
         #expect(restored.gallery.simpleLanguage == queued.simpleLanguage)
         #expect(restored.gallery.pages == queued.pages)
         #expect(restored.label == "Study")
+        #expect(restored.quality == .x1600)
+        #expect(restoredReading.quality == nil)
         #expect(restored.state == DownloadManager.stateWait)
         #expect(restored.downloadedPages == 3)
         #expect(restored.speed == 0)
@@ -79,7 +81,7 @@ import Testing
         let removed = GalleryInfo(gid: 4, token: "neutral", title: "Removed", pages: 1)
         let paused = GalleryInfo(gid: 5, token: "neutral", title: "Paused", pages: 2)
         let galleries = [target, later, replacement, removed, paused]
-        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _ in
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in
             preconditionFailure("The local-data test must never start a transfer")
         })
 
@@ -141,7 +143,7 @@ import Testing
 
         let store = try EhDatabase(inMemory: true)
         let gallery = GalleryInfo(gid: 6, token: "neutral", title: "", pages: 1)
-        let manager = DownloadManager(database: store, directory: selected, makeTransfer: { _, _ in
+        let manager = DownloadManager(database: store, directory: selected, makeTransfer: { _, _, _ in
             preconditionFailure("The local-data test must never start a transfer")
         })
         let saved = await manager.saveWhileReading(gallery: gallery, pageIndex: 0, data: Data([0x01]), extension: ".png")

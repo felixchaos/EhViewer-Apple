@@ -100,6 +100,21 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "download_origin_image") }
     }
 
+    /// Default for newly submitted downloads, independent of browser/reader settings.
+    public var defaultDownloadQuality: DownloadQuality {
+        get {
+            access(keyPath: \.defaultDownloadQuality)
+            if let raw = _defaults.string(forKey: "default_download_quality"),
+               let quality = DownloadQuality(rawValue: raw) { return quality }
+            return downloadOriginImage ? .original : DownloadQuality(rawValue: imageResolution.rawValue) ?? .auto
+        }
+        set {
+            withMutation(keyPath: \.defaultDownloadQuality) {
+                _defaults.set(newValue.rawValue, forKey: "default_download_quality")
+            }
+        }
+    }
+
     /// 图片分辨率 (对应 Android EhConfig.IMAGE_SIZE_*)
     /// "a" = 自动, "780", "980", "1280", "1600", "2400"
     @ObservationIgnored
@@ -759,5 +774,38 @@ public enum ImageResolution: String, Sendable, CaseIterable, Identifiable {
         case .x1600: return "1600x"
         case .x2400: return "2400x"
         }
+    }
+}
+
+/// A task snapshots this value when it is admitted to the queue. Nil in a
+/// legacy database record deliberately retains the previous resume behavior.
+public enum DownloadQuality: String, CaseIterable, Identifiable, Sendable {
+    case auto = "a"
+    case x780 = "780"
+    case x980 = "980"
+    case x1280 = "1280"
+    case x1600 = "1600"
+    case x2400 = "2400"
+    case original
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .auto: return "自动"
+        case .original: return "原图优先"
+        default: return "\(rawValue) px"
+        }
+    }
+
+    public var siteResolution: String { self == .original ? Self.auto.rawValue : rawValue }
+
+    /// Produce a task-session configuration, preserving unrelated keys and
+    /// numeric fragments of other fields (e.g. xl_1-2-3).
+    public func siteConfiguration(overriding value: String?) -> String {
+        var entries = (value ?? "").split(separator: "-").map(String.init)
+        entries.removeAll { $0.hasPrefix("xr_") || $0.hasPrefix("oi_") }
+        // Original is selected from the explicit per-page link, never by
+        // changing the server's normal-image response used as a fallback.
+        return (entries + ["xr_\(siteResolution)", "oi_n"]).joined(separator: "-")
     }
 }

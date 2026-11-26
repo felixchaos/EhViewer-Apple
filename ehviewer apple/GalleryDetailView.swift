@@ -111,6 +111,7 @@ struct GalleryDetailView: View {
     @State private var showResourceSheet = false
     @State private var showTorrents = false
     @State private var downloadNetworkConfirmation: DownloadNetworkPrompt?
+    @Environment(\.ehDownloadSetupNavigation) private var downloadSetup
     @State private var removalPrompt: DownloadRemovalPrompt?
 
     private struct DownloadRemovalPrompt {
@@ -597,6 +598,14 @@ struct GalleryDetailView: View {
 
     private func requestDownload() {
         guard [.enqueue, .resume, .retry].contains(vm.downloadAction) else { return }
+        if vm.downloadAction == .enqueue {
+            let downloadable = vm.detail?.info ?? gallery
+            downloadSetup?(DownloadSetupRequest(galleries: [downloadable]) { quality, _ in
+                Haptics.impact()
+                Task { await vm.startDownload(gallery: downloadable, quality: quality) }
+            })
+            return
+        }
         DownloadNetworkPrompt.request(in: $downloadNetworkConfirmation) {
             Haptics.impact()
             Task { await vm.startDownload(gallery: gallery) }
@@ -1316,8 +1325,8 @@ class GalleryDetailViewModel {
         }
     }
 
-    func startDownload(gallery: GalleryInfo) async {
-        await GalleryActionService.shared.startDownload(gallery: gallery)
+    func startDownload(gallery: GalleryInfo, quality: DownloadQuality? = nil) async {
+        await GalleryActionService.shared.startDownload(gallery: gallery, quality: quality)
         let state = await DownloadManager.shared.getTaskState(gid: gallery.gid)
         self.downloadState = state
         // Fix F3-4: 开始下载后启动轮询

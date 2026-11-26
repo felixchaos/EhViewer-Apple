@@ -26,6 +26,7 @@ public actor SpiderDen {
 
     private let gid: Int64
     private let downloadDir: URL
+    private let readCacheOverride: SimpleDiskCache?
     private var mode: SpiderMode
 
     /// 简单的文件缓存（用于阅读模式）
@@ -141,10 +142,11 @@ public actor SpiderDen {
         self.init(galleryID: galleryInfo.gid, mode: mode, downloadDirectory: Self.getGalleryDownloadDir(galleryInfo: galleryInfo))
     }
 
-    init(galleryID: Int64, mode: SpiderMode, downloadDirectory: URL) {
+    init(galleryID: Int64, mode: SpiderMode, downloadDirectory: URL, readerCache: SimpleDiskCache? = nil) {
         self.gid = galleryID
         self.mode = mode
         self.downloadDir = downloadDirectory
+        self.readCacheOverride = readerCache
     }
 
     // MARK: - 下载目录管理
@@ -251,7 +253,7 @@ public actor SpiderDen {
 
     /// 检查缓存中是否包含图片
     private func containInCache(index: Int) -> Bool {
-        guard let cache = Self.readCache else { return false }
+        guard let cache = readCacheOverride ?? Self.readCache else { return false }
         return cache.contains(key: cacheKey(for: index))
     }
 
@@ -262,12 +264,12 @@ public actor SpiderDen {
     }
 
     /// 检查是否包含图片 (对应 Android contain)
-    public func contain(index: Int) -> Bool {
+    public func contain(index: Int, allowReaderCache: Bool = true) -> Bool {
         switch mode {
         case .read:
             return containInCache(index: index) || containInDownloadDir(index: index)
         case .download:
-            return containInDownloadDir(index: index) || copyFromCacheToDownloadDir(index: index)
+            return containInDownloadDir(index: index) || (allowReaderCache && copyFromCacheToDownloadDir(index: index))
         }
     }
 
@@ -276,7 +278,7 @@ public actor SpiderDen {
     /// 从缓存复制到下载目录 (对应 Android copyFromCacheToDownloadDir)
     @discardableResult
     private func copyFromCacheToDownloadDir(index: Int) -> Bool {
-        guard let cache = Self.readCache,
+        guard let cache = readCacheOverride ?? Self.readCache,
               let dir = getDownloadDir() else { return false }
 
         let key = cacheKey(for: index)

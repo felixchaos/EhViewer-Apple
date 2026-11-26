@@ -20,6 +20,7 @@ public enum SettingsBackup {
         case integer
         case integerRange(ClosedRange<Int>)
         case string
+        case downloadQuality
 
         func accepts(_ value: Any) -> Bool {
             switch self {
@@ -34,6 +35,9 @@ public enum SettingsBackup {
                 return true
             case .string:
                 return value is String
+            case .downloadQuality:
+                guard let raw = value as? String else { return false }
+                return DownloadQuality(rawValue: raw) != nil
             }
         }
     }
@@ -44,6 +48,7 @@ public enum SettingsBackup {
         "gallery_site": .integer, "domain_fronting": .boolean, "dns_over_https": .boolean,
         "built_in_hosts": .boolean, "multi_thread_download": .integer, "preload_image": .integer,
         "download_delay": .integer, "download_timeout": .integer, "download_origin_image": .boolean,
+        "default_download_quality": .downloadQuality,
         "image_resolution": .string, "read_cache_size": .integer, "list_mode": .integer,
         "show_jpn_title": .boolean, "show_tag_translations": .boolean, "show_gallery_comment": .boolean,
         "show_gallery_rating": .boolean, "show_read_progress": .boolean, "wide_screen_list_mode": .integer,
