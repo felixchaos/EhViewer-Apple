@@ -54,14 +54,14 @@ struct DownloadSetupView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button(action: close) {
-                    Image(systemName: "chevron.backward")
+                    Label("返回", systemImage: "chevron.backward")
+                        .labelStyle(.iconOnly)
                         .font(.headline)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
-                .accessibilityLabel("返回")
                 .accessibilityIdentifier("download-setup-back")
                 Text("下载设置")
                     .font(.headline)
@@ -112,7 +112,6 @@ struct DownloadSetupView: View {
         .tint(EhColor.accent)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EhColor.groupedBackground.ignoresSafeArea())
-        .accessibilityIdentifier("download-setup-page")
     }
 
     private var summary: some View {
@@ -220,13 +219,18 @@ struct DefaultDownloadQualityView: View {
 }
 
 private struct DownloadQualityChoices: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let selection: DownloadQuality
     let choose: (DownloadQuality) -> Void
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            choices(columns: 2, minimum: 126)
+        if typeSize.isAccessibilitySize {
             choices(columns: 1, minimum: 0)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                choices(columns: 2, minimum: 126)
+                choices(columns: 1, minimum: 0)
+            }
         }
     }
 

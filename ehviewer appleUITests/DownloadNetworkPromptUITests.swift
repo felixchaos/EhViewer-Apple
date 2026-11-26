@@ -88,7 +88,15 @@ final class DownloadNetworkPromptUITests: XCTestCase {
     @MainActor private func cancelSetup(in app: XCUIApplication, metered: Bool) {
         let back = app.buttons["download-setup-back"]
         XCTAssertTrue(back.waitForExistence(timeout: 6))
+        XCTAssertTrue(back.isHittable)
         XCTAssertFalse(app.alerts["下载网络确认"].exists)
+        XCTAssertFalse(app.otherElements["workspace-floating-tabs"].isHittable)
+        if metered {
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "Download settings with inline network consent"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+        }
         XCTAssertEqual(app.buttons["download-setup-submit"].label, metered ? "继续下载" : "加入下载队列")
         if metered {
             XCTAssertTrue(app.staticTexts["当前使用蜂窝网络或受限网络。"].exists)
