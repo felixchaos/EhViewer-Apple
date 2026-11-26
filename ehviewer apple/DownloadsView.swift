@@ -534,13 +534,32 @@ struct DownloadsView: View {
 
     // MARK: - 过滤后的任务列表
 
-    /// 打包并唤起系统分享 (issue #2)
-    private func shareGallery(_ gallery: GalleryInfo) async {
+    private enum ArchiveDestination {
+        case share, airDrop
+    }
+
+    private func shareGallery(_ gallery: GalleryInfo, via destination: ArchiveDestination = .share) async {
+        guard !isExporting, exportedZip == nil else { return }
         isExporting = true
         defer { isExporting = false }
         do {
             let url = try await GalleryArchiveExporter.exportZip(for: gallery)
+            try Task.checkCancellation()
+            #if os(macOS)
+            if destination == .airDrop {
+                guard let service = NSSharingService(named: .sendViaAirDrop),
+                      service.canPerform(withItems: [url]) else {
+                    exportError = String(localized: "隔空投送不可用。可改用 ZIP 分享。")
+                    return
+                }
+                service.perform(withItems: [url])
+                return
+            }
+            #endif
+            // On iOS the system share sheet lets the user choose AirDrop and select a recipient.
             exportedZip = ExportedArchive(url: url)
+        } catch is CancellationError {
+            return
         } catch {
             exportError = error.localizedDescription
         }
@@ -975,16 +994,7 @@ struct DownloadsView: View {
                                 task: task,
                                 readingPage: readingProgress[task.gallery.gid],
                                 storageSize: storage.sizes[task.gallery.gid]
-                            ) {
-                                vm.pauseTask(gid: task.gallery.gid)
-                            } onResume: {
-                                vm.resumeTask(gid: task.gallery.gid)
-                            } onRequestDelete: {
-                                deletingTaskGid = task.gallery.gid
-                                showSingleDeleteConfirm = true
-                            } onShare: {
-                                Task { await shareGallery(task.gallery) }
-                            }
+                            )
                         }
                     }
                     .buttonStyle(.plain)
@@ -999,17 +1009,18 @@ struct DownloadsView: View {
                         task: task,
                         readingPage: readingProgress[task.gallery.gid],
                         storageSize: storage.sizes[task.gallery.gid],
-                        onTagTap: tagTap
-                    ) {
-                        vm.pauseTask(gid: task.gallery.gid)
-                    } onResume: {
-                        vm.resumeTask(gid: task.gallery.gid)
-                    } onRequestDelete: {
-                        deletingTaskGid = task.gallery.gid
-                        showSingleDeleteConfirm = true
-                    } onShare: {
-                        Task { await shareGallery(task.gallery) }
-                    }
+                        onTagTap: tagTap,
+                        actions: .init(
+                            pause: { vm.pauseTask(gid: task.gallery.gid) },
+                            resume: { vm.resumeTask(gid: task.gallery.gid) },
+                            requestDelete: {
+                                deletingTaskGid = task.gallery.gid
+                                showSingleDeleteConfirm = true
+                            },
+                            share: { Task { await shareGallery(task.gallery) } },
+                            airDrop: { Task { await shareGallery(task.gallery, via: .airDrop) } }
+                        )
+                    )
                     if tagTap == nil {
                         // Preserve the ordinary row as one accessible button,
                         // including its measured size and download status.
@@ -1321,10 +1332,16 @@ struct DownloadTaskRow: View {
     let readingPage: Int?      // 阅读进度 (当前页索引)
     let storageSize: Int64?    // 画廊占用空间 (字节)
     var onTagTap: ((String) -> Void)? = nil
-    let onPause: () -> Void
-    let onResume: () -> Void
-    let onRequestDelete: () -> Void   // 请求删除 (由父视图处理确认)
-    let onShare: () -> Void           // 打包为 zip 并分享 (issue #2)
+    // Without actions the row is a passive label inside the selection button.
+    var actions: Actions? = nil
+
+    struct Actions {
+        let pause: () -> Void
+        let resume: () -> Void
+        let requestDelete: () -> Void
+        let share: () -> Void
+        let airDrop: () -> Void
+    }
 
     /// 已读比例，画在封面底部
     private var readProgressFraction: Double? {
@@ -1356,7 +1373,24 @@ struct DownloadTaskRow: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     var body: some View {
+        if let actions {
+            rowContent
+                .contextMenu { contextActions(actions) }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive, action: actions.requestDelete) {
+                        Label("删除", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("download-row-swipe-delete")
+                }
+                .swipeActions(edge: .leading) { leadingActions(actions) }
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         EhGalleryRow(
             gallery: task.gallery,
             // 下载状态排在页数、评分这些通用信息前面
@@ -1369,87 +1403,95 @@ struct DownloadTaskRow: View {
             // 暂停/继续是这一行最常按的东西，此前只能长按出上下文菜单
             accessory: AnyView(
                 Group {
-                    if isActive {
-                        EhRowActionButton(symbol: "pause.fill", size: 28, action: onPause)
-                    } else if task.state != DownloadManager.stateFinish {
-                        EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: onResume)
+                    if let actions {
+                        if isActive {
+                            EhRowActionButton(symbol: "pause.fill", size: 28, action: actions.pause)
+                                .accessibilityLabel("暂停")
+                                .accessibilityIdentifier("download-row-accessory-pause")
+                        } else if task.state != DownloadManager.stateFinish {
+                            EhRowActionButton(symbol: "arrow.clockwise", size: 28, action: actions.resume)
+                                .accessibilityLabel("继续")
+                                .accessibilityIdentifier("download-row-accessory-resume")
+                        }
                     }
                 }
             ),
             onTagTap: onTagTap
         )
         .contentShape(Rectangle())
-        .contextMenu {
-            // 暂停/恢复
-            if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                Button {
-                    onPause()
-                } label: {
-                    Label("暂停", systemImage: "pause")
-                }
-            } else if task.state != DownloadManager.stateFinish {
-                Button {
-                    onResume()
-                } label: {
-                    Label("继续", systemImage: "play")
-                }
-            }
+    }
 
-            // 分享 (issue #2: 打包成 zip 交给系统分享)
-            if task.state == DownloadManager.stateFinish {
-                Button {
-                    onShare()
-                } label: {
-                    Label("分享 (打包为 zip)", systemImage: "square.and.arrow.up")
-                }
-            }
-
-            Divider()
-
-            // 删除 (请求父视图弹出确认)
-            Button(role: .destructive) {
-                onRequestDelete()
+    @ViewBuilder
+    private func contextActions(_ actions: Actions) -> some View {
+        // 暂停/恢复
+        if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
+            Button {
+                actions.pause()
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("暂停", systemImage: "pause")
             }
-
-            #if os(macOS)
-            // Mac: 在 Finder 中显示 (Fix A-3: 使用统一路径算法)
-            if task.state == DownloadManager.stateFinish {
-                Button {
-                    let dirName = DownloadManager.galleryDirectoryName(gid: task.gallery.gid, title: task.gallery.bestTitle)
-                    let dir = DownloadManager.shared.downloadDirectory
-                        .appendingPathComponent(dirName)
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir.path)
-                } label: {
-                    Label("在 Finder 中显示", systemImage: "folder")
-                }
-            }
-            #endif
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                onRequestDelete()
+        } else if task.state != DownloadManager.stateFinish {
+            Button {
+                actions.resume()
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("继续", systemImage: "play")
             }
         }
-        .swipeActions(edge: .leading) {
-            if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
-                Button {
-                    onPause()
-                } label: {
-                    Label("暂停", systemImage: "pause")
-                }
-                .tint(.orange)
-            } else if task.state != DownloadManager.stateFinish {
-                Button {
-                    onResume()
-                } label: {
-                    Label("继续", systemImage: "play")
-                }
-                .tint(.green)
+
+        // 分享 (issue #2: 打包成 zip 交给系统分享)
+        if task.state == DownloadManager.stateFinish {
+            Button {
+                actions.share()
+            } label: {
+                Label("分享 (打包为 zip)", systemImage: "square.and.arrow.up")
             }
+            Button(action: actions.airDrop) {
+                Label("隔空投送…", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .accessibilityIdentifier("download-row-airdrop")
+        }
+
+        Divider()
+
+        // 删除 (请求父视图弹出确认)
+        Button(role: .destructive) {
+            actions.requestDelete()
+        } label: {
+            Label("删除", systemImage: "trash")
+        }
+
+        #if os(macOS)
+        // Mac: 在 Finder 中显示 (Fix A-3: 使用统一路径算法)
+        if task.state == DownloadManager.stateFinish {
+            Button {
+                let dirName = DownloadManager.galleryDirectoryName(gid: task.gallery.gid, title: task.gallery.bestTitle)
+                let dir = DownloadManager.shared.downloadDirectory
+                    .appendingPathComponent(dirName)
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir.path)
+            } label: {
+                Label("在 Finder 中显示", systemImage: "folder")
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private func leadingActions(_ actions: Actions) -> some View {
+        if task.state == DownloadManager.stateDownload || task.state == DownloadManager.stateWait {
+            Button {
+                actions.pause()
+            } label: {
+                Label("暂停", systemImage: "pause")
+            }
+            .tint(.orange)
+        } else if task.state != DownloadManager.stateFinish {
+            Button {
+                actions.resume()
+            } label: {
+                Label("继续", systemImage: "play")
+            }
+            .tint(.green)
+            .accessibilityIdentifier("download-row-swipe-resume")
         }
     }
 

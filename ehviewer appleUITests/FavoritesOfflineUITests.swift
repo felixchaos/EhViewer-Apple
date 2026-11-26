@@ -498,6 +498,113 @@ final class FavoritesOfflineUITests: XCTestCase {
         XCTAssertTrue(tabBar.waitForExistence(timeout: 8))
     }
 
+    @MainActor func testDownloadBatchSelectionSuppressesCompletedRowContextMenu() {
+        continueAfterFailure = false
+        let app = launch(cloud: "empty", launchPage: 4, localReader: true, downloadSort: true)
+        let completed = app.staticTexts["Sort Fixture Zebra"].firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: 8))
+        let point = completed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let share = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "zip")).firstMatch
+        point.press(forDuration: 0.8)
+        XCTAssertTrue(share.waitForExistence(timeout: 5), "The normal Downloads row must expose Share.")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.13)).tap()
+        XCTAssertTrue(share.waitForNonExistence(timeout: 5))
+
+        let actions = app.buttons["downloads-actions"].firstMatch
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+
+        let done = app.buttons["downloads-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        point.press(forDuration: 0.8)
+        XCTAssertFalse(share.isHittable, "The Download batch row must not expose single-item Share.")
+        XCTAssertTrue(done.isHittable, "Holding a batch row must not present an overlay.")
+
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+        point.press(forDuration: 0.8)
+        XCTAssertTrue(share.waitForExistence(timeout: 5), "Share must return after leaving batch selection.")
+    }
+
+    @MainActor func testDownloadBatchSelectionSuppressesSingleItemSwipesAndAccessory() {
+        continueAfterFailure = false
+        let app = launch(cloud: "empty", launchPage: 4, localReader: true, downloadSort: true)
+        let completed = app.staticTexts["Sort Fixture Zebra"].firstMatch
+        let paused = app.staticTexts["Sort Fixture Apple"].firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: 8))
+        XCTAssertTrue(paused.waitForExistence(timeout: 8))
+        let accessory = app.descendants(matching: .any).matching(identifier: "download-row-accessory-resume").firstMatch
+        XCTAssertTrue(accessory.waitForExistence(timeout: 5))
+
+        func swipe(_ row: XCUIElement, from: CGFloat, to: CGFloat) {
+            let midY = row.frame.midY - app.frame.minY
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0))
+            start.withOffset(CGVector(dx: 0, dy: midY)).press(
+                forDuration: 0.05, thenDragTo: end.withOffset(CGVector(dx: 0, dy: midY)),
+                withVelocity: .slow, thenHoldForDuration: 0
+            )
+        }
+
+        let swipeDelete = app.buttons["download-row-swipe-delete"].firstMatch
+        let swipeResume = app.buttons["download-row-swipe-resume"].firstMatch
+        let actions = app.buttons["downloads-actions"].firstMatch
+        actions.tap()
+        let select = app.buttons["批量操作"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 8))
+        select.tap()
+        let done = app.buttons["downloads-selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertTrue(accessory.waitForNonExistence(timeout: 5))
+
+        swipe(completed, from: 0.76, to: 0.32)
+        XCTAssertFalse(swipeDelete.isHittable)
+        swipe(paused, from: 0.37, to: 0.65)
+        XCTAssertFalse(swipeResume.isHittable)
+        XCTAssertTrue(done.isHittable)
+
+        done.tap()
+        XCTAssertTrue(accessory.waitForExistence(timeout: 5))
+        swipe(completed, from: 0.76, to: 0.32)
+        XCTAssertTrue(swipeDelete.waitForExistence(timeout: 5))
+        XCTAssertTrue(swipeDelete.isHittable)
+        // A revealed delete action may persist until another row is interacted with.
+        // Start the leading-swipe positive control from a clean app presentation.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(paused.waitForExistence(timeout: 8))
+        swipe(paused, from: 0.37, to: 0.65)
+        XCTAssertTrue(swipeResume.waitForExistence(timeout: 5))
+        XCTAssertTrue(swipeResume.isHittable)
+    }
+
+    @MainActor func testCompletedDownloadAirDropOpensSystemShareSheet() {
+        continueAfterFailure = false
+        let app = launch(cloud: "empty", launchPage: 4, localReader: true, downloadSort: true)
+        let completed = app.staticTexts["Sort Fixture Zebra"].firstMatch
+        let paused = app.staticTexts["Sort Fixture Apple"].firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: 8))
+        XCTAssertTrue(paused.waitForExistence(timeout: 8))
+        let airDrop = app.buttons["download-row-airdrop"].firstMatch
+        paused.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
+        let resume = app.buttons.matching(NSPredicate(format: "label == %@", "继续")).firstMatch
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        XCTAssertFalse(airDrop.isHittable)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.13)).tap()
+
+        completed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
+        XCTAssertTrue(airDrop.waitForExistence(timeout: 5))
+        airDrop.coordinate(withNormalizedOffset: CGVector(dx: 0.33, dy: 0.5)).tap()
+        let archivePreview = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Sort Fixture Zebra.zip")
+        ).firstMatch
+        XCTAssertTrue(archivePreview.waitForExistence(timeout: 10),
+                      "Expected ZIP preview in the native share sheet.\n\(app.debugDescription)")
+        XCTAssertFalse(app.alerts["分享失败"].exists)
+    }
+
     // Run only on a dedicated offline simulator with no non-fixture downloads.
     @MainActor func testClearFinishedDownloadsRequiresDestructiveConfirmation() {
         let app = launch(cloud: "empty", localReader: true, clearFinished: true)
