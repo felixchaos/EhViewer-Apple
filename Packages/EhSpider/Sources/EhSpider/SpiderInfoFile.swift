@@ -135,8 +135,29 @@ public struct SpiderInfoFile: Sendable {
         guard totalPages > 0 else { return [] }
 
         var downloaded = Set<Int>()
-        for pageIndex in 0..<totalPages where getLocalImageURL(in: directory, pageIndex: pageIndex) != nil {
-            downloaded.insert(pageIndex)
+        if totalPages <= 2_048 {
+            for pageIndex in 0..<totalPages where getLocalImageURL(in: directory, pageIndex: pageIndex) != nil {
+                downloaded.insert(pageIndex)
+            }
+            return downloaded
+        }
+
+        // A recovered metadata header can declare far more pages than are
+        // present. Bound the work to directory entries instead of that value.
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        else { return [] }
+        let suffixes = Set(SpiderDen.supportedExtensions)
+        for entry in entries {
+            let ext = "." + entry.pathExtension
+            let digits = entry.deletingPathExtension().lastPathComponent
+            guard suffixes.contains(ext.lowercased()),
+                  digits.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let pageNumber = Int32(digits), pageNumber > 0, Int(pageNumber) <= totalPages else { continue }
+            let index = Int(pageNumber) - 1
+            guard SpiderDen.generateImageFilename(index: index, extension: ext) == entry.lastPathComponent,
+                  !downloaded.contains(index),
+                  getLocalImageURL(in: directory, pageIndex: index) != nil else { continue }
+            downloaded.insert(index)
         }
         return downloaded
     }

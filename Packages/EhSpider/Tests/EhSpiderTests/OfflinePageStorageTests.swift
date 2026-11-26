@@ -66,6 +66,19 @@ struct OfflinePageStorageTests {
         }
     }
 
+    @Test func oversizedPageCountUsesOnlyValidNumberedFiles() throws {
+        try withScratchDirectory { directory in
+            for filename in ["00000001.jpg", "00000001.png", "00002050.webp", "2051.jpg", "12345678.bin"] {
+                try Data([1]).write(to: directory.appendingPathComponent(filename))
+            }
+            try Data().write(to: directory.appendingPathComponent("00002049.gif"))
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("00002052.png"),
+                                                    withIntermediateDirectories: false)
+            #expect(SpiderInfoFile.getDownloadedPages(in: directory, totalPages: 2_049) == [0])
+            #expect(SpiderInfoFile.getDownloadedPages(in: directory, totalPages: Int.max) == [0, 2_049])
+        }
+    }
+
     @Test func fullMetadataReopensWhileHeaderReadLeavesPageTokensOnDisk() throws {
         try withScratchDirectory { directory in
             try SpiderInfoFile.write(
