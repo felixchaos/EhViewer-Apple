@@ -224,6 +224,8 @@ final class GalleryActionService {
             EhToast.info("已完成下载")
         case .offlineImport:
             EhToast.info("离线导入项目不支持下载")
+        case .retainedFiles:
+            EhToast.failure("本地图片已保留。可在下载设置中恢复原任务。")
         case .unavailable:
             EhToast.failure("无法开始下载")
         }

@@ -2014,42 +2014,14 @@ class SettingsViewModel {
                 guard let spiderInfo = SpiderInfoFile.readHeader(from: dir) else { continue }
                 // 跳过已在数据库中的
                 if existingGids.contains(spiderInfo.gid) { continue }
-                if OfflineGallery.isImported(gid: spiderInfo.gid, token: spiderInfo.token) {
-                    do {
-                        if try await DownloadManager.shared.restoreOfflineGallery(spiderInfo, from: dir) {
-                            restoredCount += 1
-                        }
-                    } catch {
-                        errorCount += 1
-                    }
-                    continue
-                }
-                guard spiderInfo.gid > 0, !spiderInfo.token.isEmpty else { continue }
-
-                // 从目录名提取标题: 格式为 "gid-title"
-                let dirName = dir.lastPathComponent
-                let prefix = "\(spiderInfo.gid)-"
-                let title = dirName.hasPrefix(prefix) ? String(dirName.dropFirst(prefix.count)) : dirName
-
-                // 统计已下载页数
-                let imageFiles = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))
-                    .map { $0.filter { url in
-                        let ext = url.pathExtension.lowercased()
-                        return ["jpg", "jpeg", "png", "gif", "webp"].contains(ext)
-                    }.count } ?? 0
-
-                let record = DownloadRecord(
-                    gid: spiderInfo.gid,
-                    token: spiderInfo.token,
-                    title: title,
-                    pages: spiderInfo.pages,
-                    state: imageFiles >= spiderInfo.pages ? DownloadManager.stateFinish : DownloadManager.stateNone,
-                    date: Date()
-                )
-
                 do {
-                    try EhDatabase.shared.insertDownload(record)
-                    restoredCount += 1
+                    let manager = DownloadManager.shared
+                    let restored = if OfflineGallery.isImported(gid: spiderInfo.gid, token: spiderInfo.token) {
+                        try await manager.restoreOfflineGallery(spiderInfo, from: dir)
+                    } else {
+                        try await manager.restoreRetainedDownload(spiderInfo, from: dir)
+                    }
+                    if restored { restoredCount += 1 }
                 } catch {
                     errorCount += 1
                 }

@@ -7,6 +7,7 @@ import EhDownload
 import EhDatabase
 import EhModels
 import EhSettings
+import EhSpider
 import SQLite3
 
 @MainActor
@@ -139,6 +140,9 @@ enum EhOfflineUIFixture {
         } else {
             try? EhDatabase.shared.deleteHistory(gid: historyTagResult.gid)
         }
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_RETAINED_DOWNLOAD"] == "1" {
+            seedRetainedDownload()
+        }
         try? EhDatabase.shared.deleteLocalFavorite(gid: workspaceLocalGid)
         if workspaceFixture {
             var local = LocalFavoriteRecord(gid: workspaceLocalGid, token: "fixture", title: "Workspace local favorite")
@@ -157,6 +161,21 @@ enum EhOfflineUIFixture {
            UUID(uuidString: identifier) != nil {
             seedImportScenario(identifier: identifier)
         }
+    }
+
+    private static func seedRetainedDownload() {
+        let gallery = GalleryInfo(gid: 900010000109, token: "fixture", title: "Retained quality fixture", pages: 1)
+        let directory = DownloadManager.shared.galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 96)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 96))
+        }
+        try? EhDatabase.shared.deleteDownload(gid: gallery.gid)
+        try? SpiderInfoFile.write(.init(gid: gallery.gid, token: gallery.token, pages: gallery.pages), to: directory)
+        try? image.pngData()?.write(to: directory.appendingPathComponent("00000001.png"), options: .atomic)
+        try? EhDatabase.shared.insertHistory(.init(gid: gallery.gid, token: gallery.token,
+                                                   title: gallery.bestTitle, pages: gallery.pages, date: Date()))
+        GalleryCache.shared.putDetail(.init(info: gallery))
     }
 
     static func previewFixtureURL(_ index: Int) -> URL {

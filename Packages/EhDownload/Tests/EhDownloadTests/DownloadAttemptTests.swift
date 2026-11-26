@@ -205,7 +205,10 @@ import EhSpider
             activation.isActive
         }, makeTransfer: { _, _, _ in factory.take() })
         await manager.setListener(listener)
-        await manager.startDownload(gallery: gallery, label: "Existing label")
+        try store.insertDownload(DownloadTaskPersistence.record(
+            for: .init(gallery: gallery, label: "Existing label", state: DownloadManager.stateNone)
+        ))
+        #expect(await manager.startDownload(gallery: gallery) == .resumed)
         await old.waitUntilStarted()
 
         if order != .foregroundAfterExpiration {
@@ -344,7 +347,10 @@ import EhSpider
         let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in transfer })
         let listener = RecordingListener()
         await manager.setListener(listener)
-        await manager.startDownload(gallery: gallery)
+        try store.insertDownload(DownloadTaskPersistence.record(
+            for: .init(gallery: gallery, state: DownloadManager.stateNone)
+        ))
+        #expect(await manager.startDownload(gallery: gallery) == .resumed)
         await transfer.waitUntilStarted()
         #expect(await manager.getAllTasks().first?.downloadedPages == 1)
         await transfer.emitPageLoaded(0)
@@ -354,6 +360,106 @@ import EhSpider
         #expect(await manager.getAllTasks().first?.downloadedPages == 2)
         await transfer.allowReturn()
         await listener.waitUntilFinished()
+    }
+
+    @Test(arguments: [1, 3])
+    func addingOriginalAfterRecordOnlyDeletionMustNotCountRetainedSizedImage(pageCount: Int) async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(storageURL: root.appendingPathComponent("queue.sqlite"))
+        var gallery = GalleryInfo(gid: 104, token: "neutral", title: "Retained download fixture", pages: pageCount)
+        let oldState = pageCount == 1 ? DownloadManager.stateFinish : DownloadManager.stateNone
+        let old = DownloadTask(gallery: gallery, state: oldState, quality: .x780)
+        try store.insertDownload(DownloadTaskPersistence.record(for: old))
+        let directory = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: gallery.gid, title: gallery.bestTitle
+        ))
+        #expect(try DownloadFolderQuality.prepare(directory, quality: .x780))
+        let oldImage = directory.appendingPathComponent("00000001.jpg")
+        let oldBytes = Data([0xFF, 0xD8, 0x10, 0xFF, 0xD9])
+        try oldBytes.write(to: oldImage)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in
+            Issue.record("Conflicting retained pages must not reach the transfer.")
+            return HeldTransfer(gid: 104)
+        })
+
+        await manager.deleteDownload(gid: gallery.gid, deleteFiles: false)
+        #expect(await manager.startDownload(gallery: gallery, quality: .original) == .retainedFiles)
+        gallery.pages = 0
+        #expect(await manager.startDownload(gallery: gallery, quality: .original) == .retainedFiles)
+        #expect(try Data(contentsOf: oldImage) == oldBytes)
+        #expect(try store.getDownload(gid: gallery.gid) == nil)
+        #expect(!(await manager.saveWhileReading(gallery: gallery, pageIndex: 1, data: oldBytes, extension: ".jpg")))
+
+        let info = SpiderInfo(gid: gallery.gid, token: gallery.token, pages: pageCount)
+        try SpiderInfoFile.write(info, to: directory)
+        #expect(try await manager.restoreRetainedDownload(info, from: directory))
+        #expect(await manager.getAllTasks().first?.quality == .x780)
+        #expect(await manager.getAllTasks().first?.downloadedPages == 1)
+        #expect(try store.getDownload(gid: gallery.gid)?.state == oldState)
+    }
+
+    @Test(arguments: [false, true])
+    func newTaskReusesOnlyMatchingProvenPolicy(marked: Bool) async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(storageURL: root.appendingPathComponent("queue.sqlite"))
+        let gallery = fixture(105)
+        let dir = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: gallery.gid, title: gallery.bestTitle
+        ))
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if marked { #expect(try DownloadFolderQuality.prepare(dir, quality: .x780)) }
+        let page = dir.appendingPathComponent("00000001.jpg")
+        let data = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try data.write(to: page)
+        let transfer = HeldTransfer(gid: gallery.gid)
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, selected in
+            #expect(selected == .x780)
+            return transfer
+        })
+        if marked {
+            try #require(await manager.startDownload(gallery: gallery, quality: .x780) == .enqueued)
+            await transfer.waitUntilStarted()
+            #expect(await manager.getAllTasks().first?.downloadedPages == 1)
+            await manager.pauseDownload(gid: gallery.gid)
+            await transfer.allowReturn()
+        } else {
+            #expect(await manager.startDownload(gallery: gallery, quality: .x780) == .retainedFiles)
+            let info = SpiderInfo(gid: gallery.gid, token: gallery.token, pages: gallery.pages)
+            try SpiderInfoFile.write(info, to: dir)
+            #expect(try await manager.restoreRetainedDownload(info, from: dir))
+            #expect(await manager.getAllTasks().first?.quality == nil)
+            #expect(await manager.getAllTasks().first?.downloadedPages == 1)
+        }
+        #expect(try Data(contentsOf: page) == data)
+    }
+
+    @Test func replacementAfterConfirmedDiskDeletionUsesNewPolicyOnlyAfterDrain() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = fixture(106)
+        let dir = root.appendingPathComponent(DownloadManager.galleryDirectoryName(
+            gid: gallery.gid, title: gallery.bestTitle
+        ))
+        let old = HeldTransfer(gid: gallery.gid, lateWriteDirectory: dir)
+        let new = HeldTransfer(gid: gallery.gid)
+        let factory = TransferSequence([old, new])
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in factory.take() })
+        try #require(await manager.startDownload(gallery: gallery, quality: .x780) == .enqueued)
+        await old.waitUntilStarted()
+        await manager.deleteDownload(gid: gallery.gid, deleteFiles: true)
+        try #require(await manager.startDownload(gallery: gallery, quality: .original) == .enqueued)
+        #expect(await !new.hasStarted)
+        await old.allowReturn()
+        await new.waitUntilStarted()
+        #expect(await old.didWriteLateFile)
+        #expect(await manager.getAllTasks().first?.downloadedPages == 0)
+        #expect(DownloadFolderQuality.recorded(in: dir) == .original)
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("00000001.jpg").path))
+        await manager.pauseDownload(gid: gallery.gid)
+        await new.allowReturn()
     }
 
     @Test func qualityIsSubmittedToTransferAndRetainedForExistingTasks() async throws {

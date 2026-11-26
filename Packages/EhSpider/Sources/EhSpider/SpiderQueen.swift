@@ -69,12 +69,13 @@ public actor SpiderQueen {
     // MARK: - 生命周期
 
     public init(galleryInfo: GalleryInfo, spiderInfo: SpiderInfo, mode: Mode = .read,
-                downloadQuality: DownloadQuality? = nil) {
+                downloadQuality: DownloadQuality? = nil, downloadDirectory: URL? = nil) {
         let inactivity = TimeInterval(max(10, min(120, AppSettings.shared.downloadTimeout)))
         let configuration = Self.sessionConfiguration(inactivity: inactivity,
                                                       proxy: AppSettings.shared.appliedProxy, downloadQuality: downloadQuality)
         let session = URLSession(configuration: configuration)
-        let den = SpiderDen(galleryInfo: galleryInfo, mode: mode == .download ? .download : .read)
+        let den = SpiderDen(galleryID: galleryInfo.gid, mode: mode == .download ? .download : .read,
+                            downloadDirectory: downloadDirectory ?? SpiderDen.getGalleryDownloadDir(galleryInfo: galleryInfo))
         self.init(galleryInfo: galleryInfo, spiderInfo: spiderInfo, mode: mode, spiderDen: den,
                   imageRequestTimeout: inactivity, downloadQuality: downloadQuality) { request in try await session.data(for: request) }
     }

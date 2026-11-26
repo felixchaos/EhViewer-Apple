@@ -65,12 +65,51 @@ final class DownloadNetworkPromptUITests: XCTestCase {
         cancelSetup(in: app, metered: false)
     }
 
-    @MainActor private func launchHistory(metered: Bool) -> XCUIApplication {
+    @MainActor func testRetainedFilesBlockNewQualityAndCanBeRestoredFromSettings() {
+        continueAfterFailure = false
+        let app = launchHistory(metered: false, retainedFiles: true)
+        let history = app.staticTexts["Retained quality fixture"].firstMatch
+        XCTAssertTrue(history.waitForExistence(timeout: 8))
+        openHistoryDownload(in: app, history: history)
+        let choice = app.buttons["download-quality-original"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 6))
+        choice.tap()
+        XCTAssertTrue(choice.isSelected)
+        app.buttons["download-setup-submit"].tap()
+        XCTAssertTrue(app.staticTexts["本地图片已保留。可在下载设置中恢复原任务。"].waitForExistence(timeout: 3))
+
+        app.buttons["我的"].firstMatch.tap()
+        let rows = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex
+        guard let settingsRow = rows.first(where: { $0.isHittable && $0.frame.midY < app.frame.maxY * 0.83 }) else {
+            XCTFail("未找到下载设置入口")
+            return
+        }
+        settingsRow.tap()
+        let entry = app.buttons["download-default-quality-entry"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 6))
+        let restore = app.buttons["恢复下载项目"]
+        for _ in 0..<4 where !restore.isHittable { app.swipeUp() }
+        XCTAssertTrue(restore.isHittable)
+        restore.tap()
+        let result = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "成功恢复")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 6))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        let downloadTabs = app.buttons.matching(NSPredicate(format: "label == %@", "下载")).allElementsBoundByIndex
+        guard let tab = downloadTabs.last(where: { $0.isHittable && $0.frame.midY > app.frame.maxY * 0.83 }) else {
+            XCTFail("未找到下载底栏")
+            return
+        }
+        tab.tap()
+        XCTAssertTrue(app.staticTexts["Retained quality fixture"].firstMatch.waitForExistence(timeout: 8))
+    }
+
+    @MainActor private func launchHistory(metered: Bool, retainedFiles: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         app.launchEnvironment["EH_FIXTURE_DOWNLOAD_NETWORK_CONFIRMATION"] = metered ? "1" : "0"
         app.launchEnvironment["EH_FIXTURE_HISTORY_TAG"] = "1"
         app.launchEnvironment["EH_FIXTURE_LAUNCH_PAGE"] = "5"
+        if retainedFiles { app.launchEnvironment["EH_FIXTURE_RETAINED_DOWNLOAD"] = "1" }
         app.launch()
         return app
     }

@@ -60,7 +60,7 @@ public actor DownloadManager {
     private let database: EhDatabase
     private nonisolated let directoryOverride: URL?
     private let isApplicationActive: @MainActor @Sendable () -> Bool
-    private let makeTransfer: @Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer
+    private let makeTransfer: (@Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer)?
 
     /// 下载监听器（用于通知集成）
     public weak var listener: DownloadListener?
@@ -94,9 +94,7 @@ public actor DownloadManager {
             false
             #endif
         },
-        makeTransfer: @escaping @Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer = {
-            SpiderQueen(galleryInfo: $0, spiderInfo: $1, mode: .download, downloadQuality: $2)
-        }
+        makeTransfer: (@Sendable (GalleryInfo, SpiderInfo, DownloadQuality?) -> any DownloadTransfer)? = nil
     ) {
         self.database = database
         self.directoryOverride = directory
@@ -213,10 +211,33 @@ public actor DownloadManager {
         return true
     }
 
+    /// Re-register kept files without assigning an unverified download policy.
+    public func restoreRetainedDownload(_ info: SpiderInfo, from directory: URL) throws -> Bool {
+        guard !database.isDegraded else { throw OfflineGalleryImportError.unavailable }
+        let parent = directory.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+        let prefix = "\(info.gid)-"
+        guard parent.path == finishedDeletionRoot.path, info.gid > 0, !info.token.isEmpty, info.pages > 0,
+              directory.lastPathComponent.hasPrefix(prefix),
+              runner?.attempt.gid != info.gid,
+              try database.getDownload(gid: info.gid) == nil,
+              !downloadQueue.contains(where: { $0.gallery.gid == info.gid }) else { return false }
+        let title = String(directory.lastPathComponent.dropFirst(prefix.count))
+        guard directory.lastPathComponent == Self.galleryDirectoryName(gid: info.gid, title: title)
+        else { return false }
+        let gallery = GalleryInfo(gid: info.gid, token: info.token, title: title, pages: info.pages)
+        let pages = SpiderInfoFile.getDownloadedPages(in: directory, totalPages: info.pages).count
+        var task = DownloadTask(gallery: gallery, state: pages == info.pages ? Self.stateFinish : Self.stateNone,
+                                quality: DownloadFolderQuality.recorded(in: directory))
+        task.downloadedPages = pages
+        try database.insertDownload(DownloadTaskPersistence.record(for: task))
+        downloadQueue.insert(task, at: 0)
+        return true
+    }
+
     public enum StartOutcome: Equatable, Sendable {
         case enqueued, resumed
         case alreadyWaiting, alreadyDownloading, alreadyFinished
-        case offlineImport, unavailable
+        case offlineImport, retainedFiles, unavailable
     }
 
     /// Classify and apply the request under one actor turn. An existing
@@ -240,8 +261,18 @@ public actor DownloadManager {
             }
         }
 
-        let task = DownloadTask(gallery: gallery, label: label, quality: quality ?? AppSettings.shared.defaultDownloadQuality)
+        let selected = quality ?? AppSettings.shared.defaultDownloadQuality
+        let directory = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        let waitingForDeletion = pendingFileDeletion?.gid == gallery.gid
+        let task = DownloadTask(gallery: gallery, label: label, quality: selected)
         do {
+            if !waitingForDeletion {
+                // A retired transfer can still finish writing. Use only the
+                // same proven policy until that runner has drained.
+                if runner?.attempt.gid == gallery.gid,
+                   DownloadFolderQuality.recorded(in: directory) != selected { return .retainedFiles }
+                guard try DownloadFolderQuality.canUse(directory, quality: selected) else { return .retainedFiles }
+            }
             try database.insertDownload(DownloadTaskPersistence.record(for: task))
         } catch {
             return .unavailable
@@ -551,6 +582,19 @@ public actor DownloadManager {
         await listener?.onDownloadStart(gid: gallery.gid, title: gallery.bestTitle)
         guard activeAttempt == attempt else { return }
 
+        // Recheck after any deferred deletion, and before the spider can
+        // credit old files. A failed guard never touches numbered pages.
+        guard (try? DownloadFolderQuality.prepare(dir, quality: quality)) == true else {
+            guard let failedIndex = downloadQueue.firstIndex(where: { $0.gallery.gid == gid }) else { return }
+            downloadQueue[failedIndex].state = Self.stateFailed
+            downloadQueue[failedIndex].downloadedPages = 0
+            try? database.updateDownloadState(gid: gid, state: Self.stateFailed)
+            let stillPending = downloadQueue.contains { $0.state == Self.stateWait }
+            await listener?.onDownloadFinish(gid: gid, title: gallery.bestTitle,
+                                             success: false, isBatchFinished: !stillPending)
+            return
+        }
+
         // 尝试从 .ehviewer 文件读取已有的 SpiderInfo
         var spiderInfo: SpiderInfo
         if let existing = SpiderInfoFile.read(from: dir) {
@@ -567,7 +611,9 @@ public actor DownloadManager {
         }
 
         // 创建 SpiderQueen
-        let transfer = makeTransfer(gallery, spiderInfo, quality)
+        let transfer = makeTransfer?(gallery, spiderInfo, quality)
+            ?? SpiderQueen(galleryInfo: gallery, spiderInfo: spiderInfo, mode: .download,
+                           downloadQuality: quality, downloadDirectory: dir)
 
         // 统计已有的下载页数作为初始值
         let initialDownloaded = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages)
@@ -723,6 +769,8 @@ public actor DownloadManager {
         guard !downloadQueue.contains(where: { $0.gallery.gid == gallery.gid && $0.quality != nil }) else { return false }
 
         let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        // The record may have been deleted while keeping this folder.
+        guard !DownloadFolderQuality.containsMarker(in: dir) else { return false }
         // 已经有这一页就不重复写 (可能是之前下载过的)
         if SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: pageIndex) != nil { return false }
 
