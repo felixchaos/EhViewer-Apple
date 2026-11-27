@@ -84,6 +84,23 @@ final class SettingsControlsRegressionUITests: XCTestCase {
     @MainActor func testGalleryLayoutPickerChangesActualBrowseGeometry() {
         let app = launch(localReader: true, layoutFixture: true)
 
+        func activeElement(_ query: XCUIElementQuery, description: String, timeout: TimeInterval = 7) -> XCUIElement {
+            let active = NSPredicate { _, _ in query.allElementsBoundByIndex.contains(where: \.isHittable) }
+            let observed = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: active, object: nil)], timeout: timeout)
+            if observed != .completed {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = description + " hierarchy"
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+                let screenshot = XCTAttachment(screenshot: app.screenshot())
+                screenshot.name = description + " screenshot"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
+            }
+            XCTAssertEqual(observed, .completed, description)
+            return query.allElementsBoundByIndex.first(where: \.isHittable) ?? query.firstMatch
+        }
+
         func setLayout(_ title: String) {
             open("列表与缩略图", in: app)
             let layout = picker("gallery-list-mode", in: app)
@@ -92,16 +109,17 @@ final class SettingsControlsRegressionUITests: XCTestCase {
             choose(title, in: app)
             XCTAssertTrue(reads(layout, as: title))
             back(in: app)
-            let home = app.buttons.matching(NSPredicate(format: "label == %@", "首页"))
-                .allElementsBoundByIndex.last { $0.isHittable }
-            XCTAssertNotNil(home)
-            home?.tap()
+            let bar = app.descendants(matching: .any)["workspace-floating-tabs"].firstMatch
+            XCTAssertTrue(bar.waitForExistence(timeout: 6))
+            let home = activeElement(bar.buttons.matching(NSPredicate(format: "label == %@", "首页")),
+                                     description: "Floating Home tab")
+            home.tap()
+            XCTAssertTrue(home.isSelected)
         }
 
         func rowSpacing() -> CGFloat {
-            let second = app.staticTexts["Second layout fixture"].firstMatch
-            XCTAssertTrue(second.waitForExistence(timeout: 8))
-            XCTAssertTrue(second.isHittable)
+            let second = activeElement(app.staticTexts.matching(NSPredicate(format: "label == %@", "Second layout fixture")),
+                                       description: "Second visible gallery row")
             let secondY = second.frame.midY
             // The resume card can carry the same title; use the list title
             // directly above the next fixture rather than the first AX match.
@@ -122,10 +140,10 @@ final class SettingsControlsRegressionUITests: XCTestCase {
 
         app.buttons["我的"].firstMatch.tap()
         setLayout("网格")
-        let firstCard = app.descendants(matching: .any)["gallery-grid-900010000001"].firstMatch
-        let secondCard = app.descendants(matching: .any)["gallery-grid-900010000145"].firstMatch
-        XCTAssertTrue(firstCard.waitForExistence(timeout: 8))
-        XCTAssertTrue(secondCard.waitForExistence(timeout: 8))
+        let firstCard = activeElement(app.descendants(matching: .any).matching(identifier: "gallery-grid-900010000001"),
+                                      description: "First grid card")
+        let secondCard = activeElement(app.descendants(matching: .any).matching(identifier: "gallery-grid-900010000145"),
+                                       description: "Second grid card")
         XCTAssertEqual(firstCard.frame.midY, secondCard.frame.midY, accuracy: 6)
         XCTAssertLessThan(firstCard.frame.maxX, secondCard.frame.minX)
         let originalGridY = firstCard.frame.midY
