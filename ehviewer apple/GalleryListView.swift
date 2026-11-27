@@ -831,7 +831,7 @@ struct GalleryListView: View {
         GalleryRow(gallery: gallery, showJpnTitle: AppSettings.shared.showJpnTitle,
                    fixThumbUrl: AppSettings.shared.fixThumbUrl, presentation: .grid,
                    onRequestRead: onRequestDirectRead, onRequestDownload: requestDownload,
-                   onRequestFavorite: toggleFavorite)
+                   onRequestFavorite: toggleFavorite, onTagTap: searchTag)
     }
 
     // 嵌入模式内容（无导航包装器，用于三栏布局的 content 列）
@@ -1858,6 +1858,17 @@ struct GalleryRow: View {
                 Label("直接阅读", systemImage: "book")
             }
             .accessibilityIdentifier("gallery-row-read-directly")
+        }
+
+        if presentation == .grid, let onTagTap,
+           let tags = gallery.simpleTags, !tags.isEmpty {
+            Menu {
+                ForEach(Array(tags.enumerated()), id: \.offset) { entry in
+                    Button(EhGalleryRow.tagLabel(entry.element)) { onTagTap(entry.element) }
+                }
+            } label: {
+                Label("标签", systemImage: "tag")
+            }
         }
 
         // 下载
