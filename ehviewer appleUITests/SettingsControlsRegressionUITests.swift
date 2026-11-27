@@ -168,7 +168,9 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         } else {
             back(in: app)
         }
-        XCTAssertTrue(secondCard.waitForExistence(timeout: 6))
+        XCTAssertFalse(detailRead.isHittable, "One Back must close the only gallery detail.")
+        _ = activeElement(app.descendants(matching: .any).matching(identifier: "gallery-grid-900010000145"),
+                          description: "Second grid card after one Back")
         confirmGridAnchor()
 
         // A card retains the item's existing long-press actions.

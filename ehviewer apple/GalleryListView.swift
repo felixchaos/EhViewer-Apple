@@ -43,6 +43,7 @@ struct GalleryListView: View {
     @State private var standalonePreset: GalleryBrowseSearch?
     @State private var selectedGallery: GalleryInfo?
     @State private var internalSelectedOrigin: WorkspaceGalleryDestination?
+    @State private var selectedGridDestination: WorkspaceGalleryDestination?
     /// 搜索框聚焦态。用 @State 而非 @FocusState：焦点实际由
     /// UISearchTextField 持有，这里只是把它的状态镜像出来供布局使用。
     @State private var isSearchFocused: Bool = false
@@ -687,7 +688,9 @@ struct GalleryListView: View {
 
             if presentation == .grid && !isBatchSelecting {
                 galleryGridRows { gallery in
-                    NavigationLink(value: galleryDestination(gallery)) {
+                    // Two value-based links in one native row can both push.
+                    // Route explicitly from this card's own hit region instead.
+                    Button { selectedGridDestination = galleryDestination(gallery) } label: {
                         makeGridCard(gallery)
                     }
                     .buttonStyle(.plain)
@@ -777,6 +780,7 @@ struct GalleryListView: View {
             }
         }
         .listStyle(.plain)
+        .navigationDestination(item: $selectedGridDestination) { $0.view() }
         #if os(iOS)
         .ignoresSafeArea(.container, edges: hidesCompactBrowseHeader ? [.top, .bottom] : [])
         .ehTabBarAutoHide(enabled: !isBatchSelecting, fillsWindow: browseSource != nil)
