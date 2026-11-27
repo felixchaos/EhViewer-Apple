@@ -7,6 +7,58 @@ import EhSpider
 @testable import EhDownload
 
 @Suite(.timeLimit(.minutes(1))) struct DownloadAttemptTests {
+    enum BetweenTransfers: CaseIterable, Sendable {
+        case pause, remove, continueBatch
+    }
+
+    @Test(arguments: BetweenTransfers.allCases)
+    func notificationBatchOwnershipTracksQueueIdle(_ decision: BetweenTransfers) async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let a = fixture(71), b = fixture(72), c = fixture(73)
+        let first = HeldTransfer(gid: a.gid)
+        let second = HeldTransfer(gid: b.gid)
+        let third = HeldTransfer(gid: c.gid)
+        let factory = TransferSequence([first, second, third])
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, _ in factory.take() })
+        let listener = RecordingListener()
+        await manager.setListener(listener)
+
+        #expect(await manager.startDownload(gallery: a) == .enqueued)
+        await first.waitUntilStarted()
+        #expect(await manager.startDownload(gallery: b) == .enqueued)
+        await first.allowReturn()
+        await second.waitUntilStarted()
+        let firstNotice = try #require(await listener.completions.first)
+        #expect(firstNotice.gid == a.gid && !firstNotice.isFinal)
+
+        switch decision {
+        case .pause:
+            await manager.pauseDownload(gid: b.gid)
+            #expect(await manager.getTaskState(gid: b.gid) == DownloadManager.stateNone)
+        case .remove:
+            await manager.deleteDownload(gid: b.gid)
+            #expect(try store.getDownload(gid: b.gid) == nil)
+        case .continueBatch:
+            break
+        }
+        // Queue C while the B runner is still held. A retired runner can drain
+        // after C is enqueued but must not carry A into C's batch.
+        #expect(await manager.startDownload(gallery: c) == .enqueued)
+        await second.allowReturn()
+        await third.waitUntilStarted()
+        await third.allowReturn()
+        let continuous = decision == .continueBatch
+        await listener.waitUntilFinished(count: continuous ? 3 : 2)
+
+        let notices = await listener.completions
+        #expect(notices.map(\.gid) == (continuous ? [a.gid, b.gid, c.gid] : [a.gid, c.gid]))
+        #expect(notices.last?.isFinal == true)
+        #expect((notices.last?.batchID == firstNotice.batchID) == continuous)
+        if continuous { #expect(notices.dropLast().allSatisfy { !$0.isFinal && $0.batchID == firstNotice.batchID }) }
+    }
+
     @Test func batchCommandsPreserveIneligibleStatesAndCompletedFiles() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -630,21 +682,24 @@ private actor RecordingListener: DownloadListener {
     private(set) var finished: [Int64] = []
     private(set) var diskFullCount = 0
     private(set) var limitCount = 0
-    private var finishWaiter: CheckedContinuation<Void, Never>?
+    private(set) var completions: [(gid: Int64, batchID: UUID, isFinal: Bool)] = []
+    private var finishWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     func onDownloadStart(gid: Int64, title: String) {}
     func onDownloadProgress(gid: Int64, title: String, downloaded: Int, total: Int, speed: Int64) {
         progress.append(gid)
     }
-    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) {
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, batchID: UUID, isBatchFinished: Bool) {
         finished.append(gid)
-        finishWaiter?.resume()
-        finishWaiter = nil
+        completions.append((gid, batchID, isBatchFinished))
+        let ready = finishWaiters.filter { $0.count <= finished.count }
+        finishWaiters.removeAll { $0.count <= finished.count }
+        for waiter in ready { waiter.continuation.resume() }
     }
     func on509Error() { limitCount += 1 }
     func onDiskFull() { diskFullCount += 1 }
 
-    func waitUntilFinished() async {
-        if finished.isEmpty { await withCheckedContinuation { finishWaiter = $0 } }
+    func waitUntilFinished(count: Int = 1) async {
+        if finished.count < count { await withCheckedContinuation { finishWaiters.append((count, $0)) } }
     }
 }

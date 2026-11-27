@@ -31,6 +31,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
 
     /// 已完成的下载记录（对应 Android sItemStateArray）
     private var completedItems: [(gid: Int64, title: String, success: Bool)] = []
+    private var completionBatchID: UUID?
     private var finishedCount = 0
     private var failedCount = 0
 
@@ -40,12 +41,23 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
     /// 通知节流（对应 Android DELAY = 1s）
     private var lastNotificationTime: Date = .distantPast
     private let notificationDelay: TimeInterval = 1.0
+    private let sendOverride: ((UNNotificationRequest) -> Void)?
+    private let removeOverride: ((String) -> Void)?
 
     // MARK: - 初始化
 
     private override init() {
+        sendOverride = nil
+        removeOverride = nil
         super.init()
         setupNotificationCategories()
+    }
+
+    /// Internal notification sink for offline verification without a device notification center.
+    init(send: @escaping (UNNotificationRequest) -> Void, remove: @escaping (String) -> Void) {
+        sendOverride = send
+        removeOverride = remove
+        super.init()
     }
 
     // MARK: - 设置通知分类和操作
@@ -163,10 +175,17 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
 
     // MARK: - 下载完成通知（对应 Android onFinish）
 
-    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool = true) {
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, batchID: UUID, isBatchFinished: Bool = true) {
         // 移除下载中通知
         removeNotification(id: downloadingNotificationId)
         currentDownloadInfo = nil
+
+        // Only a queue-provided batch may carry totals forward. Resetting the
+        // accumulator must not dismiss the last notification from the prior batch.
+        if completionBatchID != batchID {
+            resetCompletionSummary()
+            completionBatchID = batchID
+        }
 
         // 记录完成状态
         completedItems.append((gid: gid, title: title, success: success))
@@ -212,13 +231,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
 
         sendNotificationImmediate(id: downloadedNotificationId, content: content)
 
-        // 这一批下完了就把计数清零。不清的话下次单独下一本，
-        // 通知会把历史上所有完成过的都算进去。
-        if isBatchFinished {
-            completedItems.removeAll()
-            finishedCount = 0
-            failedCount = 0
-        }
+        if isBatchFinished { resetCompletionSummary() }
     }
 
     // MARK: - 509错误通知（对应 Android onGet509）
@@ -243,10 +256,15 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
     // MARK: - 清除完成计数（对应 Android clear）
 
     func clearCompletedItems() {
+        resetCompletionSummary()
+        removeNotification(id: downloadedNotificationId)
+    }
+
+    private func resetCompletionSummary() {
+        completionBatchID = nil
         completedItems.removeAll()
         finishedCount = 0
         failedCount = 0
-        removeNotification(id: downloadedNotificationId)
     }
 
     // MARK: - 内部方法
@@ -268,6 +286,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
             trigger: nil // 立即发送
         )
 
+        if let sendOverride { sendOverride(request); return }
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 debugLog("[DownloadNotification] Failed to send: \(error)")
@@ -285,6 +304,7 @@ final class DownloadNotificationService: NSObject, @unchecked Sendable {
     }
 
     private func removeNotification(id: String) {
+        if let removeOverride { removeOverride(id); return }
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }

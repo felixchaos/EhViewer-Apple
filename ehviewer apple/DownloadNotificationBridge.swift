@@ -65,7 +65,7 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
         }
     }
 
-    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) async {
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, batchID: UUID, isBatchFinished: Bool) async {
         await MainActor.run {
             #if os(iOS)
             // End only the activity owned by this download, regardless of the admission preference.
@@ -73,7 +73,7 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
             #endif
             // 完成通知仍使用传统通知 (在通知中心保留记录)
             DownloadNotificationService.shared.onDownloadFinish(
-                gid: gid, title: title, success: success, isBatchFinished: isBatchFinished)
+                gid: gid, title: title, success: success, batchID: batchID, isBatchFinished: isBatchFinished)
             NotificationCenter.default.post(name: .galleryDownloadChanged, object: nil,
                                             userInfo: ["gid": gid, "downloading": true])
         }

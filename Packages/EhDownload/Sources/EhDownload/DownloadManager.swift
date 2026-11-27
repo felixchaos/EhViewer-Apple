@@ -35,10 +35,12 @@ public actor DownloadManager {
 
     fileprivate struct Attempt: Equatable, Sendable {
         let gid: Int64
+        let batchID: UUID
         private let identity: UUID
 
-        init(gid: Int64) {
+        init(gid: Int64, batchID: UUID) {
             self.gid = gid
+            self.batchID = batchID
             self.identity = UUID()
         }
     }
@@ -51,6 +53,7 @@ public actor DownloadManager {
     }
 
     private var activeAttempt: Attempt?
+    private var notificationBatchID: UUID?
     // A retired attempt no longer accepts updates, but keeps the transfer
     // slot until its structured children finish touching the download files.
     private var runner: (attempt: Attempt, task: Task<Void, Never>)?
@@ -316,6 +319,7 @@ public actor DownloadManager {
         downloadQueue[index].state = Self.stateNone
         downloadQueue[index].spider = nil
         try? database.updateDownloadState(gid: gid, state: Self.stateNone)
+        _ = closeNotificationBatchIfIdle()
         if wasActive { processQueue() }
     }
 
@@ -333,6 +337,7 @@ public actor DownloadManager {
                 try? database.updateDownloadState(gid: downloadQueue[i].gallery.gid, state: Self.stateNone)
             }
         }
+        notificationBatchID = nil
         print("[DownloadManager] ⚠️ 所有下载已暂停（磁盘空间不足）")
     }
 
@@ -390,6 +395,7 @@ public actor DownloadManager {
             }
         }
 
+        _ = closeNotificationBatchIfIdle()
         processQueue()
     }
 
@@ -526,10 +532,23 @@ public actor DownloadManager {
         runner?.task.cancel()
     }
 
+    private static func isRunnable(_ task: DownloadTask) -> Bool {
+        (task.state == Self.stateWait || task.state == Self.stateDownload)
+            && !OfflineGallery.isImported(gid: task.gallery.gid, token: task.gallery.token)
+    }
+
+    /// An idle boundary belongs to the queue, not to a deferred notification callback.
+    /// A later attempt carries a new batch ID even if the old runner is still draining.
+    private func closeNotificationBatchIfIdle() -> Bool {
+        guard !downloadQueue.contains(where: Self.isRunnable) else { return false }
+        notificationBatchID = nil
+        return true
+    }
+
     private func processQueue(foregroundOnly: Bool = false) {
         guard activeAttempt == nil else { return }
         guard let index = downloadQueue.firstIndex(where: {
-            $0.state == Self.stateWait && !OfflineGallery.isImported(gid: $0.gallery.gid, token: $0.gallery.token)
+            $0.state == Self.stateWait && Self.isRunnable($0)
         }) else { return }
         guard runner == nil else {
             if foregroundOnly {
@@ -540,7 +559,9 @@ public actor DownloadManager {
             return
         }
 
-        let attempt = Attempt(gid: downloadQueue[index].gallery.gid)
+        let batchID = notificationBatchID ?? UUID()
+        notificationBatchID = batchID
+        let attempt = Attempt(gid: downloadQueue[index].gallery.gid, batchID: batchID)
         downloadQueue[index].state = Self.stateDownload
         activeAttempt = attempt
         let task = Task {
@@ -618,9 +639,9 @@ public actor DownloadManager {
             downloadQueue[failedIndex].state = Self.stateFailed
             downloadQueue[failedIndex].downloadedPages = 0
             try? database.updateDownloadState(gid: gid, state: Self.stateFailed)
-            let stillPending = downloadQueue.contains { $0.state == Self.stateWait }
+            let batchFinished = closeNotificationBatchIfIdle()
             await listener?.onDownloadFinish(gid: gid, title: gallery.bestTitle,
-                                             success: false, isBatchFinished: !stillPending)
+                                             success: false, batchID: attempt.batchID, isBatchFinished: batchFinished)
             return
         }
 
@@ -687,19 +708,9 @@ public actor DownloadManager {
         downloadQueue[finalIndex].spider = nil  // 释放 spider 引用
         try? database.updateDownloadState(gid: gallery.gid, state: downloadQueue[finalIndex].state)
 
-        // 通知监听器下载完成。
-        //
-        // isBatchFinished 表示队列里已经没有等待/进行中的任务了。
-        // Android 是靠 DownloadService 在空闲时 stopSelf、销毁时 clear() 计数
-        // 来实现「一批算一批」；我们的通知服务是常驻单例，没有这个生命周期，
-        // 于是计数从 App 启动起一直累加——下完第三本，通知写的是
-        //「3 个画廊下载完成」，而不是刚下完的那一本。
-        let stillPending = downloadQueue.contains {
-            $0.gallery.gid != gallery.gid
-                && ($0.state == Self.stateWait || $0.state == Self.stateDownload)
-        }
+        let batchFinished = closeNotificationBatchIfIdle()
         await listener?.onDownloadFinish(gid: gallery.gid, title: gallery.bestTitle,
-                                         success: success, isBatchFinished: !stillPending)
+                                         success: success, batchID: attempt.batchID, isBatchFinished: batchFinished)
     }
 
     fileprivate func reportPageProgress(
@@ -1046,7 +1057,7 @@ public protocol DownloadListener: AnyObject, Sendable {
     func onDownloadProgress(gid: Int64, title: String, downloaded: Int, total: Int, speed: Int64) async
 
     /// 下载完成
-    func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) async
+    func onDownloadFinish(gid: Int64, title: String, success: Bool, batchID: UUID, isBatchFinished: Bool) async
 
     /// 509错误
     func on509Error() async
