@@ -1,6 +1,69 @@
 import XCTest
 
 final class ReaderVolumePagingUITests: XCTestCase {
+    @MainActor func testInactiveMountedReaderDoesNotAutomaticallyTurnOrSavePage() throws {
+        let app = try phaseReader()
+        let first = app.staticTexts["Fixture page 1"]
+        let second = app.staticTexts["Fixture page 2"]
+        let saved = app.staticTexts["Fixture saved"]
+        let initialSaved = saved.value as? String
+        app.buttons["Fixture auto page"].tap()
+        app.buttons["Fixture deactivate"].tap()
+
+        let inverted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"), object: second)
+        inverted.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [inverted], timeout: 6.4), .completed)
+        XCTAssertTrue(first.exists)
+        XCTAssertEqual(saved.value as? String, initialSaved)
+        app.buttons["Fixture activate"].tap()
+        let early = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"), object: second)
+        early.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [early], timeout: 1), .completed,
+                       "An old tick must not advance immediately on activation.")
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        // Toggling the fixture phase refreshes the snapshot from the real progress store.
+        app.buttons["Fixture deactivate"].tap()
+        XCTAssertEqual(saved.value as? String, "1")
+    }
+
+    @MainActor func testInactiveMountedReaderIgnoresVolumePaging() throws {
+        let app = try phaseReader()
+        setPaging(true, in: app)
+        let first = app.staticTexts["Fixture page 1"]
+        let second = app.staticTexts["Fixture page 2"]
+        let down = app.buttons["Fixture volume down"]
+        app.buttons["Fixture queue volume"].tap()
+        app.buttons["Fixture deactivate"].tap()
+        down.tap()
+        XCTAssertTrue(first.exists)
+        XCTAssertFalse(second.exists)
+        app.buttons["Fixture activate"].tap()
+        app.buttons["Fixture deliver queued"].tap()
+        XCTAssertTrue(first.exists, "A callback from an earlier scene session must be ignored.")
+        down.tap()
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        setPaging(false, in: app)
+    }
+
+    @MainActor private func phaseReader() throws -> XCUIApplication {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_VOLUME_PAGING"] == "1")
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
+        app.launchEnvironment["EH_FIXTURE_VOLUME_PAGING"] = "1"
+        app.launchEnvironment["EH_FIXTURE_READER_PHASE"] = "1"
+        app.launch()
+        let row = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        row.tap()
+        let read = app.buttons["gallery-detail-read"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 8))
+        read.tap()
+        XCTAssertTrue(app.staticTexts["Fixture page 1"].waitForExistence(timeout: 8))
+        return app
+    }
+
     @MainActor func testVolumePagingChangesInsideTheSameReader() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["EH_RUN_VOLUME_PAGING"] == "1")
         continueAfterFailure = false
@@ -119,9 +182,20 @@ final class ReaderVolumePagingUITests: XCTestCase {
 
     @MainActor private func waitForOffset(_ element: XCUIElement, until matches: (Int) -> Bool) -> Int? {
         let deadline = Date().addingTimeInterval(5)
+        var stable: (offset: Int, since: Date)?
         repeat {
-            if let offset = (element.value as? String).flatMap(Int.init), matches(offset) { return offset }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            if let offset = (element.value as? String).flatMap(Int.init), matches(offset) {
+                // The same UIKit animated stride can be sampled at different
+                // intermediate offsets. Compare settled endpoints instead.
+                if let prior = stable, prior.offset == offset {
+                    if Date().timeIntervalSince(prior.since) >= 0.32 { return offset }
+                } else {
+                    stable = (offset, Date())
+                }
+            } else {
+                stable = nil
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.18))
         } while Date() < deadline
         return nil
     }

@@ -94,8 +94,12 @@ final class VolumeKeyPageTurner {
 
     #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
     func sendFixtureVolume(_ newVolume: Float) {
-        guard EhOfflineUIFixture.volumePagingFixture, let id = sessionID else { return }
-        handleVolumeChange(newVolume, session: id)
+        fixtureDelivery(newVolume)?()
+    }
+
+    func fixtureDelivery(_ newVolume: Float) -> (() -> Void)? {
+        guard EhOfflineUIFixture.volumePagingFixture, let id = sessionID else { return nil }
+        return { [weak self] in self?.handleVolumeChange(newVolume, session: id) }
     }
     #endif
 

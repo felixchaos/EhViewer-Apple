@@ -14,6 +14,7 @@ import SQLite3
 enum EhOfflineUIFixture {
     static let enabled = ProcessInfo.processInfo.environment["EH_OFFLINE_UI_FIXTURE"] == "1"
     static let volumePagingFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_VOLUME_PAGING"] == "1"
+    static let readerPhaseFixture = volumePagingFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_READER_PHASE"] == "1"
     static let tallVolumeFixture = volumePagingFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_TALL_VOLUME"] == "1"
     static let readerGestureFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_READER_GESTURES"] == "1"
     static let verticalGestureFixture = readerGestureFixture && ProcessInfo.processInfo.environment["EH_FIXTURE_VERTICAL_GESTURES"] == "1"
@@ -240,6 +241,7 @@ enum EhOfflineUIFixture {
         if volumePagingFixture {
             AppSettings.shared.reverseVolumePage = false
         }
+        if readerPhaseFixture { AppSettings.shared.autoPageInterval = 3 }
         UserDefaults.standard.set(true, forKey: "reader_tutorial_shown")
         let progressKey = "reading_progress_\(synthetic.gid)"
         if tallVolumeFixture {

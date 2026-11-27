@@ -43,10 +43,14 @@ struct ImageReaderView: View {
     @State private var failedToOpen = false
     @State private var showOverlay = true
     @State private var showSettings = false
-    #if os(iOS)
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
     @State private var idleTimerReaderID = UUID()
     @State private var isReaderVisible = false
+
+    private var volumePagingEnabled: Bool {
+        isReaderVisible && isReaderSceneActive && AppSettings.shared.volumePage
+    }
 
     private var wantsIdleTimerDisabled: Bool {
         isReaderVisible && scenePhase == .active && AppSettings.shared.keepScreenOn
@@ -77,7 +81,24 @@ struct ImageReaderView: View {
 
     // 自动翻页
     @State private var autoPageEnabled = false
-    @State private var autoPageTask: Task<Void, Never>?
+    private var isReaderSceneActive: Bool {
+        #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
+        if fixtureReaderInactive { return false }
+        #endif
+        return scenePhase == .active
+    }
+
+    private var canAdvancePage: Bool {
+        if vm.isDoublePageEnabled {
+            guard let index = vm.currentSpreadIndex else { return false }
+            return index + 1 < vm.spreads.count
+        }
+        return vm.currentPage < vm.totalPages - 1
+    }
+
+    private var canAutoPage: Bool {
+        autoPageEnabled && isReaderSceneActive && canAdvancePage
+    }
 
     // 时间显示
     @State private var currentTime = Date()
@@ -92,6 +113,8 @@ struct ImageReaderView: View {
     @State private var fixtureScrollMetrics = FixtureScrollMetrics()
     @State private var fixturePinchTrace = ""
     @State private var fixturePinchBegins = 0
+    @State private var fixtureReaderInactive = false
+    @State private var fixtureRetiredVolumeDelivery: (() -> Void)?
     private struct FixtureScrollMetrics: Equatable {
         var x = 0
         var y = 0
@@ -225,7 +248,7 @@ struct ImageReaderView: View {
         .onChange(of: wantsIdleTimerDisabled) { _, _ in
             updateIdleTimerOwnership()
         }
-        .onChange(of: AppSettings.shared.volumePage) { _, _ in
+        .onChange(of: volumePagingEnabled) { _, _ in
             updateVolumePaging()
         }
         .statusBarHidden(AppSettings.shared.readingFullscreen)
@@ -249,6 +272,9 @@ struct ImageReaderView: View {
         }
         .onAppear(perform: setupReader)
         .onDisappear(perform: cleanupReader)
+        .task(id: canAutoPage) {
+            await runAutoPage()
+        }
         .task(id: openAttempt) {
             await vm.openGallery(
                 gid: gid, token: token, pageCount: pages,
@@ -265,6 +291,19 @@ struct ImageReaderView: View {
                     Button("Fixture volume down") { volumePageTurner.sendFixtureVolume(0.4) }
                     Button("Fixture volume up") { volumePageTurner.sendFixtureVolume(0.6) }
                     Text("Fixture page \(vm.currentPage + 1)")
+                    if EhOfflineUIFixture.readerPhaseFixture {
+                        Button(fixtureReaderInactive ? "Fixture activate" : "Fixture deactivate") {
+                            fixtureReaderInactive.toggle()
+                        }
+                        Button("Fixture auto page") { toggleAutoPage() }
+                        Button("Fixture queue volume") { fixtureRetiredVolumeDelivery = volumePageTurner.fixtureDelivery(0.4) }
+                        Button("Fixture deliver queued") {
+                            fixtureRetiredVolumeDelivery?()
+                            fixtureRetiredVolumeDelivery = nil
+                        }
+                        let saved = ReaderProgressStore().savedPage(for: gid).map(String.init) ?? "none"
+                        Text("Fixture saved").accessibilityValue(saved)
+                    }
                     if EhOfflineUIFixture.tallVolumeFixture {
                         Text("Fixture scroll").accessibilityValue(String(fixtureScrollMetrics.y))
                         if ProcessInfo.processInfo.environment["EH_FIXTURE_KEY_COMMANDS"] == "1" {
@@ -508,7 +547,7 @@ struct ImageReaderView: View {
 
     #if os(iOS)
     private func updateVolumePaging() {
-        if isReaderVisible && AppSettings.shared.volumePage {
+        if volumePagingEnabled {
             volumePageTurner.start(
                 onNext: { stepFromPagingKey(forward: true) },
                 onPrevious: { stepFromPagingKey(forward: false) }
@@ -544,7 +583,6 @@ struct ImageReaderView: View {
         vm.discardSpreadComposition()
         #endif
         timeTimer?.invalidate()
-        autoPageTask?.cancel()
         pageChangeTask?.cancel()
         if vm.totalPages > 0 {
             vm.saveReadingProgress(for: gid)
@@ -709,24 +747,20 @@ struct ImageReaderView: View {
 
     private func toggleAutoPage() {
         autoPageEnabled.toggle()
-        if autoPageEnabled {
-            startAutoPage()
-        } else {
-            autoPageTask?.cancel()
-        }
     }
 
-    private func startAutoPage() {
-        autoPageTask?.cancel()
-        autoPageTask = Task {
-            while !Task.isCancelled && autoPageEnabled {
-                try? await Task.sleep(nanoseconds: UInt64(AppSettings.shared.autoPageInterval) * 1_000_000_000)
-                if !Task.isCancelled && autoPageEnabled {
-                    await MainActor.run {
-                        goToNextPage()
-                    }
-                }
+    @MainActor
+    private func runAutoPage() async {
+        while !Task.isCancelled && canAutoPage {
+            do {
+                try await Task.sleep(for: .seconds(AppSettings.shared.autoPageInterval))
+            } catch {
+                return
             }
+            // A scene transition, a toggle change, or a manual move to the
+            // final page can invalidate the tick while it was suspended.
+            guard !Task.isCancelled, canAutoPage else { return }
+            goToNextPage()
         }
     }
 
