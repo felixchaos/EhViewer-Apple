@@ -5,6 +5,21 @@ import os
 @testable import EhSettings
 
 struct InteractivePreferencesTests {
+    @Test func galleryLayoutKeepsThreeVisiblePickerValues() throws {
+        let suite = "EhViewer.GalleryLayout." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.listMode == .list)
+        for (mode, raw) in [(ListMode.list, 0), (.compact, 1), (.grid, 2)] {
+            settings.listMode = mode
+            #expect(defaults.integer(forKey: "list_mode") == raw)
+            #expect(AppSettings(defaults: defaults).listMode == mode)
+        }
+        defaults.set(999, forKey: "list_mode")
+        #expect(settings.listMode == .list)
+    }
+
     @Test func settingsControlWritesNotifyObserversAndPreserveStoredValues() throws {
         let suite = "EhViewer.InteractivePreferences." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))

@@ -81,6 +81,81 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertTrue(reads(readerPosition, as: "居中"))
     }
 
+    @MainActor func testGalleryLayoutPickerChangesActualBrowseGeometry() {
+        let app = launch(localReader: true, layoutFixture: true)
+
+        func setLayout(_ title: String) {
+            open("列表与缩略图", in: app)
+            let layout = picker("gallery-list-mode", in: app)
+            XCTAssertTrue(layout.isHittable)
+            layout.tap()
+            choose(title, in: app)
+            XCTAssertTrue(reads(layout, as: title))
+            back(in: app)
+            let home = app.buttons.matching(NSPredicate(format: "label == %@", "首页"))
+                .allElementsBoundByIndex.last { $0.isHittable }
+            XCTAssertNotNil(home)
+            home?.tap()
+        }
+
+        func rowSpacing() -> CGFloat {
+            let first = app.staticTexts["Synthetic Gallery"].firstMatch
+            let second = app.staticTexts["Second layout fixture"].firstMatch
+            XCTAssertTrue(first.waitForExistence(timeout: 8))
+            XCTAssertTrue(second.waitForExistence(timeout: 8))
+            XCTAssertTrue(first.isHittable)
+            XCTAssertTrue(second.isHittable)
+            XCTAssertEqual(first.frame.minX, second.frame.minX, accuracy: 8)
+            return second.frame.midY - first.frame.midY
+        }
+
+        setLayout("列表")
+        let normalSpacing = rowSpacing()
+        app.buttons["我的"].firstMatch.tap()
+        setLayout("紧凑")
+        XCTAssertLessThan(rowSpacing(), normalSpacing - 15)
+
+        app.buttons["我的"].firstMatch.tap()
+        setLayout("网格")
+        let firstCard = app.descendants(matching: .any)["gallery-grid-900010000001"].firstMatch
+        let secondCard = app.descendants(matching: .any)["gallery-grid-900010000145"].firstMatch
+        XCTAssertTrue(firstCard.waitForExistence(timeout: 8))
+        XCTAssertTrue(secondCard.waitForExistence(timeout: 8))
+        XCTAssertEqual(firstCard.frame.midY, secondCard.frame.midY, accuracy: 6)
+        XCTAssertLessThan(firstCard.frame.maxX, secondCard.frame.minX)
+
+        secondCard.tap()
+        let detailRead = app.buttons["gallery-detail-read"].firstMatch
+        XCTAssertTrue(detailRead.waitForExistence(timeout: 8))
+        let secondTitle = app.staticTexts.matching(NSPredicate(format: "label == %@", "Second layout fixture"))
+            .allElementsBoundByIndex.last { $0.isHittable }
+        XCTAssertNotNil(secondTitle, "The second card must open its own gallery, not the first card.")
+        if app.buttons["gallery-detail-back"].firstMatch.isHittable {
+            app.buttons["gallery-detail-back"].firstMatch.tap()
+        } else {
+            back(in: app)
+        }
+        XCTAssertTrue(secondCard.waitForExistence(timeout: 6))
+
+        // A card retains the item's existing long-press actions.
+        firstCard.press(forDuration: 0.8)
+        let read = app.buttons["gallery-row-read-directly"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 6))
+        read.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        let close = app.buttons["reader-close"].firstMatch
+        if !close.waitForExistence(timeout: 4) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(close.waitForExistence(timeout: 6))
+        close.tap()
+        XCTAssertTrue(firstCard.waitForExistence(timeout: 6))
+        XCTAssertEqual(firstCard.frame.midY, secondCard.frame.midY, accuracy: 6)
+
+        // Keep the shared simulator's settings neutral for other tests.
+        app.buttons["我的"].firstMatch.tap()
+        setLayout("列表")
+    }
+
     @MainActor func testThumbnailSizePickerPersistsAfterReopening() {
         let app = launch()
         open("列表与缩略图", in: app)
@@ -145,11 +220,12 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["跟随系统"].firstMatch.isSelected)
     }
 
-    @MainActor private func launch(localReader: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(localReader: Bool = false, layoutFixture: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
         if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
+        if layoutFixture { app.launchEnvironment["EH_FIXTURE_LIST_PRESENTATION"] = "1" }
         app.launch()
         let profile = app.buttons["我的"].firstMatch
         XCTAssertTrue(profile.waitForExistence(timeout: 8))

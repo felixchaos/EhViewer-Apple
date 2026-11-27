@@ -211,6 +211,7 @@ struct SettingsView: View {
             siteSection
         case .display:
             displaySection
+            listThumbnailSection
         case .favorites:
             favoritesSection
         case .network:
@@ -325,12 +326,6 @@ struct SettingsView: View {
             // 站内公告 (对齐 Android NewsScene)
             NavigationLink("站内公告") {
                 EhNewsView()
-            }
-
-            Picker("列表模式", selection: $vm.listMode) {
-                Text("列表").tag(0)
-                Text("紧凑").tag(1)
-                Text("网格").tag(2)
             }
 
             // 详情页封面大小 (对齐 Android Settings.KEY_DETAIL_SIZE)
@@ -594,6 +589,16 @@ struct SettingsView: View {
     /// 他点「列表与缩略图」就是想调列表，不该先滚过一堆主题与显示开关。
     private var listThumbnailSection: some View {
         Section("列表与缩略图") {
+            Picker("列表模式", selection: Binding(
+                get: { AppSettings.shared.listMode },
+                set: { AppSettings.shared.listMode = $0 }
+            )) {
+                ForEach(ListMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .accessibilityIdentifier("settings-picker-gallery-list-mode")
+
             Picker("缩略图大小", selection: Binding(
                 get: { AppSettings.shared.thumbSize },
                 set: { AppSettings.shared.thumbSize = $0 }
@@ -1674,9 +1679,6 @@ class SettingsViewModel {
             // 通知改由 SettingsView.body 的 .onChange(of: vm.gallerySite) 发送
         }
     }
-    var listMode: Int = 0 {
-        didSet { AppSettings.shared.listMode = ListMode(rawValue: listMode) ?? .list }
-    }
     var showJpnTitle: Bool = false {
         didSet { AppSettings.shared.showJpnTitle = showJpnTitle }
     }
@@ -1850,7 +1852,6 @@ class SettingsViewModel {
         // ⚠️ @Observable 宏会使 didSet 在 init 中也被触发 (属性变为计算属性)
         // 因此 didSet 中不应有副作用操作 (如发通知)，仅写回 AppSettings 是安全的 (幂等)
         gallerySite = AppSettings.shared.gallerySite.rawValue
-        listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
         reloadProxyDraft()
@@ -2192,7 +2193,6 @@ class SettingsViewModel {
     func reloadSettingsAfterBackupImport() {
         // 重新加载 ViewModel 的存储属性
         gallerySite = AppSettings.shared.gallerySite.rawValue
-        listMode = AppSettings.shared.listMode.rawValue
         showJpnTitle = AppSettings.shared.showJpnTitle
         showTagTranslations = AppSettings.shared.showTagTranslations
         reloadProxyDraft()

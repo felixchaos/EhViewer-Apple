@@ -651,6 +651,7 @@ struct GalleryListView: View {
         let showJpn = AppSettings.shared.showJpnTitle
         let fixThumb = AppSettings.shared.fixThumbUrl
         let isBatchSelecting = selectionBindings?.isSelecting.wrappedValue == true
+        let presentation = AppSettings.shared.listMode
         let list = List {
             #if os(iOS)
             if browseSource != nil && !isPushed {
@@ -684,73 +685,84 @@ struct GalleryListView: View {
                 .listRowSeparator(.hidden)
             }
 
-            ForEach(viewModel.galleries, id: \.gid) { gallery in
-                // NavigationLink 在 List 里会自动补一个 disclosure 箭头，设计稿没有它，
-                // 而且每行右侧多出的 20pt 会挤压元信息行。把链接藏成零透明的底层，
-                // 行本身画在它上面——点按仍由链接接收。
-                Group {
-                    if isBatchSelecting, let sel = selectionBindings {
-                        // 多选中：整行点按切换选中，不再进详情
-                        HStack(spacing: 0) {
-                            Image(systemName: sel.selected.wrappedValue.contains(gallery.gid)
-                                  ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(sel.selected.wrappedValue.contains(gallery.gid)
-                                                 ? EhColor.accent : EhColor.tertiaryLabel)
-                                .padding(.leading, EhSpacing.page)
-                            GalleryRow(
-                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
-                                showsContextMenu: false
-                            )
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            Haptics.tap()
-                            if sel.selected.wrappedValue.contains(gallery.gid) {
-                                sel.selected.wrappedValue.remove(gallery.gid)
-                            } else {
-                                sel.selected.wrappedValue.insert(gallery.gid)
+            if presentation == .grid && !isBatchSelecting {
+                galleryGridRows { gallery in
+                    NavigationLink(value: galleryDestination(gallery)) {
+                        makeGridCard(gallery)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("gallery-grid-\(gallery.gid)")
+                }
+            } else {
+                ForEach(viewModel.galleries, id: \.gid) { gallery in
+                    // NavigationLink 在 List 里会自动补一个 disclosure 箭头，设计稿没有它，
+                    // 而且每行右侧多出的 20pt 会挤压元信息行。把链接藏成零透明的底层，
+                    // 行本身画在它上面——点按仍由链接接收。
+                    Group {
+                        if isBatchSelecting, let sel = selectionBindings {
+                            // 多选中：整行点按切换选中，不再进详情
+                            HStack(spacing: 0) {
+                                Image(systemName: sel.selected.wrappedValue.contains(gallery.gid)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(sel.selected.wrappedValue.contains(gallery.gid)
+                                                     ? EhColor.accent : EhColor.tertiaryLabel)
+                                    .padding(.leading, EhSpacing.page)
+                                GalleryRow(
+                                    gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                    showsContextMenu: false, presentation: presentation == .compact ? .compact : .list
+                                )
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                Haptics.tap()
+                                if sel.selected.wrappedValue.contains(gallery.gid) {
+                                    sel.selected.wrappedValue.remove(gallery.gid)
+                                } else {
+                                    sel.selected.wrappedValue.insert(gallery.gid)
+                                }
+                            }
+                        } else {
+                            ZStack {
+                                NavigationLink(value: galleryDestination(gallery)) { EmptyView() }
+                                    .opacity(0)
+                                GalleryRow(
+                                    gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                    presentation: presentation,
+                                    onRequestRead: onRequestDirectRead,
+                                    onRequestDownload: requestDownload,
+                                    onRequestFavorite: toggleFavorite,
+                                    onTagTap: searchTag,
+                                    highlightedTags: activeSearchTags
+                                )
                             }
                         }
-                    } else {
-                        ZStack {
-                            NavigationLink(value: galleryDestination(gallery)) { EmptyView() }
-                                .opacity(0)
-                            GalleryRow(
-                                gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
-                                onRequestRead: onRequestDirectRead,
-                                onRequestDownload: requestDownload,
-                                onRequestFavorite: toggleFavorite,
-                                onTagTap: searchTag,
-                                highlightedTags: activeSearchTags
-                            )
-                        }
                     }
-                }
-                .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if !isBatchSelecting {
-                        // 下载 (对齐 Android onItemLongClick: Download)
-                        Button {
-                            requestDownload(gallery)
-                        } label: {
-                            Label("下载", systemImage: "arrow.down.circle")
-                        }
-                        .tint(.blue)
-                        .accessibilityIdentifier("gallery-row-swipe-download")
+                    .overlay(alignment: .bottom) { EhHairline(inset: EhSpacing.page) }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if !isBatchSelecting {
+                            // 下载 (对齐 Android onItemLongClick: Download)
+                            Button {
+                                requestDownload(gallery)
+                            } label: {
+                                Label("下载", systemImage: "arrow.down.circle")
+                            }
+                            .tint(.blue)
+                            .accessibilityIdentifier("gallery-row-swipe-download")
 
-                        // 收藏 / 取消收藏 (对齐 Android onItemLongClick)
-                        Button {
-                            toggleFavorite(gallery)
-                        } label: {
-                            Label(isFavorited(gallery) ? "取消收藏" : "收藏",
-                                  systemImage: isFavorited(gallery) ? "heart.slash" : "heart")
+                            // 收藏 / 取消收藏 (对齐 Android onItemLongClick)
+                            Button {
+                                toggleFavorite(gallery)
+                            } label: {
+                                Label(isFavorited(gallery) ? "取消收藏" : "收藏",
+                                      systemImage: isFavorited(gallery) ? "heart.slash" : "heart")
+                            }
+                            .tint(isFavorited(gallery) ? .gray : .red)
                         }
-                        .tint(isFavorited(gallery) ? .gray : .red)
                     }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
                 }
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
             }
 
             // 加载更多
@@ -783,6 +795,43 @@ struct GalleryListView: View {
         #else
         list
         #endif
+    }
+
+    /// Group cards into native list rows. Keeping the containing List preserves
+    /// refresh, the Home reselect anchor and scroll-driven chrome in grid mode.
+    @ViewBuilder
+    private func galleryGridRows<Card: View>(@ViewBuilder card: (GalleryInfo) -> Card) -> some View {
+        let galleries = viewModel.galleries
+        let pairs = stride(from: 0, to: galleries.count, by: 2).map { index in
+            GalleryGridPair(leading: galleries[index], trailing: index + 1 < galleries.count ? galleries[index + 1] : nil)
+        }
+        ForEach(pairs) { pair in
+            HStack(alignment: .top, spacing: 10) {
+                card(pair.leading).frame(maxWidth: .infinity)
+                if let trailing = pair.trailing {
+                    card(trailing).frame(maxWidth: .infinity)
+                } else {
+                    Color.clear.frame(maxWidth: .infinity).accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, EhSpacing.page)
+            .padding(.vertical, 6)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+        }
+    }
+
+    private struct GalleryGridPair: Identifiable {
+        let leading: GalleryInfo
+        let trailing: GalleryInfo?
+        var id: Int64 { leading.gid }
+    }
+
+    private func makeGridCard(_ gallery: GalleryInfo) -> GalleryRow {
+        GalleryRow(gallery: gallery, showJpnTitle: AppSettings.shared.showJpnTitle,
+                   fixThumbUrl: AppSettings.shared.fixThumbUrl, presentation: .grid,
+                   onRequestRead: onRequestDirectRead, onRequestDownload: requestDownload,
+                   onRequestFavorite: toggleFavorite)
     }
 
     // 嵌入模式内容（无导航包装器，用于三栏布局的 content 列）
@@ -822,15 +871,25 @@ struct GalleryListView: View {
                             .listRowSeparator(.hidden)
                         }
 
-                        ForEach(viewModel.galleries, id: \.gid) { gallery in
-                            GalleryRow(
-                        gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
-                        onRequestDownload: requestDownload,
-                        onRequestFavorite: toggleFavorite,
-                        onTagTap: searchTag,
-                        highlightedTags: activeSearchTags
-                    )
-                                .tag(gallery)
+                        let presentation = AppSettings.shared.listMode
+                        if presentation == .grid {
+                            galleryGridRows { gallery in
+                                Button { selectionBinding.wrappedValue = gallery } label: {
+                                    makeGridCard(gallery)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(selectionBinding.wrappedValue?.gid == gallery.gid ? .isSelected : [])
+                            }
+                        } else {
+                            ForEach(viewModel.galleries, id: \.gid) { gallery in
+                                GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                           presentation: presentation,
+                                           onRequestDownload: requestDownload,
+                                           onRequestFavorite: toggleFavorite,
+                                           onTagTap: searchTag,
+                                           highlightedTags: activeSearchTags)
+                                    .tag(gallery)
+                            }
                         }
 
                         if viewModel.hasMore {
@@ -1696,6 +1755,7 @@ struct GalleryRow: View {
     let showJpnTitle: Bool
     let fixThumbUrl: Bool
     var showsContextMenu = true
+    var presentation: EhSettings.ListMode = .list
     /// 由父视图处理：收藏可能需要弹收藏夹选择器，下载需要移动网络确认，
     /// 这些都不是一行自己能决定的。
     var onRequestRead: ((GalleryInfo) -> Void)? = nil
@@ -1741,10 +1801,52 @@ struct GalleryRow: View {
         }
     }
 
+    @ViewBuilder
     private var rowContent: some View {
-        EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap,
-                     highlightedTags: highlightedTags)
-            .contentShape(Rectangle())
+        if presentation == .grid {
+            gridCard
+        } else {
+            EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap,
+                         highlightedTags: highlightedTags, isCompact: presentation == .compact)
+                .contentShape(Rectangle())
+        }
+    }
+
+    private var gridCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { geometry in
+                EhCoverThumbnail(url: displayGallery.thumb, size: geometry.size,
+                                 category: gallery.category, language: gallery.simpleLanguage,
+                                 contentMode: .fit)
+            }
+            .frame(height: 150)
+            Text(gallery.suitableTitle(preferJpn: showJpnTitle))
+                .font(EhFont.caption)
+                .foregroundStyle(EhColor.label)
+                .lineLimit(2, reservesSpace: true)
+            HStack(spacing: 6) {
+                if AppSettings.shared.showGalleryRating {
+                    EhStarRating(rating: Double(gallery.rating), starSize: 9)
+                        .accessibilityLabel("评分 \(gallery.rating)")
+                }
+                Spacer(minLength: 0)
+                if AppSettings.shared.showGalleryPages && gallery.pages > 0 {
+                    Text("\(gallery.pages)P")
+                }
+                if GalleryStatusCache.shared.isDownloaded(gid: gallery.gid) {
+                    Image(systemName: "arrow.down.circle.fill").accessibilityLabel("已下载")
+                }
+                if GalleryStatusCache.shared.isFavorited(gallery) {
+                    Image(systemName: "heart.fill").accessibilityLabel("已收藏")
+                }
+            }
+            .font(EhFont.tiny)
+            .foregroundStyle(EhColor.secondaryLabel)
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(EhColor.fill, in: RoundedRectangle(cornerRadius: EhRadius.thumbnail))
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

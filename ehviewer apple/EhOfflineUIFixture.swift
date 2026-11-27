@@ -29,6 +29,9 @@ enum EhOfflineUIFixture {
             : (readerLoadingMode != nil ? 900010000033 : (encodedExportFixture ? 900010000031 : 900010000001)))),
         token: "fixture", title: "Synthetic Gallery", pages: readerEnabled ? 3 : 0
     )
+    private static let secondLayoutGallery = GalleryInfo(
+        gid: 900010000145, token: "fixture", title: "Second layout fixture", pages: 3
+    )
     static let workspaceFixture = enabled && ProcessInfo.processInfo.environment["EH_FIXTURE_WORKSPACES"] == "1"
     static let workspaceA = "artist:fixture first"
     static let workspaceB = "group:fixture second"
@@ -137,6 +140,9 @@ enum EhOfflineUIFixture {
             GalleryCache.shared.putDetail(.init(info: synthetic))
         }
         GalleryCache.shared.putDetail(.init(info: cloud, isFavorited: true))
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_LIST_PRESENTATION"] == "1" {
+            GalleryCache.shared.putDetail(.init(info: secondLayoutGallery))
+        }
         if historyTagFixtureEnabled {
             try? EhDatabase.shared.insertHistory(.init(gid: historyGallery.gid, token: historyGallery.token,
                                                        title: historyGallery.title ?? "", date: Date()))
@@ -538,6 +544,9 @@ enum EhOfflineUIFixture {
                 missingCountGallery
             } else {
                 coldReaderMode == nil ? synthetic : coldGallery
+            }
+            if ProcessInfo.processInfo.environment["EH_FIXTURE_LIST_PRESENTATION"] == "1" {
+                return GalleryListResult(galleries: [gallery, secondLayoutGallery])
             }
             if coldReaderMode == "scrolled-reset" {
                 let fillers = (0..<12).map { index in

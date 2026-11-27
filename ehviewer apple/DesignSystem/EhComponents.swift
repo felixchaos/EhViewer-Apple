@@ -32,10 +32,11 @@ struct EhCoverThumbnail: View {
     var cornerRadius: CGFloat = EhRadius.thumbnail
     /// 0...1，显示在底部的阅读进度；nil 表示不显示
     var readProgress: Double? = nil
+    var contentMode: ContentMode = .fill
 
     var body: some View {
         CachedAsyncImage(url: URL(string: url ?? ""), showProgress: false) { image in
-            image.resizable().aspectRatio(contentMode: .fill)
+            image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
             EhColor.thumbnailPlaceholder
         }

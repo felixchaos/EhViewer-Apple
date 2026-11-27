@@ -60,6 +60,7 @@ struct EhGalleryRow: View {
     /// 只有确实需要另一种尺寸的地方才传（目前没有）。默认走统一尺寸。
     var thumbnailSize: CGSize? = nil
     var titleLineLimit: Int = 2
+    var isCompact = false
 
     /// 行右侧的按钮（续读、暂停/重试…）
     var accessory: AnyView? = nil
@@ -81,7 +82,7 @@ struct EhGalleryRow: View {
     private var resolvedThumbnailSize: CGSize {
         if let thumbnailSize { return thumbnailSize }
         let base = layout.galleryThumbnailSize
-        let scale = Self.thumbScale
+        let scale = Self.thumbScale * (isCompact ? 0.70 : 1.0)
         return CGSize(width: base.width * scale, height: base.height * scale)
     }
 
@@ -271,7 +272,7 @@ struct EhGalleryRow: View {
             accessory
         }
         .padding(.horizontal, EhSpacing.page)
-        .padding(.vertical, 10)
+        .padding(.vertical, isCompact ? 5 : 10)
         // 行高按内容决定，不跟着父容器拉伸。
         // 内部那个撑开元信息的 Spacer 是贪心的，放进非 List 的 VStack
         // （收藏页的「本地收藏」区块）里会把整行拉成半屏高。
@@ -297,7 +298,8 @@ extension EhGalleryRow {
         progressLabel: String? = nil,
         accessory: AnyView? = nil,
         onTagTap: ((String) -> Void)? = nil,
-        highlightedTags: Set<String> = []
+        highlightedTags: Set<String> = [],
+        isCompact: Bool = false
     ) {
         let settings = AppSettings.shared
         var meta = extraMeta
@@ -325,6 +327,7 @@ extension EhGalleryRow {
             trailingText: gallery.posted,
             progress: progress,
             progressLabel: progressLabel,
+            isCompact: isCompact,
             accessory: accessory,
             onTagTap: onTagTap,
             highlightedTags: highlightedTags

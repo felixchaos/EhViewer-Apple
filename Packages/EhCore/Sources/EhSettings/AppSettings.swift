@@ -742,8 +742,18 @@ public final class AppSettings: @unchecked Sendable {
 }
 
 public enum ListMode: Int, Sendable, CaseIterable {
+    // Match the persisted values the Settings picker has shown to users.
     case list = 0
-    case grid = 1
+    case compact = 1
+    case grid = 2
+
+    public var title: String {
+        switch self {
+        case .list: "列表"
+        case .compact: "紧凑"
+        case .grid: "网格"
+        }
+    }
 }
 
 /// 图片分辨率选项 (对应 Android EhConfig.IMAGE_SIZE_*)
