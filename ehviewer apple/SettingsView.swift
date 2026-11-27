@@ -1105,7 +1105,15 @@ struct SettingsView: View {
         do {
             let data = try Data(contentsOf: url)
             let previousReadCacheSize = AppSettings.shared.readCacheSize
+            #if os(iOS)
+            let previousLiveActivity = AppSettings.shared.showLiveActivity
+            #endif
             let report = try SettingsBackup.restoreAppJSON(data)
+            #if os(iOS)
+            if previousLiveActivity && !AppSettings.shared.showLiveActivity {
+                DownloadNotificationBridge.reconcileLiveActivityPreference()
+            }
+            #endif
             var message: String
             if report.appliedCount > 0 {
                 vm.reloadSettingsAfterBackupImport()

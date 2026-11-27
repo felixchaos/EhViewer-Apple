@@ -20,7 +20,12 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
     @MainActor
     static func setLiveActivityEnabled(_ enabled: Bool) {
         AppSettings.shared.showLiveActivity = enabled
-        if !enabled {
+        reconcileLiveActivityPreference()
+    }
+
+    @MainActor
+    static func reconcileLiveActivityPreference() {
+        if !AppSettings.shared.showLiveActivity {
             DownloadLiveActivityManager.shared.endActivity()
         }
     }

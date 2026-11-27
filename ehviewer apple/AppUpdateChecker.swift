@@ -1,4 +1,5 @@
 import Foundation
+import EhSettings
 import Observation
 
 private struct GitHubRelease: Decodable {
@@ -212,7 +213,7 @@ final class AppUpdateChecker {
         case unavailable
     }
 
-    static let automaticCheckKey = "automatically_check_app_updates"
+    static let automaticCheckKey = SettingsBackup.automaticUpdateCheckKey
 
     private(set) var isChecking = false
     var updateAvailable: AppUpdateInfo? // The existing profile banner is dismissible.

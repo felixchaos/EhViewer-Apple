@@ -4,6 +4,8 @@ import Foundation
 /// The flat JSON archive shared by the Apple settings import/export screens.
 /// File access, sharing, and refreshing the active UI are the caller's responsibility.
 public enum SettingsBackup {
+    public static let automaticUpdateCheckKey = "automatically_check_app_updates"
+
     public enum RestoreError: Error, Equatable {
         case notJSONObject
         case invalidValue(key: String)
@@ -65,6 +67,8 @@ public enum SettingsBackup {
         "history_info_size": .integer, "theme": .integer, "launch_page": .integer,
         "show_gallery_pages": .boolean, "cellular_network_warning": .boolean,
         "custom_screen_lightness": .boolean, "screen_lightness": .integer,
+        automaticUpdateCheckKey: .boolean, "show_live_activity": .boolean,
+        "sync_download_while_reading": .boolean,
     ]
     private static let favoriteKeys = (0..<10).map { "fav_cat_\($0)" }
 

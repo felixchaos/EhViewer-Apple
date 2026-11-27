@@ -59,7 +59,7 @@ struct SettingsBackupTests {
 
     @Test func exportKeepsTheFlatArchiveKeysAndValues() throws {
         try withIsolatedDefaults { defaults in
-            // The shipped archive contract, not a list derived from the new implementation.
+            // Explicit archive contract, not a list derived from the implementation.
             var expected: [String: Any] = [
                 "gallery_site": 1, "domain_fronting": true, "dns_over_https": false, "built_in_hosts": false,
                 "multi_thread_download": 3, "preload_image": 2, "download_delay": 1, "download_timeout": 45,
@@ -77,6 +77,8 @@ struct SettingsBackupTests {
                 "save_parse_error_body": false, "history_info_size": 200, "theme": 2, "launch_page": 1,
                 "show_gallery_pages": true, "cellular_network_warning": false,
                 "custom_screen_lightness": true, "screen_lightness": 75,
+                "automatically_check_app_updates": false, "show_live_activity": false,
+                "sync_download_while_reading": true,
             ]
             for index in 0..<10 {
                 expected["fav_cat_\(index)"] = index == 0 ? "" : "Sample \(index)"
@@ -132,6 +134,39 @@ struct SettingsBackupTests {
             #expect(defaults.string(forKey: "proxy_host") == "prior.example.invalid")
             #expect(!defaults.bool(forKey: "media_scan"))
             #expect(defaults.object(forKey: "extra_fixture") == nil)
+        }
+    }
+
+    @Test func restoresExplicitSwitchChoicesWithoutResettingOlderOverlays() throws {
+        try withIsolatedDefaults { source in
+            source.set(false, forKey: "automatically_check_app_updates")
+            source.set(false, forKey: "show_live_activity")
+            source.set(true, forKey: "sync_download_while_reading")
+            let data = try SettingsBackup.exportJSON(from: source)
+            let archive = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let switches = Set(["automatically_check_app_updates", "show_live_activity", "sync_download_while_reading"])
+            // UserDefaults suite names isolate writes, but do not hide the hosted app's registered defaults.
+            let switchOverlay = try JSONSerialization.data(withJSONObject: archive.filter { switches.contains($0.key) })
+            try withIsolatedDefaults { target in
+                target.set(true, forKey: "automatically_check_app_updates")
+                target.set(true, forKey: "show_live_activity")
+                target.set(false, forKey: "sync_download_while_reading")
+                let rejected = Data(#"{"automatically_check_app_updates":false,"show_live_activity":false,"sync_download_while_reading":1}"#.utf8)
+                #expect(throws: SettingsBackup.RestoreError.invalidValue(key: "sync_download_while_reading")) {
+                    _ = try SettingsBackup.restoreJSON(rejected, into: target)
+                }
+                #expect(target.bool(forKey: "automatically_check_app_updates"))
+                #expect(target.bool(forKey: "show_live_activity"))
+                #expect(!target.bool(forKey: "sync_download_while_reading"))
+
+                let report = try SettingsBackup.restoreJSON(switchOverlay, into: target)
+                #expect(report.appliedCount == 3)
+                #expect(report.skippedUnknownCount == 0)
+                _ = try SettingsBackup.restoreJSON(Data(#"{"theme":2}"#.utf8), into: target)
+                #expect(!target.bool(forKey: "automatically_check_app_updates"))
+                #expect(!target.bool(forKey: "show_live_activity"))
+                #expect(target.bool(forKey: "sync_download_while_reading"))
+            }
         }
     }
 
