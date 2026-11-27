@@ -811,14 +811,18 @@ public actor DownloadManager {
     ) -> Bool {
         guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
               !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
-              pendingFileDeletion?.gid != gallery.gid else { return false }
+              pendingFileDeletion?.gid != gallery.gid,
+              runner?.attempt.gid != gallery.gid else { return false }
         let existingIndex = downloadQueue.firstIndex { $0.gallery.gid == gallery.gid }
         // Reader cache bytes have no download-quality provenance. Keep the
         // registered directory when richer detail later changes the title.
         let registered: GalleryInfo
         if let existingIndex {
             let task = downloadQueue[existingIndex]
-            guard task.quality == nil, task.gallery.token == gallery.token else { return false }
+            // A queued task owns its state and the runner owns its files,
+            // including during cancellation drain. The reader keeps its own cache.
+            guard !task.canPause, task.quality == nil,
+                  task.gallery.token == gallery.token else { return false }
             registered = task.gallery
         } else {
             registered = gallery

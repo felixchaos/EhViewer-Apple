@@ -558,6 +558,57 @@ import EhSpider
         await secondTransfer.allowReturn()
     }
 
+    @Test func readerSyncCannotFinishAQueuedActiveOrDrainingDownload() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let gallery = GalleryInfo(gid: 81, token: "neutral", title: "First fixture", pages: 2)
+        let queued = GalleryInfo(gid: 82, token: "neutral", title: "Second fixture", pages: 2)
+        let activeTransfer = HeldTransfer(gid: gallery.gid)
+        let queuedTransfer = HeldTransfer(gid: queued.gid)
+        let factory = TransferSequence([activeTransfer, queuedTransfer])
+        let manager = DownloadManager(database: store, directory: root, makeTransfer: { _, _, quality in
+            #expect(quality == nil, "Reader-created or older tasks have no explicit quality.")
+            return factory.take()
+        })
+        let first = Data([0xFF, 0xD8, 1, 0xFF, 0xD9])
+        let last = Data([0xFF, 0xD8, 2, 0xFF, 0xD9])
+        for item in [gallery, queued] {
+            #expect(await manager.saveWhileReading(gallery: item, pageIndex: 0, data: first, extension: ".jpg"))
+        }
+        let directory = try #require(await manager.getDownloadedGalleryDirectory(gid: gallery.gid))
+        let lastURL = directory.appendingPathComponent("00000002.jpg")
+        await manager.resumeDownload(gid: gallery.gid)
+        await activeTransfer.waitUntilStarted()
+        await manager.resumeDownload(gid: queued.gid)
+
+        #expect(!(await manager.saveWhileReading(gallery: gallery, pageIndex: 1, data: last, extension: ".jpg")))
+        #expect(!(await manager.saveWhileReading(gallery: queued, pageIndex: 1, data: last, extension: ".jpg")))
+        #expect(!FileManager.default.fileExists(atPath: lastURL.path))
+        #expect(await manager.getTaskState(gid: gallery.gid) == DownloadManager.stateDownload)
+        #expect(await manager.getTaskState(gid: queued.gid) == DownloadManager.stateWait)
+        #expect(await manager.getAllTasks().first { $0.gallery.gid == gallery.gid }?.canPause == true)
+
+        await manager.pauseDownload(gid: gallery.gid)
+        #expect(await manager.getTaskState(gid: gallery.gid) == DownloadManager.stateNone)
+        #expect(!(await manager.saveWhileReading(gallery: gallery, pageIndex: 1, data: last, extension: ".jpg")))
+        #expect(!FileManager.default.fileExists(atPath: lastURL.path))
+
+        // Let the lane drain. The successor's start is a deterministic signal
+        // that the paused gallery has relinquished the transfer slot.
+        await activeTransfer.allowReturn()
+        // Free this task if a broken baseline already marked it Finished.
+        let successorState = await manager.getTaskState(gid: queued.gid)
+        if successorState == DownloadManager.stateWait || successorState == DownloadManager.stateDownload {
+            await queuedTransfer.waitUntilStarted()
+        }
+        #expect(await manager.saveWhileReading(gallery: gallery, pageIndex: 1, data: last, extension: ".jpg"))
+        #expect(try Data(contentsOf: lastURL) == last)
+        #expect(try store.getDownload(gid: gallery.gid)?.state == DownloadManager.stateFinish)
+        await manager.pauseAllDownloads()
+        await queuedTransfer.allowReturn()
+    }
+
     @Test func cancelledReadingSyncDoesNotCreateAFileOrDownloadRecord() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
