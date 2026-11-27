@@ -40,6 +40,16 @@ struct MainTabView: View {
     @State private var workspaces = [WorkspaceLayer()]
     @State private var outgoingLayer: UUID?
     @State private var downloadSetup: DownloadSetupRequest?
+    #if os(iOS)
+    @State private var directReaderGallery: GalleryInfo?
+    #endif
+    private var isDirectReaderPresented: Bool {
+        #if os(iOS)
+        directReaderGallery != nil
+        #else
+        false
+        #endif
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var active: WorkspaceLayer { workspaces.last! }
@@ -69,23 +79,32 @@ struct MainTabView: View {
                                 Divider().hidden()
                             }
                         }
+                        #if os(iOS)
+                        MainTabWorkspace(workspace: workspace) { gallery in
+                            guard current, active.id == workspace.id, downloadSetup == nil,
+                                  directReaderGallery == nil else { return }
+                            directReaderGallery = gallery
+                        }
+                        #else
                         MainTabWorkspace(workspace: workspace)
+                        #endif
                     }
                     .background(EhColor.background)
                     .offset(x: current ? 0 : -distance * 0.26)
                     .opacity(current || outgoingLayer == workspace.id ? 1 : 0)
                     .zIndex(Double(workspaces.firstIndex { $0.id == workspace.id } ?? 0))
-                    .allowsHitTesting(current && downloadSetup == nil)
+                    .allowsHitTesting(current && downloadSetup == nil && !isDirectReaderPresented)
                     .accessibilityElement(children: .contain)
-                    .accessibilityHidden(!current || downloadSetup != nil)
-                    .ehSuspendTabBarDriver(!current)
+                    .accessibilityHidden(!current || downloadSetup != nil || isDirectReaderPresented)
+                    .ehSuspendTabBarDriver(!current || isDirectReaderPresented)
                     .environment(\.ehWorkspaceIsActive, current)
                     .environment(\.ehTagWorkspaceNavigation, TagWorkspaceNavigation { route in
-                        guard active.id == workspace.id else { return }
+                        guard active.id == workspace.id, !isDirectReaderPresented else { return }
                         push(route)
                     })
                     .environment(\.ehDownloadSetupNavigation, DownloadSetupNavigation { request in
-                        guard active.id == workspace.id, downloadSetup == nil, !request.galleries.isEmpty else { return }
+                        guard active.id == workspace.id, downloadSetup == nil, !isDirectReaderPresented,
+                              !request.galleries.isEmpty else { return }
                         transition { downloadSetup = request }
                     })
                     .transition(distance > 0 ? .offset(x: distance) : .opacity)
@@ -109,7 +128,18 @@ struct MainTabView: View {
                 }
             }
             #if os(iOS)
-            .transformPreference(EhHidesTabBarKey.self) { $0 = $0 || downloadSetup != nil }
+            // Fullscreen destinations do not belong to the sliding/clipped
+            // workspace layer. Read the unmodified window safe area here.
+            .overlay {
+                if let gallery = directReaderGallery {
+                    ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
+                                    galleryHint: gallery, onRequestClose: { directReaderGallery = nil })
+                        .id(gallery.gid)
+                }
+            }
+            .transformPreference(EhHidesTabBarKey.self) {
+                $0 = $0 || downloadSetup != nil || isDirectReaderPresented
+            }
             .ehFloatingTabBar(
                 items: MainTab.bottomTabs.map {
                     .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
@@ -245,7 +275,7 @@ private struct MainTabWorkspace: View {
     }
 
     #if os(iOS)
-    @State private var directReaderGallery: GalleryInfo?
+    let onRequestDirectRead: (GalleryInfo) -> Void
     @State private var mountedTabs: Set<Tab> = []
     @State private var nestedNavigation = false
     #endif
@@ -344,9 +374,9 @@ private struct MainTabWorkspace: View {
                 .onPreferenceChange(EhWorkspaceBatchSelectionKey.self) { isBatchSelecting = $0 }
                 .onChange(of: selectedTab, initial: true) { _, tab in mountedTabs.insert(tab) }
             }
-            .allowsHitTesting(directReaderGallery == nil && clipboardGallery == nil)
-            .accessibilityHidden(directReaderGallery != nil || clipboardGallery != nil)
-            .ehSuspendTabBarDriver(directReaderGallery != nil || clipboardGallery != nil)
+            .allowsHitTesting(clipboardGallery == nil)
+            .accessibilityHidden(clipboardGallery != nil)
+            .ehSuspendTabBarDriver(clipboardGallery != nil)
             .overlay {
                 if let gallery = clipboardGallery {
                     NavigationStack {
@@ -361,27 +391,12 @@ private struct MainTabWorkspace: View {
                     .background(EhColor.background)
                 }
             }
-            .overlay {
-                if let gallery = directReaderGallery {
-                    // Stay in the owning root so closing native context UI and opening
-                    // a reader do not compete for the same presentation controller.
-                    ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
-                                    galleryHint: gallery,
-                                    onRequestClose: { directReaderGallery = nil })
-                        .id(gallery.gid)
-                }
-            }
         }
         // 全局强调色：链接、开关、选中态一次性统一到琥珀，
         // 不必逐个视图替换散落的 .blue / .accentColor
         .tint(EhColor.accent)
         .onPreferenceChange(EhHidesTabBarKey.self) { nestedNavigation = $0 }
-        // The tab bar belongs to the window, outside this workspace's reader
-        // overlay. Hide that shared bar without unmounting the source tab.
-        .transformPreference(EhHidesTabBarKey.self) { hidesTabBar in
-            hidesTabBar = hidesTabBar || directReaderGallery != nil
-        }
-        .onChange(of: !nestedNavigation && !isBatchSelecting && directReaderGallery == nil && clipboardGallery == nil,
+        .onChange(of: !nestedNavigation && !isBatchSelecting && clipboardGallery == nil,
                   initial: true) { _, canGoBack in workspace.canGoBack = canGoBack }
         .onReceive(NotificationCenter.default.publisher(for: .openGalleryFromClipboard)) { notification in
             guard workspaceIsActive, !isBatchSelecting,
@@ -504,7 +519,7 @@ private struct MainTabWorkspace: View {
             } else {
                 #if os(iOS)
                 BrowseHomeView(route: $workspace.navigation.browse, workspaceRoute: route,
-                               onRequestDirectRead: { directReaderGallery = $0 })
+                               onRequestDirectRead: onRequestDirectRead)
                 #else
                 BrowseHomeView(route: $workspace.navigation.browse, workspaceRoute: route)
                 #endif
@@ -514,7 +529,7 @@ private struct MainTabWorkspace: View {
         case .home:
             // 浏览容器：顶部横向切页承载首页/订阅/热门/排行
             #if os(iOS)
-            BrowseHomeView(route: $workspace.navigation.browse, onRequestDirectRead: { directReaderGallery = $0 })
+            BrowseHomeView(route: $workspace.navigation.browse, onRequestDirectRead: onRequestDirectRead)
             #else
             BrowseHomeView(route: $workspace.navigation.browse)
             #endif
