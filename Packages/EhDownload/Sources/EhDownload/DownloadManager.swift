@@ -801,10 +801,19 @@ public actor DownloadManager {
         guard !OfflineGallery.isImported(gid: gallery.gid, token: gallery.token),
               !Task.isCancelled, pageIndex >= 0, !data.isEmpty,
               pendingFileDeletion?.gid != gallery.gid else { return false }
-        // Reader cache bytes have no download-quality provenance.
-        guard !downloadQueue.contains(where: { $0.gallery.gid == gallery.gid && $0.quality != nil }) else { return false }
-
-        let dir = galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        let existingIndex = downloadQueue.firstIndex { $0.gallery.gid == gallery.gid }
+        // Reader cache bytes have no download-quality provenance. Keep the
+        // registered directory when richer detail later changes the title.
+        let registered: GalleryInfo
+        if let existingIndex {
+            let task = downloadQueue[existingIndex]
+            guard task.quality == nil, task.gallery.token == gallery.token else { return false }
+            registered = task.gallery
+        } else {
+            registered = gallery
+        }
+        guard registered.pages <= 0 || pageIndex < registered.pages else { return false }
+        let dir = galleryDirectory(gid: registered.gid, title: registered.bestTitle)
         // The record may have been deleted while keeping this folder.
         guard !DownloadFolderQuality.containsMarker(in: dir) else { return false }
         // 已经有这一页就不重复写 (可能是之前下载过的)
@@ -826,19 +835,19 @@ public actor DownloadManager {
 
         // 首次写入时补一份 .ehviewer + 数据库记录，
         // 这样这本画廊会出现在下载列表里，也能被"扫描下载目录恢复任务"认出来
-        registerReadingSyncTaskIfNeeded(gallery: gallery, directory: dir)
+        registerReadingSyncTaskIfNeeded(gallery: registered, directory: dir)
 
         // 刷新进度，让下载列表显示"已存 N 页"
-        if let index = downloadQueue.firstIndex(where: { $0.gallery.gid == gallery.gid }),
-           gallery.pages > 0 {
-            let saved = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: gallery.pages).count
+        if let index = existingIndex ?? downloadQueue.firstIndex(where: { $0.gallery.gid == registered.gid }),
+           registered.pages > 0 {
+            let saved = SpiderInfoFile.getDownloadedPages(in: dir, totalPages: registered.pages).count
             downloadQueue[index].downloadedPages = saved
 
             // 整本都看完 = 整本都存下来了 → 标记为已完成
             // (否则列表会一直显示"已暂停"，但 4/4 页其实都在盘上)
-            if saved >= gallery.pages, downloadQueue[index].state != Self.stateFinish {
+            if saved >= registered.pages, downloadQueue[index].state != Self.stateFinish {
                 downloadQueue[index].state = Self.stateFinish
-                try? database.updateDownloadState(gid: gallery.gid, state: Self.stateFinish)
+                try? database.updateDownloadState(gid: registered.gid, state: Self.stateFinish)
             }
         }
         return true

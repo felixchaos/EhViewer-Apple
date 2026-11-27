@@ -221,6 +221,7 @@ class ReaderViewModel {
     /// 上一次预加载的锚点页 —— 用来推断翻页方向
     @ObservationIgnored private var lastPreloadAnchor: Int?
     @ObservationIgnored private var downloadDir: URL?
+    @ObservationIgnored private var openingGalleryHint: GalleryInfo?
     @ObservationIgnored private var readerImageSession: UInt64 = 0
 
     /// NSCache composite key: "gid:pageIndex" — 防止切换画廊时命中旧画廊的图片缓存
@@ -684,9 +685,12 @@ class ReaderViewModel {
     /// can start per-page loading as soon as pages become available.
     func openGallery(
         gid: Int64, token: String, pageCount: Int,
-        previewSet: PreviewSet?, initialPage: Int?
+        previewSet: PreviewSet?, initialPage: Int?, galleryHint: GalleryInfo? = nil
     ) async {
         let needsLoad = prepareForGallery(targetGid: gid, targetToken: token)
+        if let galleryHint, galleryHint.gid == gid, galleryHint.token == token {
+            openingGalleryHint = galleryHint
+        }
         if needsLoad {
             await setupLocalGallery()
             guard !Task.isCancelled else { return }
@@ -737,12 +741,13 @@ class ReaderViewModel {
     /// - Context Switch: `gid` 变更 → 重置全部状态后加载新画廊
     /// - Returns: `true` = 需要重新加载; `false` = 命中缓存可跳过
     func prepareForGallery(targetGid: Int64, targetToken: String) -> Bool {
-        if self.gid == targetGid && self.totalPages > 0 {
+        let sameGallery = self.gid == targetGid && self.token == targetToken
+        if sameGallery && self.totalPages > 0 {
             // Hit Cache: 同一画廊且数据已就绪 → 不重新加载
             return false
         }
 
-        if self.gid != targetGid {
+        if !sameGallery {
             // Context Switch: 换书了 → 先清空旧状态
             resetState()
         }
@@ -797,6 +802,7 @@ class ReaderViewModel {
         pageRetryOwners.removeAll()
         downloadingImages.removeAll()
         downloadDir = nil
+        openingGalleryHint = nil
     }
 
     // MARK: - Setup (Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，不再信任调用方传入的 Bool)
@@ -1401,7 +1407,20 @@ class ReaderViewModel {
     /// and protects imports and explicitly set download quality.
     private func syncDownloadIfEnabled(index: Int, data: Data, url: URL, gallery: Int64) async {
         guard AppSettings.shared.syncDownloadWhileReading, !url.isFileURL else { return }
-        guard let info = GalleryCache.shared.getDetail(gid: gallery)?.info else { return }
+        guard gallery == gid, totalPages > 0 else { return }
+        let cached = GalleryCache.shared.getDetail(gid: gallery)?.info
+        guard var info = [cached, openingGalleryHint].compactMap({ $0 }).first(where: {
+            $0.gid == gallery && $0.token == token &&
+            [$0.titleJpn, $0.title].compactMap { $0 }.contains {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }) else { return }
+        // Some gallery list results omit the page count; by the time a page
+        // is displayed the reader already resolved it.
+        if info.pages <= 0 { info.pages = totalPages }
+        if info.titleJpn?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            info.titleJpn = nil
+        }
 
         // 扩展名优先用图片 URL 上的，拿不到就按数据头猜
         var ext = "." + url.pathExtension.lowercased()

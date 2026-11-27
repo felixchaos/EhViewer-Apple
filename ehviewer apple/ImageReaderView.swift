@@ -252,7 +252,7 @@ struct ImageReaderView: View {
         .task(id: openAttempt) {
             await vm.openGallery(
                 gid: gid, token: token, pageCount: pages,
-                previewSet: previewSet, initialPage: initialPage
+                previewSet: previewSet, initialPage: initialPage, galleryHint: galleryHint
             )
             guard !Task.isCancelled else { return }
             failedToOpen = vm.totalPages == 0

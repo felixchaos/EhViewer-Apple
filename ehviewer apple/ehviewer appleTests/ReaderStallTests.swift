@@ -663,6 +663,51 @@ struct ReaderDirectResponsePipelineTests {
         await manager.deleteDownload(gid: gallery.gid)
     }
 
+    @Test(.enabled(if: EhUnitTestHost.isOffline))
+    func coldDirectReaderUsesMatchingListMetadataWithoutFetchingDetails() async throws {
+        let url = URL(string: "https://image.invalid/new.png")!
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReaderDirectFixtureProtocol.self]
+        let session = URLSession(configuration: config)
+        let original = AppSettings.shared.syncDownloadWhileReading
+        let manager = DownloadManager.shared
+        let gid = Int64.random(in: 900030000000..<900039999999)
+        let gallery = GalleryInfo(gid: gid, token: "fixture", title: "Cold direct open", titleJpn: " ")
+        let folder = manager.galleryDirectory(gid: gid, title: "Cold direct open")
+        let foreign = GalleryInfo(gid: gid + 10000000, token: "different", title: "Wrong token")
+        defer {
+            AppSettings.shared.syncDownloadWhileReading = original
+            session.invalidateAndCancel()
+            GalleryCache.shared.removeImageURL(gid: gid, page: 0)
+            GalleryCache.shared.removeImageURL(gid: foreign.gid, page: 0)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        AppSettings.shared.syncDownloadWhileReading = true
+
+        func open(gid: Int64, hint: GalleryInfo) async -> ReaderViewModel {
+            let vm = ReaderViewModel()
+            vm.directResponseFixture = .init(session: session, retryURL: url, beforeDecode: { _ in },
+                                             cacheWriter: { _, _, _ in })
+            GalleryCache.shared.putImageURL(url.absoluteString, gid: gid, page: 0)
+            await vm.openGallery(gid: gid, token: "fixture", pageCount: 1,
+                                 previewSet: nil, initialPage: 0, galleryHint: hint)
+            await vm.waitForScheduledPrefetchInTests()
+            return vm
+        }
+
+        #expect(GalleryCache.shared.getDetail(gid: gid) == nil)
+        let reader = await open(gid: gid, hint: gallery)
+        #expect(reader.cachedImages[0] != nil)
+        let filename = manager.imageFilename(index: 0, ext: ".png")
+        #expect(try Data(contentsOf: folder.appendingPathComponent(filename)) == ReaderDirectFixtureProtocol.replacementPNG)
+        #expect(try EhDatabase.shared.getDownload(gid: gid)?.pages == 1)
+
+        let rejected = await open(gid: foreign.gid, hint: foreign)
+        #expect(rejected.cachedImages[0] != nil)
+        #expect(try EhDatabase.shared.getDownload(gid: foreign.gid) == nil)
+        await manager.deleteDownload(gid: gid)
+    }
+
     @Test func oldFallbackDoesNotPublishAfterDirectRetryReplacesIt() async {
         let failing = URL(string: "https://image.invalid/fallback.png")!
         let replacement = URL(string: "https://image.invalid/new.png")!

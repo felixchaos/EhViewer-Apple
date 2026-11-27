@@ -70,6 +70,27 @@ import Testing
                 == DownloadManager.galleryDirectoryName(gid: queued.gid, title: queued.bestTitle))
     }
 
+    @Test func readingSyncKeepsRegisteredFolderWhenTitleIsEnriched() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try EhDatabase(inMemory: true)
+        let manager = DownloadManager(database: store, directory: root)
+        let initial = GalleryInfo(gid: 9, token: "fixture", title: "List title", pages: 2)
+        var enriched = initial
+        enriched.titleJpn = "Detail title"
+        var wrongToken = enriched
+        wrongToken.token = "other"
+        let originalFolder = manager.galleryDirectory(gid: initial.gid, title: initial.bestTitle)
+        let alternateFolder = manager.galleryDirectory(gid: initial.gid, title: enriched.bestTitle)
+        #expect(await manager.saveWhileReading(gallery: initial, pageIndex: 0, data: Data([1]), extension: ".png"))
+        #expect(!(await manager.saveWhileReading(gallery: wrongToken, pageIndex: 1, data: Data([3]), extension: ".png")))
+        #expect(await manager.saveWhileReading(gallery: enriched, pageIndex: 1, data: Data([2]), extension: ".png"))
+        #expect(try Data(contentsOf: originalFolder.appendingPathComponent("00000002.png")) == Data([2]))
+        #expect(!FileManager.default.fileExists(atPath: alternateFolder.path))
+        #expect(await manager.getDownloadedPageCount(gid: initial.gid) == 2)
+        #expect(try store.getDownload(gid: initial.gid)?.state == DownloadManager.stateFinish)
+    }
+
     @Test func clearFinishedDeletesOnlyMatchingCompletedRecordsAndFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
