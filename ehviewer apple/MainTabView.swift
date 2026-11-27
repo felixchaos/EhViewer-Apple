@@ -22,17 +22,6 @@ extension View {
     }
 }
 
-#if os(iOS)
-private struct WorkspaceChromeClip: Shape {
-    let bottomOverflow: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        Path(CGRect(x: rect.minX, y: rect.minY,
-                    width: rect.width, height: rect.height + bottomOverflow))
-    }
-}
-#endif
-
 /// Window-local stack. A push keeps the previous shell mounted with the
 /// same identity so it can restore its exact tab, scroll and detail state.
 struct MainTabView: View {
@@ -113,9 +102,10 @@ struct MainTabView: View {
             #if os(iOS)
             // Preserve the status-bar edge and horizontal workspace boundary,
             // while letting the page extend behind floating bottom controls.
-            .clipShape(WorkspaceChromeClip(
+            .ehWorkspaceChromeClip(
+                topOverflow: geometry.safeAreaInsets.top,
                 bottomOverflow: compact ? EhSize.tabBarHeight + EhSize.tabBarBottomInset + geometry.safeAreaInsets.bottom : 0
-            ))
+            )
             #else
             .clipped()
             #endif
