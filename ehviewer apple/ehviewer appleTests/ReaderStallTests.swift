@@ -16,6 +16,10 @@
 //
 
 import Testing
+import EhDatabase
+import EhDownload
+import EhSettings
+import EhSpider
 import EhModels
 import Foundation
 #if canImport(UIKit)
@@ -460,7 +464,7 @@ struct ReaderDirectResponseOwnershipTests {
         let decode = HeldReaderCacheLookup()
         var writes: [Int64] = []
         let response = Task {
-            await vm.completeDirectImage(
+            await vm.completeNetworkImage(
                 0, data: Data([1]), url: fixtureURL, owner: owner,
                 decode: { _ = await decode.read(); return PlatformImage() },
                 cacheWriter: { _, gallery, _ in writes.append(gallery) },
@@ -505,7 +509,7 @@ struct ReaderDirectResponseOwnershipTests {
         let persistence = HeldReaderCacheLookup()
         var writes: [String] = []
         let response = Task {
-            await vm.completeDirectImage(
+            await vm.completeNetworkImage(
                 0, data: Data([1]), url: fixtureURL, owner: owner,
                 decode: { PlatformImage() },
                 cacheWriter: { _, gid, page in writes.append("cache:\(gid):\(page)") },
@@ -551,7 +555,9 @@ struct ReaderDirectResponsePipelineTests {
             session: session, retryURL: failing,
             beforeDecode: { _ in Issue.record("Fallback went through direct decode") },
             cacheWriter: { _, _, _ in Issue.record("Fallback wrote through the direct path") },
-            persistentWriter: { _, _, _ in Issue.record("Fallback changed permanent storage policy") },
+            persistentWriter: { data, gid, page in
+                #expect(data == encoded && gid == gallery && page == 0)
+            },
             fallbackData: { url in
                 #expect(url == failing)
                 return encoded
@@ -574,6 +580,87 @@ struct ReaderDirectResponsePipelineTests {
         let export = await vm.pageExport(0) { _, _ in try? Data(contentsOf: file) }
         #expect(export?.bytes == encoded)
         #expect(export?.filename == "\(gallery)-1.png")
+    }
+
+    @Test(.enabled(if: EhUnitTestHost.isOffline))
+    func readingSyncPersistsMissingRemotePagesAfterReopening() async throws {
+        let direct = URL(string: "https://image.invalid/old.png")!
+        let fallback = URL(string: "https://image.invalid/fallback.png")!
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReaderDirectFixtureProtocol.self]
+        let session = URLSession(configuration: config)
+        let original = AppSettings.shared.syncDownloadWhileReading
+        let manager = DownloadManager.shared
+        let gid = Int64.random(in: 900020000000..<900029999999)
+        let gallery = GalleryInfo(gid: gid, token: "fixture", title: "Reader sync fixture", pages: 3)
+        let protected = GalleryInfo(gid: gid + 10000000, token: "fixture", title: "Protected quality fixture", pages: 1)
+        let folder = manager.galleryDirectory(gid: gallery.gid, title: gallery.bestTitle)
+        let protectedFolder = manager.galleryDirectory(gid: protected.gid, title: protected.bestTitle)
+        defer {
+            AppSettings.shared.syncDownloadWhileReading = original
+            session.invalidateAndCancel()
+            GalleryCache.shared.removeDetail(gid: gallery.gid)
+            GalleryCache.shared.removeDetail(gid: protected.gid)
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: protectedFolder)
+        }
+
+        func reader(for info: GalleryInfo) async -> ReaderViewModel {
+            let vm = ReaderViewModel()
+            vm.gid = info.gid
+            vm.token = info.token
+            vm.totalPages = info.pages
+            vm.directResponseFixture = .init(
+                session: session, retryURL: direct, beforeDecode: { _ in },
+                cacheWriter: { _, _, _ in },
+                fallbackData: { url in
+                    #expect(url == fallback)
+                    return ReaderDirectFixtureProtocol.replacementPNG
+                }
+            )
+            await vm.setupLocalGallery()
+            return vm
+        }
+
+        func bytes(in directory: URL, page: Int) throws -> Data? {
+            try SpiderInfoFile.getLocalImageURL(in: directory, pageIndex: page).map { try Data(contentsOf: $0) }
+        }
+
+        AppSettings.shared.syncDownloadWhileReading = true
+        GalleryCache.shared.putDetail(.init(info: gallery))
+        let first = await reader(for: gallery)
+        first.imageURLs[0] = direct.absoluteString
+        await first.downloadImageData(0)
+        #expect(try bytes(in: folder, page: 0) == ReaderDirectFixtureProtocol.originalPNG)
+        #expect(await manager.getDownloadedPageCount(gid: gallery.gid) == 1)
+        #expect(try EhDatabase.shared.getDownload(gid: gallery.gid)?.state == DownloadManager.stateNone)
+
+        let reopened = await reader(for: gallery)
+        await reopened.loadPage(0)
+        #expect(reopened.imageURLs[0].flatMap { URL(string: $0)?.isFileURL } == true)
+        reopened.imageURLs[1] = direct.absoluteString
+        reopened.imageURLs[2] = fallback.absoluteString
+        await reopened.downloadImageData(1)
+        await reopened.downloadImageData(2)
+        #expect(reopened.cachedImages[1] != nil && reopened.cachedImages[2] != nil)
+        #expect(try bytes(in: folder, page: 1) == ReaderDirectFixtureProtocol.originalPNG)
+        #expect(try bytes(in: folder, page: 2) == ReaderDirectFixtureProtocol.replacementPNG)
+        #expect(await manager.getDownloadedPageCount(gid: gallery.gid) == 3)
+        #expect(try EhDatabase.shared.getDownload(gid: gallery.gid)?.state == DownloadManager.stateFinish)
+
+        // A retained folder with a known quality policy must not receive
+        // reader bytes, even without a current download record.
+        GalleryCache.shared.putDetail(.init(info: protected))
+        try FileManager.default.createDirectory(at: protectedFolder, withIntermediateDirectories: true)
+        let marker = protectedFolder.appendingPathComponent(".ehviewer-download-quality-v1")
+        try Data("original".utf8).write(to: marker)
+        let blocked = await reader(for: protected)
+        blocked.imageURLs[0] = fallback.absoluteString
+        await blocked.downloadImageData(0)
+        #expect(blocked.cachedImages[0] != nil)
+        #expect(try bytes(in: protectedFolder, page: 0) == nil)
+        #expect(try Data(contentsOf: marker) == Data("original".utf8))
+        await manager.deleteDownload(gid: gallery.gid)
     }
 
     @Test func oldFallbackDoesNotPublishAfterDirectRetryReplacesIt() async {

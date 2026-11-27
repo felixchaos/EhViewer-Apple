@@ -132,8 +132,8 @@ class ReaderViewModel {
         let session: URLSession
         let retryURL: URL
         let beforeDecode: (URL) async -> Void
-        let cacheWriter: (Data, Int64, Int) -> Void
-        let persistentWriter: (Data, Int64, Int) async -> Void
+        let cacheWriter: (Data, Int64, Int) async -> Void
+        var persistentWriter: ((Data, Int64, Int) async -> Void)? = nil
         var fallbackData: ((URL) async -> Data?)? = nil
         var fallbackCacheWriter: ((Data, Int64, Int) async -> Void)? = nil
     }
@@ -153,7 +153,6 @@ class ReaderViewModel {
     var totalPages: Int = 0
     var gid: Int64 = 0
     var token: String = ""
-    var isDownloaded: Bool = false
     /// Perf P0-1: scrollPosition 绑定用 Optional Int (ScrollView 要求 Binding<Int?>)
     var lazyCurrentPage: Int? = 0
     /// Perf P0-2: 垂直滚动模式页码追踪 (scrollPosition 绑定)
@@ -765,7 +764,6 @@ class ReaderViewModel {
         // 页面状态
         currentPage = 0
         totalPages = 0
-        isDownloaded = false
         lazyCurrentPage = 0
         verticalScrollPage = 0
 
@@ -803,16 +801,13 @@ class ReaderViewModel {
 
     // MARK: - Setup (Fix D-1, B-1: 从 DownloadManager 查询真实下载状态，不再信任调用方传入的 Bool)
 
-    /// 检查本地下载目录 — 替代旧的硬编码 `isDownloaded` + `gid-token` 路径
-    /// 有下载记录且目录里至少有一张图就启用本地读取，缺失的页由 loadPage 逐页回退网络
+    /// Read available numbered files first; a directory does not mean the gallery is complete.
     func setupLocalGallery() async {
-        // ★ 不再要求"整本下载完成"才读本地 (对齐 Android SpiderDen: 逐页判断)
-        //   之前只要 isGalleryFullyDownloaded 判错 (下载中断、少一页、目录存在但文件不全)，
-        //   整本都会退回网络加载 —— 表现为"下载完了还是很慢 / 断网完全打不开" (issue #8 问题二)
-        //   loadPage 里本地文件缺失时仍会逐页回退网络，因此这里放宽是安全的
-        let dir = await DownloadManager.shared.localGalleryDirectory(gid: gid)
-        self.downloadDir = dir
-        self.isDownloaded = dir != nil
+        let gallery = gid
+        let session = readerImageSession
+        let dir = await DownloadManager.shared.localGalleryDirectory(gid: gallery)
+        guard !Task.isCancelled, gid == gallery, readerImageSession == session else { return }
+        downloadDir = dir
     }
 
     func extractPTokens(from previewSet: PreviewSet) {
@@ -1130,14 +1125,14 @@ class ReaderViewModel {
                 #if DEBUG
                 if let fixture = directResponseFixture {
                     await fixture.beforeDecode(url)
-                    await completeDirectImage(
+                    await completeNetworkImage(
                         index, data: data, url: url, owner: owner,
                         cacheWriter: fixture.cacheWriter, persistentWriter: fixture.persistentWriter
                     )
                     return
                 }
                 #endif
-                await completeDirectImage(index, data: data, url: url, owner: owner)
+                await completeNetworkImage(index, data: data, url: url, owner: owner)
                 return
             } catch {
                 guard ownsDownload(index, owner) else { return }
@@ -1163,13 +1158,17 @@ class ReaderViewModel {
                            Self.downsampledImage(data: data)
                        }).value {
                         guard ownsDownload(index, owner) else { return }
-                        await cacheFallbackImage(data, gallery: owner.gallery, page: index)
-                        guard ownsDownload(index, owner) else { return }
-                        Self.imageCache.setObject(img, forKey: self.cacheKey(for: index), cost: Self.decodedCost(of: img))
-                        cachedImages[index] = img
-                        errorPages.remove(index)
-                        downloadProgress.removeValue(forKey: index)
-                        evictDistantPages(from: currentPage)
+                        #if DEBUG
+                        if let fixture = directResponseFixture {
+                            await completeNetworkImage(
+                                index, data: data, url: url, owner: owner, decode: { img },
+                                cacheWriter: fixture.fallbackCacheWriter ?? { _, _, _ in },
+                                persistentWriter: fixture.persistentWriter
+                            )
+                            return
+                        }
+                        #endif
+                        await completeNetworkImage(index, data: data, url: url, owner: owner, decode: { img })
                         return
                     }
                 }
@@ -1212,21 +1211,11 @@ class ReaderViewModel {
         )
     }
 
-    private func cacheFallbackImage(_ data: Data, gallery: Int64, page: Int) async {
-        #if DEBUG
-        if let fixture = directResponseFixture {
-            await fixture.fallbackCacheWriter?(data, gallery, page)
-            return
-        }
-        #endif
-        await SpiderDen.cacheReaderImageData(data, gid: gallery, page: page)
-    }
-
     // Recheck the response owner at each suspension before page publication.
-    func completeDirectImage(
+    func completeNetworkImage(
         _ index: Int, data: Data, url: URL, owner: ImageDownloadOwner,
         decode: (() async -> PlatformImage?)? = nil,
-        cacheWriter: ((Data, Int64, Int) -> Void)? = nil,
+        cacheWriter: ((Data, Int64, Int) async -> Void)? = nil,
         persistentWriter: ((Data, Int64, Int) async -> Void)? = nil
     ) async {
         guard ownsDownload(index, owner) else { return }
@@ -1248,7 +1237,7 @@ class ReaderViewModel {
 
         // Preserve the encoded page before optional permanent storage and publication.
         if let cacheWriter {
-            cacheWriter(data, owner.gallery, index)
+            await cacheWriter(data, owner.gallery, index)
         } else {
             await SpiderDen.cacheReaderImageData(data, gid: owner.gallery, page: index)
         }
@@ -1262,6 +1251,7 @@ class ReaderViewModel {
 
         Self.imageCache.setObject(image, forKey: cacheKey(for: index), cost: Self.decodedCost(of: image))
         cachedImages[index] = image
+        errorPages.remove(index)
         downloadProgress.removeValue(forKey: index)
         evictDistantPages(from: currentPage)
     }
@@ -1407,15 +1397,10 @@ class ReaderViewModel {
         return downsampledImage(data: data)
     }
 
-    /// 阅读时同步下载 — 浏览未下载的画廊时把看过的图片顺手存进下载目录
-    ///
-    /// 对齐 Android 上游 2026-06-16「添加"阅读时同步下载"功能」。
-    /// Android 是在 SpiderDen 的写管道里分流；Apple 端阅读器自己下图，所以挂在这里。
-    /// 已经在读本地文件 (isDownloaded) 时不重复写。
+    /// Only network responses reach here. DownloadManager checks the individual page
+    /// and protects imports and explicitly set download quality.
     private func syncDownloadIfEnabled(index: Int, data: Data, url: URL, gallery: Int64) async {
-        guard AppSettings.shared.syncDownloadWhileReading else { return }
-        guard !isDownloaded else { return }          // 本地已有整本，无需再存
-        guard !url.isFileURL else { return }         // 读的就是本地文件
+        guard AppSettings.shared.syncDownloadWhileReading, !url.isFileURL else { return }
         guard let info = GalleryCache.shared.getDetail(gid: gallery)?.info else { return }
 
         // 扩展名优先用图片 URL 上的，拿不到就按数据头猜
@@ -1541,7 +1526,7 @@ class ReaderViewModel {
 
         let context = resolutionContext(index)
         // 优先本地 (Fix D-1: 通过 DownloadManager 统一路径，本地找不到时回退网络)
-        if isDownloaded, let dir = downloadDir,
+        if let dir = downloadDir,
            let localURL = SpiderInfoFile.getLocalImageURL(in: dir, pageIndex: index) {
             imageURLs[index] = localURL.absoluteString
             errorPages.remove(index)

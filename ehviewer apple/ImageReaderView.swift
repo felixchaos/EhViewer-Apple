@@ -156,7 +156,7 @@ struct ImageReaderView: View {
         viewModel.gid = gid
         viewModel.token = token
         // Fix Race: 不在 init 中设置 totalPages — 延迟到 openGallery()
-        // 中 setupLocalGallery() 完成后再设置，防止页面 .task 在 isDownloaded
+        // 中 setupLocalGallery() 完成后再设置，防止页面 .task 在本地目录
         // 确定前就触发 loadPage → 已下载画廊首页无意义走网络
 
         self._vm = State(initialValue: viewModel)
