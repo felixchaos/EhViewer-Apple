@@ -118,13 +118,15 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         }
 
         func rowSpacing() -> CGFloat {
-            let second = activeElement(app.staticTexts.matching(NSPredicate(format: "label == %@", "Second layout fixture")),
-                                       description: "Second visible gallery row")
+            let second = app.cells.containing(.staticText, identifier: "Second layout fixture").firstMatch
+            XCTAssertTrue(second.waitForExistence(timeout: 7))
             let secondY = second.frame.midY
-            // The resume card can carry the same title; use the list title
+            XCTAssertGreaterThan(secondY, app.frame.minY)
+            XCTAssertLessThan(secondY, app.frame.maxY)
+            // The resume card can carry the same title; use the list cell
             // directly above the next fixture rather than the first AX match.
-            let first = app.staticTexts.matching(NSPredicate(format: "label == %@", "Synthetic Gallery"))
-                .allElementsBoundByIndex.filter { $0.isHittable && $0.frame.midY < secondY }
+            let first = app.cells.containing(.staticText, identifier: "Synthetic Gallery")
+                .allElementsBoundByIndex.filter { $0.frame.midY < secondY }
                 .max { $0.frame.midY < $1.frame.midY }
             XCTAssertNotNil(first)
             let distance = secondY - (first?.frame.midY ?? secondY)

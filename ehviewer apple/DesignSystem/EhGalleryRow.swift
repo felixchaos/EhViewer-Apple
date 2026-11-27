@@ -273,6 +273,7 @@ struct EhGalleryRow: View {
         }
         .padding(.horizontal, EhSpacing.page)
         .padding(.vertical, isCompact ? 5 : 10)
+        .frame(maxWidth: isCompact ? .infinity : nil, alignment: .leading)
         // 行高按内容决定，不跟着父容器拉伸。
         // 内部那个撑开元信息的 Spacer 是贪心的，放进非 List 的 VStack
         // （收藏页的「本地收藏」区块）里会把整行拉成半屏高。
