@@ -163,7 +163,9 @@ import os
         let capacity = OSAllocatedUnfairLock(initialState: 100)
         let queue = DispatchQueue(label: "ehviewer.test.latest-cache-limit")
         let cache = SimpleDiskCache(directory: directory, capacity: { capacity.withLock { $0 } }, queue: queue)
-        #expect(cache.set(Data([1,2,3,4,5,6]), forKey: "page"))
+        #expect(cache.set(Data([1, 2, 3, 4, 5, 6]), forKey: "page"))
+        // Drain the trim from the initial write at the initial limit.
+        queue.sync {}
         let gate = DispatchSemaphore(value: 0)
         let progressed = AsyncStream<Bool>.makeStream()
         queue.async {
