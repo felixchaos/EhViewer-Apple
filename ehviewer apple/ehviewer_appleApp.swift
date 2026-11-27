@@ -88,6 +88,10 @@ struct EhViewerApp: App {
             // (图片分辨率 / 排除语言 / 排除命名空间 / 默认分类 / 预览尺寸都靠它生效)
             EhConfigSync.apply()
 
+            #if os(iOS)
+            _ = DownloadLiveActivityManager.shared // Dismiss activities orphaned by the previous process.
+            #endif
+
             _ = await DownloadNotificationService.shared.requestAuthorization()
 
             // 注册下载通知桥接器

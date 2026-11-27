@@ -16,6 +16,16 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
 
     private init() {}
 
+    #if os(iOS)
+    @MainActor
+    static func setLiveActivityEnabled(_ enabled: Bool) {
+        AppSettings.shared.showLiveActivity = enabled
+        if !enabled {
+            DownloadLiveActivityManager.shared.endActivity()
+        }
+    }
+    #endif
+
     // MARK: - DownloadListener
 
     func onDownloadStart(gid: Int64, title: String) async {
@@ -58,10 +68,8 @@ final class DownloadNotificationBridge: DownloadListener, @unchecked Sendable {
     func onDownloadFinish(gid: Int64, title: String, success: Bool, isBatchFinished: Bool) async {
         await MainActor.run {
             #if os(iOS)
-            // 结束灵动岛 Live Activity
-            if AppSettings.shared.showLiveActivity {
-                DownloadLiveActivityManager.shared.finishActivity(success: success, title: title)
-            }
+            // End only the activity owned by this download, regardless of the admission preference.
+            DownloadLiveActivityManager.shared.finishActivity(gid: gid, success: success)
             #endif
             // 完成通知仍使用传统通知 (在通知中心保留记录)
             DownloadNotificationService.shared.onDownloadFinish(

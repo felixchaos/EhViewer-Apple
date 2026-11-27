@@ -15,9 +15,9 @@ import WidgetKit
 
 /// 下载实时动态的属性定义
 /// ⚠️ 此结构体必须与 EhDownloadWidget 中的定义完全一致
-struct DownloadActivityAttributes: ActivityAttributes {
+nonisolated struct DownloadActivityAttributes: ActivityAttributes {
     /// 动态数据: 下载状态 (实时更新)
-    public struct ContentState: Codable, Hashable {
+    nonisolated public struct ContentState: Codable, Hashable {
         /// 下载进度 (0.0 ~ 1.0)
         var progress: Double
         /// 已下载页数
@@ -48,29 +48,13 @@ final class DownloadLiveActivityManager {
     private let updateInterval: TimeInterval = 1.0  // 每秒最多更新一次
 
     private init() {
-        // 启动时清理上次残留的 Activity
-        cleanupStaleActivities()
-    }
-
-    /// 清理所有残留的 Live Activity (应用重启后遗留)
-    func cleanupStaleActivities() {
-        for activity in Activity<DownloadActivityAttributes>.activities {
-            Task {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-        }
-        currentActivity = nil
+        endActivity()
     }
 
     /// 开始下载 Live Activity
     func startActivity(gid: Int64, title: String) {
-        // 先结束所有已存在的 Activity（包括残留的）
-        for activity in Activity<DownloadActivityAttributes>.activities {
-            Task {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-        }
-        currentActivity = nil
+        endActivity()
+        lastUpdateTime = .distantPast
 
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             debugLog("[LiveActivity] Live Activities 未启用")
@@ -101,11 +85,7 @@ final class DownloadLiveActivityManager {
 
     /// 更新下载进度
     func updateProgress(gid: Int64, downloaded: Int, total: Int, speed: Int64) {
-        // 如果引用丢失，尝试从系统恢复
-        if currentActivity == nil {
-            currentActivity = Activity<DownloadActivityAttributes>.activities.first
-        }
-        guard let activity = currentActivity else { return }
+        guard let activity = currentActivity, activity.attributes.gid == gid else { return }
 
         // 节流: 每秒最多更新一次
         let now = Date()
@@ -127,12 +107,8 @@ final class DownloadLiveActivityManager {
     }
 
     /// 下载完成，结束 Live Activity
-    func finishActivity(success: Bool, title: String) {
-        // 如果引用丢失，尝试从系统恢复
-        if currentActivity == nil {
-            currentActivity = Activity<DownloadActivityAttributes>.activities.first
-        }
-        guard let activity = currentActivity else { return }
+    func finishActivity(gid: Int64, success: Bool) {
+        guard let activity = currentActivity, activity.attributes.gid == gid else { return }
         currentActivity = nil  // 同步清除引用，避免竞态
 
         let finalState = DownloadActivityAttributes.ContentState(
@@ -153,13 +129,14 @@ final class DownloadLiveActivityManager {
 
     /// 强制结束 Activity
     func endActivity() {
-        currentActivity = nil  // 同步清除引用
+        var activities = Activity<DownloadActivityAttributes>.activities
+        if let activity = currentActivity, !activities.contains(where: { $0.id == activity.id }) {
+            activities.append(activity)
+        }
+        currentActivity = nil
 
-        // 结束所有残留的 Activity
-        for activity in Activity<DownloadActivityAttributes>.activities {
-            Task {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
+        for activity in activities {
+            Task { await activity.end(nil, dismissalPolicy: .immediate) }
         }
     }
 }
