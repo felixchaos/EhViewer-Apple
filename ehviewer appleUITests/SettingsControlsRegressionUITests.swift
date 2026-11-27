@@ -99,14 +99,19 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         }
 
         func rowSpacing() -> CGFloat {
-            let first = app.staticTexts["Synthetic Gallery"].firstMatch
             let second = app.staticTexts["Second layout fixture"].firstMatch
-            XCTAssertTrue(first.waitForExistence(timeout: 8))
             XCTAssertTrue(second.waitForExistence(timeout: 8))
-            XCTAssertTrue(first.isHittable)
             XCTAssertTrue(second.isHittable)
-            XCTAssertEqual(first.frame.minX, second.frame.minX, accuracy: 8)
-            return second.frame.midY - first.frame.midY
+            let secondY = second.frame.midY
+            // The resume card can carry the same title; use the list title
+            // directly above the next fixture rather than the first AX match.
+            let first = app.staticTexts.matching(NSPredicate(format: "label == %@", "Synthetic Gallery"))
+                .allElementsBoundByIndex.filter { $0.isHittable && $0.frame.midY < secondY }
+                .max { $0.frame.midY < $1.frame.midY }
+            XCTAssertNotNil(first)
+            let distance = secondY - (first?.frame.midY ?? secondY)
+            XCTAssertGreaterThan(distance, 35, "Both gallery rows must occupy distinct vertical positions.")
+            return distance
         }
 
         setLayout("列表")
@@ -123,6 +128,14 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertTrue(secondCard.waitForExistence(timeout: 8))
         XCTAssertEqual(firstCard.frame.midY, secondCard.frame.midY, accuracy: 6)
         XCTAssertLessThan(firstCard.frame.maxX, secondCard.frame.minX)
+        let originalGridY = firstCard.frame.midY
+
+        func confirmGridAnchor() {
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == YES"), object: firstCard)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 6), .completed)
+            XCTAssertEqual(firstCard.frame.midY, originalGridY, accuracy: 4,
+                           "Returning must preserve the original grid row's vertical anchor.")
+        }
 
         secondCard.tap()
         let detailRead = app.buttons["gallery-detail-read"].firstMatch
@@ -136,6 +149,7 @@ final class SettingsControlsRegressionUITests: XCTestCase {
             back(in: app)
         }
         XCTAssertTrue(secondCard.waitForExistence(timeout: 6))
+        confirmGridAnchor()
 
         // A card retains the item's existing long-press actions.
         firstCard.press(forDuration: 0.8)
@@ -148,7 +162,7 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         }
         XCTAssertTrue(close.waitForExistence(timeout: 6))
         close.tap()
-        XCTAssertTrue(firstCard.waitForExistence(timeout: 6))
+        confirmGridAnchor()
         XCTAssertEqual(firstCard.frame.midY, secondCard.frame.midY, accuracy: 6)
 
         // Keep the shared simulator's settings neutral for other tests.
