@@ -44,6 +44,23 @@ struct MainTabView: View {
     private var active: WorkspaceLayer { workspaces.last! }
 
     var body: some View {
+        workspaceSurface
+            #if os(iOS)
+            .allowsHitTesting(!isDirectReaderPresented)
+            .accessibilityHidden(isDirectReaderPresented)
+            // The reader covers the workspace and its chrome without changing
+            // their safe-area layout or the last scroll-driven chrome state.
+            .overlay {
+                if let gallery = directReaderGallery {
+                    ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
+                                    galleryHint: gallery, onRequestClose: { directReaderGallery = nil })
+                        .id(gallery.gid)
+                }
+            }
+            #endif
+    }
+
+    private var workspaceSurface: some View {
         GeometryReader { geometry in
             #if os(iOS)
             let compact = !ResponsiveLayout.usesTabSidebar(width: geometry.size.width)
@@ -85,7 +102,7 @@ struct MainTabView: View {
                     .allowsHitTesting(current && downloadSetup == nil && !isDirectReaderPresented)
                     .accessibilityElement(children: .contain)
                     .accessibilityHidden(!current || downloadSetup != nil || isDirectReaderPresented)
-                    .ehSuspendTabBarDriver(!current || isDirectReaderPresented)
+                    .ehSuspendTabBarDriver(!current)
                     .environment(\.ehWorkspaceIsActive, current)
                     .environment(\.ehTagWorkspaceNavigation, TagWorkspaceNavigation { route in
                         guard active.id == workspace.id, !isDirectReaderPresented else { return }
@@ -118,18 +135,7 @@ struct MainTabView: View {
                 }
             }
             #if os(iOS)
-            // Fullscreen destinations do not belong to the sliding/clipped
-            // workspace layer. Read the unmodified window safe area here.
-            .overlay {
-                if let gallery = directReaderGallery {
-                    ImageReaderView(gid: gallery.gid, token: gallery.token, pages: gallery.pages,
-                                    galleryHint: gallery, onRequestClose: { directReaderGallery = nil })
-                        .id(gallery.gid)
-                }
-            }
-            .transformPreference(EhHidesTabBarKey.self) {
-                $0 = $0 || downloadSetup != nil || isDirectReaderPresented
-            }
+            .transformPreference(EhHidesTabBarKey.self) { $0 = $0 || downloadSetup != nil }
             .ehFloatingTabBar(
                 items: MainTab.bottomTabs.map {
                     .init(value: $0, title: $0.rawValue, symbol: $0.icon, selectedSymbol: $0.filledIcon)
