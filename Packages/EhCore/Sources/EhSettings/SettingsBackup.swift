@@ -90,6 +90,18 @@ public enum SettingsBackup {
         return try JSONSerialization.data(withJSONObject: archive, options: .prettyPrinted)
     }
 
+    /// Restore the active app's settings and publish changed website preferences
+    /// only after the entire archive has been validated and applied.
+    @MainActor
+    public static func restoreAppJSON(_ data: Data) throws -> RestoreReport {
+        let previous = EhConfigSync.Preferences(settings: .shared)
+        let report = try restoreJSON(data, into: .standard)
+        if previous != EhConfigSync.Preferences(settings: .shared) {
+            EhConfigSync.apply()
+        }
+        return report
+    }
+
     public static func restoreJSON(_ data: Data, into defaults: UserDefaults) throws -> RestoreReport {
         guard let archive = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RestoreError.notJSONObject
@@ -115,6 +127,20 @@ public enum SettingsBackup {
             }
             guard kind.accepts(value) else { throw RestoreError.invalidValue(key: key) }
             updates[key] = value
+        }
+
+        // An online-only restore should not change the inherited download
+        // quality. Explicit or legacy download fields retain their archive behavior.
+        if let raw = updates["image_resolution"] as? String,
+           updates["default_download_quality"] == nil, updates["download_origin_image"] == nil,
+           defaults.string(forKey: "default_download_quality").flatMap(DownloadQuality.init(rawValue:)) == nil {
+            let previous = defaults.string(forKey: "image_resolution").flatMap(ImageResolution.init(rawValue:)) ?? .auto
+            let incoming = ImageResolution(rawValue: raw) ?? .auto
+            if incoming != previous {
+                let inherited = defaults.bool(forKey: "download_origin_image") ? .original
+                    : (DownloadQuality(rawValue: previous.rawValue) ?? .auto)
+                defaults.set(inherited.rawValue, forKey: "default_download_quality")
+            }
         }
 
         // Overlay only the recognized incoming values; absent preferences are untouched.

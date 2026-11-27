@@ -1,8 +1,62 @@
 import EhSettings
 import Foundation
 import Testing
+@testable import ehviewer_apple
 
 struct SettingsBackupTests {
+    @MainActor
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["EH_OFFLINE_UNIT_TEST_HOST"] == "1"))
+    func appRestoreUpdatesWebsiteCookiesWithoutChangingDownloadDefault() throws {
+        try #require(EhUnitTestHost.isOffline)
+        let store = UserDefaults.standard
+        let keys = ["image_resolution", "thumb_resolution", "default_download_quality", "download_origin_image", "theme"]
+        let previous = keys.map { ($0, store.object(forKey: $0)) }
+        let jar = HTTPCookieStorage.shared
+        let sites = [URL(string: "https://e-hentai.org/")!, URL(string: "https://exhentai.org/")!]
+        func cookies() -> [HTTPCookie] {
+            sites.flatMap { jar.cookies(for: $0) ?? [] }.filter { $0.name == "uconfig" }
+        }
+        let oldCookies = cookies()
+        defer {
+            for (key, value) in previous { store.set(value, forKey: key) }
+            EhConfigSync.apply()
+            for cookie in cookies() { jar.deleteCookie(cookie) }
+            for cookie in oldCookies { jar.setCookie(cookie) }
+        }
+
+        store.set("780", forKey: "image_resolution")
+        store.set(0, forKey: "thumb_resolution")
+        store.set(false, forKey: "download_origin_image")
+        store.removeObject(forKey: "default_download_quality")
+        EhConfigSync.apply()
+        let baseline = cookies().map(\.value)
+        try #require(baseline.count == 2)
+        #expect(baseline.allSatisfy { $0.split(separator: "-").contains("xr_780") })
+        #expect(AppSettings.shared.defaultDownloadQuality == .x780)
+
+        let invalid = Data(#"{"image_resolution":"1600","thumb_resolution":"bad"}"#.utf8)
+        #expect(throws: SettingsBackup.RestoreError.invalidValue(key: "thumb_resolution")) {
+            _ = try SettingsBackup.restoreAppJSON(invalid)
+        }
+        #expect(cookies().map(\.value) == baseline)
+        #expect(store.string(forKey: "default_download_quality") == nil)
+
+        _ = try SettingsBackup.restoreAppJSON(Data(#"{"theme":2}"#.utf8))
+        #expect(cookies().map(\.value) == baseline)
+
+        let accepted = try SettingsBackup.restoreAppJSON(Data(#"{"image_resolution":"1600","thumb_resolution":1}"#.utf8))
+        #expect(accepted.appliedCount == 2)
+        #expect(AppSettings.shared.imageResolution == .x1600)
+        #expect(AppSettings.shared.defaultDownloadQuality == .x780)
+        let current = cookies().map { $0.value.split(separator: "-") }
+        #expect(current.count == 2)
+        #expect(current.allSatisfy { $0.contains("xr_1600") && $0.contains("tp_l") })
+
+        _ = try SettingsBackup.restoreAppJSON(Data(#"{"default_download_quality":"original"}"#.utf8))
+        #expect(AppSettings.shared.defaultDownloadQuality == .original)
+        #expect(cookies().map { $0.value.split(separator: "-") } == current)
+    }
+
     @Test func exportKeepsTheFlatArchiveKeysAndValues() throws {
         try withIsolatedDefaults { defaults in
             // The shipped archive contract, not a list derived from the new implementation.

@@ -18,34 +18,37 @@ public enum EhConfigSync {
     private static let cookieName = EhConfig.keyUconfig
     private static let domains = [".e-hentai.org", ".exhentai.org"]
 
+    // This is both the restore-change check and the mapping used to publish a
+    // configuration. Download quality is deliberately not part of it.
+    struct Preferences: Equatable {
+        var imageSize: String
+        var excludedLanguages: String
+        var excludedNamespaces: Int
+        var defaultCategories: Int
+        var previewSize: String
+        var galleryTitle: String
+
+        @MainActor
+        init(settings: AppSettings) {
+            imageSize = settings.imageResolution.rawValue
+            excludedLanguages = settings.excludedLanguages ?? ""
+            excludedNamespaces = settings.excludedTagNamespaces
+            defaultCategories = settings.defaultCategories
+            previewSize = settings.thumbResolution == 0 ? EhConfig.previewSizeNormal : EhConfig.previewSizeLarge
+            galleryTitle = settings.showJpnTitle ? EhConfig.galleryTitleJapanese : EhConfig.galleryTitleDefault
+        }
+    }
+
     /// 把当前 AppSettings 映射进 EhConfig 并写入 uconfig Cookie
-    ///
-    /// 需要在 App 启动、以及任何相关设置变更后调用。
     public static func apply() {
-        let settings = AppSettings.shared
+        let preferences = Preferences(settings: .shared)
         let config = EhConfig.shared
-
-        // 图片分辨率 (xr)
-        config.imageSize = settings.imageResolution.rawValue
-
-        // 排除语言 (xl) —— 形如 "1x-2x-3"，服务端自己解析
-        config.excludedLanguages = settings.excludedLanguages ?? ""
-
-        // 排除标签命名空间 (xns) —— 位掩码
-        config.excludedNamespaces = settings.excludedTagNamespaces
-
-        // 默认分类 (cats) —— 位掩码，语义是"要排除的分类"
-        config.defaultCategories = settings.defaultCategories
-
-        // 预览尺寸 (tp): 0 = 普通, 其它 = 大图
-        config.previewSize = settings.thumbResolution == 0
-            ? EhConfig.previewSizeNormal
-            : EhConfig.previewSizeLarge
-
-        // 标题语言跟随"显示日文标题"设置
-        config.galleryTitle = settings.showJpnTitle
-            ? EhConfig.galleryTitleJapanese
-            : EhConfig.galleryTitleDefault
+        config.imageSize = preferences.imageSize
+        config.excludedLanguages = preferences.excludedLanguages
+        config.excludedNamespaces = preferences.excludedNamespaces
+        config.defaultCategories = preferences.defaultCategories
+        config.previewSize = preferences.previewSize
+        config.galleryTitle = preferences.galleryTitle
 
         config.setDirty()
         writeCookie(config.uconfig())

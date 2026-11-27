@@ -1105,7 +1105,7 @@ struct SettingsView: View {
         do {
             let data = try Data(contentsOf: url)
             let previousReadCacheSize = AppSettings.shared.readCacheSize
-            let report = try SettingsBackup.restoreJSON(data, into: .standard)
+            let report = try SettingsBackup.restoreAppJSON(data)
             var message: String
             if report.appliedCount > 0 {
                 vm.reloadSettingsAfterBackupImport()
