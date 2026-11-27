@@ -160,18 +160,26 @@ extension View {
 /// retained tabs cannot clear another list's decision when they disappear.
 @MainActor @Observable
 final class EhTabBarScrollVisibility {
-    private(set) var hiddenOwner: UUID?
+    private struct Hidden: Equatable {
+        let owner: UUID
+        let fillsWindow: Bool
+    }
 
-    func setHidden(_ hidden: Bool, owner: UUID) {
-        if hidden {
-            if hiddenOwner != owner { hiddenOwner = owner }
+    private var hidden: Hidden?
+    var hiddenOwner: UUID? { hidden?.owner }
+    var fillsWindow: Bool { hidden?.fillsWindow == true }
+
+    func setHidden(_ shouldHide: Bool, owner: UUID, fillsWindow: Bool = false) {
+        if shouldHide {
+            let next = Hidden(owner: owner, fillsWindow: fillsWindow)
+            if hidden != next { hidden = next }
         } else if hiddenOwner == owner {
-            hiddenOwner = nil
+            hidden = nil
         }
     }
 
     func reset() {
-        if hiddenOwner != nil { hiddenOwner = nil }
+        if hidden != nil { hidden = nil }
     }
 }
 
@@ -188,32 +196,47 @@ extension EnvironmentValues {
 
 extension View {
     /// Hide when advancing through a list and reveal on reverse scrolling.
-    func ehTabBarAutoHide(enabled: Bool = true) -> some View {
-        modifier(EhTabBarAutoHideModifier(enabled: enabled))
+    func ehTabBarAutoHide(enabled: Bool = true, fillsWindow: Bool = false) -> some View {
+        modifier(EhTabBarAutoHideModifier(enabled: enabled, fillsWindow: fillsWindow))
     }
 }
 
 private struct EhTabBarAutoHideModifier: ViewModifier {
     let enabled: Bool
+    let fillsWindow: Bool
     @Environment(\.ehTabBarDriverActive) private var driverIsActive
     @Environment(\.ehTabBarScrollVisibility) private var visibility
     @State private var owner = UUID()
     @State private var lastOffset: CGFloat?
     @State private var isUserScrolling = false
 
+    private struct ScrollSample: Equatable {
+        let offset: CGFloat
+        let viewportHeight: CGFloat
+        let topInset: CGFloat
+        let bottomInset: CGFloat
+
+        func sameLayout(as other: Self) -> Bool {
+            abs(viewportHeight - other.viewportHeight) < 1 &&
+                abs(topInset - other.topInset) < 1 && abs(bottomInset - other.bottomInset) < 1
+        }
+    }
+
     private var active: Bool { enabled && driverIsActive && visibility != nil }
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 18, *) {
-            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+            content.onScrollGeometryChange(for: ScrollSample.self) { geometry in
                 // Bound overscroll; releasing a bounce must not count as
                 // scrolling in the opposite direction.
                 let maxOffset = max(0, geometry.contentSize.height + geometry.contentInsets.top
                                     + geometry.contentInsets.bottom - geometry.containerSize.height)
-                return min(max(0, geometry.contentOffset.y + geometry.contentInsets.top), maxOffset)
-            } action: { old, offset in
-                recordOffset(offset, previous: old)
+                return ScrollSample(offset: min(max(0, geometry.contentOffset.y + geometry.contentInsets.top), maxOffset),
+                                    viewportHeight: geometry.containerSize.height, topInset: geometry.contentInsets.top,
+                                    bottomInset: geometry.contentInsets.bottom)
+            } action: { old, next in
+                recordOffset(next.offset, previous: old.offset, viewportChanged: !next.sameLayout(as: old))
             }
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .decelerating
@@ -226,7 +249,7 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
         }
     }
 
-    private func recordOffset(_ offset: CGFloat, previous: CGFloat) {
+    private func recordOffset(_ offset: CGFloat, previous: CGFloat, viewportChanged: Bool) {
         guard active else { return }
         if offset < 40 {
             lastOffset = offset
@@ -235,14 +258,14 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
         }
         // Ignore programmatic reselect/restore and layout shifts caused by
         // collapsing the header or changing the container's insets.
-        guard isUserScrolling else {
+        guard isUserScrolling && !viewportChanged else {
             lastOffset = offset
             return
         }
         let delta = offset - (lastOffset ?? previous)
         guard abs(delta) > 12 else { return }
         lastOffset = offset
-        visibility?.setHidden(delta > 0, owner: owner)
+        visibility?.setHidden(delta > 0, owner: owner, fillsWindow: fillsWindow)
     }
 
     private func clear() {
@@ -310,18 +333,9 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
             .onChange(of: selection) { _, _ in scrollVisibility.reset() }
             .onChange(of: enablesScrollChrome) { _, _ in scrollVisibility.reset() }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isEnabled && !isHiddenByDestination {
-                    // Keep the list's viewport steady while the bar animates.
-                    // Changing the safe-area height would look like more scroll
-                    // geometry changes and perturb the current scroll position.
-                    Color.clear
-                        .frame(height: EhSize.tabBarHeight + EhSize.tabBarBottomInset)
-                        .overlay(alignment: .top) {
-                            if !shouldHide {
-                                EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
-                                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                            }
-                        }
+                if !shouldHide {
+                    EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             // 键盘弹出时不要把导航条顶起来——它应该留在原地被键盘盖住。

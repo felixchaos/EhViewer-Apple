@@ -413,7 +413,7 @@ struct GalleryListView: View {
 
     private var hidesCompactBrowseHeader: Bool {
         #if os(iOS)
-        browseSource != nil && !isSearchFocused && compactScrollVisibility?.hiddenOwner != nil
+        browseSource != nil && !isSearchFocused && compactScrollVisibility?.fillsWindow == true
         #else
         false
         #endif
@@ -768,7 +768,8 @@ struct GalleryListView: View {
         }
         .listStyle(.plain)
         #if os(iOS)
-        .ehTabBarAutoHide(enabled: !isBatchSelecting)
+        .ignoresSafeArea(.container, edges: hidesCompactBrowseHeader ? [.top, .bottom] : [])
+        .ehTabBarAutoHide(enabled: !isBatchSelecting, fillsWindow: browseSource != nil)
         .scrollDismissesKeyboard(.immediately)
         #endif
         .refreshable {
