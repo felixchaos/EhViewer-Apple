@@ -113,6 +113,9 @@ enum EhOfflineUIFixture {
     )
 
     static func seed() {
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_READ_CACHE_LIMIT"] == "1" {
+            seedReadingCacheLimit()
+        }
         seedColdReader()
         AppSettings.shared.recentFavCat = -1
         AppSettings.shared.defaultFavSlot = -1
@@ -177,6 +180,23 @@ enum EhOfflineUIFixture {
         if let identifier = ProcessInfo.processInfo.environment["EH_FIXTURE_IMPORT"],
            UUID(uuidString: identifier) != nil {
             seedImportScenario(identifier: identifier)
+        }
+    }
+
+    private static func seedReadingCacheLimit() {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("spider_image", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent("fixture-live-cache-limit")
+            try Data().write(to: file, options: .atomic)
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: 41 * 1024 * 1024)
+            AppSettings.shared.readCacheSize = 80
+            SpiderDen.initialize()
+        } catch {
+            print("[OfflineFixture] Failed to seed cache limit: \(error)")
         }
     }
 

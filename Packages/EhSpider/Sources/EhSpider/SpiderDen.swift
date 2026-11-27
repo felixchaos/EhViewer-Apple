@@ -19,9 +19,6 @@ public actor SpiderDen {
     /// 支持的图片扩展名
     public static let supportedExtensions = [".jpg", ".png", ".gif", ".webp", ".jpeg"]
 
-    /// 默认缓存大小 (320MB)
-    private static let defaultCacheSize = 320 * 1024 * 1024
-
     // MARK: - 属性
 
     private let gid: Int64
@@ -60,11 +57,9 @@ public actor SpiderDen {
         // 创建缓存目录
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
 
-        // 读取缓存大小配置 (40-640MB)
-        let cacheSizeMB = min(max(AppSettings.shared.readCacheSize, 40), 640)
-        let cacheSize = cacheSizeMB * 1024 * 1024
-
-        let cache = SimpleDiskCache(directory: cacheDir, maxSize: cacheSize)
+        let cache = SimpleDiskCache(directory: cacheDir, capacity: {
+            AppSettings.shared.readCacheSize * 1024 * 1024
+        })
         _readCacheLock.lock()
         _readCache = cache
         _readCacheLock.unlock()
@@ -120,6 +115,12 @@ public actor SpiderDen {
             total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
         return total
+    }
+
+    /// Apply the current preference on the cache queue; callers can refresh
+    /// the displayed usage once trimming has finished.
+    public static func applyReadCacheLimit() async -> Int64? {
+        await readCache?.trimForCurrentCapacity()
     }
 
     /// 清空整个阅读缓存
@@ -505,15 +506,22 @@ public enum SpiderMode: Sendable {
 /// 审计修复 C-1: 所有文件系统操作统一在 queue 上执行，消除数据竞争
 final class SimpleDiskCache: @unchecked Sendable {
     private let directory: URL
-    private let maxSize: Int
+    private let capacity: @Sendable () -> Int
     private let queue: DispatchQueue
 
-    init(
+    convenience init(
         directory: URL, maxSize: Int,
         queue: DispatchQueue = DispatchQueue(label: "com.ehviewer.spider.cache", qos: .utility)
     ) {
+        self.init(directory: directory, capacity: { maxSize }, queue: queue)
+    }
+
+    init(
+        directory: URL, capacity: @escaping @Sendable () -> Int,
+        queue: DispatchQueue = DispatchQueue(label: "com.ehviewer.spider.cache", qos: .utility)
+    ) {
         self.directory = directory
-        self.maxSize = maxSize
+        self.capacity = capacity
         self.queue = queue
 
         // 异步清理过大的缓存
@@ -624,20 +632,29 @@ final class SimpleDiskCache: @unchecked Sendable {
         return directory.appendingPathComponent(String(hash))
     }
 
+    func trimForCurrentCapacity() async -> Int64? {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.trimToSize()) }
+        }
+    }
+
     /// 清理缓存至目标大小
-    private func trimToSize() {
+    @discardableResult
+    private func trimToSize() -> Int64? {
         do {
-            let files = try FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
-            )
+            // The preference is read on the queue, not captured by a Settings
+            // task, so delayed work cannot restore an obsolete limit.
+            let maxSize = max(0, capacity())
+            let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey]
+            let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys))
 
             // 计算总大小
             var totalSize = 0
             var fileInfos: [(url: URL, size: Int, date: Date)] = []
 
             for file in files {
-                let attributes = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                guard let attributes = try? file.resourceValues(forKeys: keys),
+                      attributes.isRegularFile == true, attributes.isSymbolicLink != true else { continue }
                 let size = attributes.fileSize ?? 0
                 let date = attributes.contentModificationDate ?? .distantPast
                 totalSize += size
@@ -650,16 +667,22 @@ final class SimpleDiskCache: @unchecked Sendable {
                 fileInfos.sort { $0.date < $1.date }
 
                 let targetSize = maxSize * 3 / 4  // 清理到 75%
-                var currentSize = totalSize
-
                 for info in fileInfos {
-                    if currentSize <= targetSize { break }
-                    try? FileManager.default.removeItem(at: info.url)
-                    currentSize -= info.size
+                    if totalSize <= targetSize { break }
+                    do {
+                        try FileManager.default.removeItem(at: info.url)
+                        totalSize -= info.size
+                    } catch {
+                        // A blocked entry must not make the reported usage
+                        // look lower than it is.
+                        continue
+                    }
                 }
             }
+            return Int64(totalSize)
         } catch {
             print("[SimpleDiskCache] Failed to trim cache: \(error)")
+            return nil
         }
     }
 }

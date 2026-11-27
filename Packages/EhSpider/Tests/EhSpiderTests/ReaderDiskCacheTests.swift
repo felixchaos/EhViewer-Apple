@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import os
 @testable import EhSpider
 
 @Suite struct ReaderDiskCacheTests {
@@ -118,6 +119,72 @@ import Testing
         #expect(await cache.getDataAsync(forKey: "page") == Data([2]))
         #expect(await cache.setAsync(Data([3]), forKey: "page"))
         #expect(await cache.getDataAsync(forKey: "page") == Data([3]))
+    }
+
+    @Test func reducingTheLiveLimitTrimsOnlyOldCacheFilesAndReturnsMeasuredUsage() async throws {
+        let directory = try makeCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capacity = OSAllocatedUnfairLock(initialState: 100)
+        let queue = DispatchQueue(label: "ehviewer.test.resize-cache")
+        let cache = SimpleDiskCache(directory: directory, capacity: { capacity.withLock { $0 } }, queue: queue)
+        let untracked = directory.appendingPathComponent("untracked", isDirectory: true)
+        try FileManager.default.createDirectory(at: untracked, withIntermediateDirectories: false)
+        let protected = untracked.appendingPathComponent("retained")
+        try Data([10]).write(to: protected)
+        let old = Data(repeating: 7, count: 6)
+        let new = Data(repeating: 8, count: 6)
+        #expect(cache.set(old, forKey: "older-page"))
+        #expect(cache.set(new, forKey: "newer-page"))
+        try queue.sync {
+            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            where file.lastPathComponent != untracked.lastPathComponent {
+                let timestamp = try Data(contentsOf: file) == old ? 1_000.0 : 2_000.0
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: timestamp)], ofItemAtPath: file.path
+                )
+            }
+        }
+        capacity.withLock { $0 = 8 }
+        #expect(await cache.trimForCurrentCapacity() == 6)
+        #expect(cache.getData(forKey: "older-page") == nil)
+        #expect(cache.getData(forKey: "newer-page") == new)
+        #expect(try Data(contentsOf: protected) == Data([10]))
+
+        capacity.withLock { $0 = 20 }
+        #expect(cache.set(old, forKey: "added-after-increase"))
+        #expect(await cache.trimForCurrentCapacity() == 12)
+        #expect(cache.getData(forKey: "newer-page") == new)
+        #expect(cache.getData(forKey: "added-after-increase") == old)
+    }
+
+    @MainActor @Test func queuedRefreshUsesTheLatestLimitWithoutBlockingTheUI() async throws {
+        let directory = try makeCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capacity = OSAllocatedUnfairLock(initialState: 100)
+        let queue = DispatchQueue(label: "ehviewer.test.latest-cache-limit")
+        let cache = SimpleDiskCache(directory: directory, capacity: { capacity.withLock { $0 } }, queue: queue)
+        #expect(cache.set(Data([1,2,3,4,5,6]), forKey: "page"))
+        let gate = DispatchSemaphore(value: 0)
+        let progressed = AsyncStream<Bool>.makeStream()
+        queue.async {
+            progressed.continuation.yield(gate.wait(timeout: .now() + 5) == .success)
+            progressed.continuation.finish()
+        }
+        capacity.withLock { $0 = 4 }
+        let started = AsyncStream<Void>.makeStream()
+        let resize = Task { @MainActor in
+            started.continuation.yield(())
+            started.continuation.finish()
+            return await cache.trimForCurrentCapacity()
+        }
+        var readiness = started.stream.makeAsyncIterator()
+        _ = await readiness.next()
+        capacity.withLock { $0 = 8 }
+        gate.signal()
+        var completion = progressed.stream.makeAsyncIterator()
+        #expect(await completion.next() == true)
+        #expect(await resize.value == 6)
+        #expect(cache.contains(key: "page"))
     }
 
     private func makeCacheDirectory() throws -> URL {

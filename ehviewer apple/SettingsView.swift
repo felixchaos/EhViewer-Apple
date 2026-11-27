@@ -940,7 +940,11 @@ struct SettingsView: View {
             // 阅读缓存大小 (对齐 Android Settings.KEY_READ_CACHE_SIZE)
             Picker("阅读缓存大小", selection: Binding(
                 get: { AppSettings.shared.readCacheSize },
-                set: { AppSettings.shared.readCacheSize = $0 }
+                set: {
+                    guard $0 != AppSettings.shared.readCacheSize else { return }
+                    AppSettings.shared.readCacheSize = $0
+                    Task { await vm.applyReaderCacheLimit() }
+                }
             )) {
                 Text("40 MB").tag(40)
                 Text("80 MB").tag(80)
@@ -951,6 +955,7 @@ struct SettingsView: View {
                 Text("480 MB").tag(480)
                 Text("640 MB").tag(640)
             }
+            .accessibilityIdentifier("settings-reader-cache-capacity")
 
             Text("再次阅读时复用缓存。超出上限时优先清除最旧图片；系统存储不足时可清除缓存。")
                 .font(.caption)
@@ -961,6 +966,7 @@ struct SettingsView: View {
                 Spacer()
                 Text(vm.readCacheUsage)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings-reader-cache-usage")
             }
 
             Button("清空阅读缓存") {
@@ -1092,10 +1098,14 @@ struct SettingsView: View {
 
         do {
             let data = try Data(contentsOf: url)
+            let previousReadCacheSize = AppSettings.shared.readCacheSize
             let report = try SettingsBackup.restoreJSON(data, into: .standard)
             var message: String
             if report.appliedCount > 0 {
                 vm.reloadSettingsAfterBackupImport()
+                if previousReadCacheSize != AppSettings.shared.readCacheSize {
+                    Task { await vm.applyReaderCacheLimit() }
+                }
                 message = "已导入 \(report.appliedCount) 项设置。"
             } else {
                 message = "没有可恢复的设置，未更改现有设置。"
@@ -1791,6 +1801,16 @@ class SettingsViewModel {
         byteFormatter.countStyle = .file
         diskCacheSize = byteFormatter.string(fromByteCount: Int64(URLCache.shared.currentDiskUsage))
         readCacheUsage = byteFormatter.string(fromByteCount: SpiderDen.readCacheUsage())
+    }
+
+    func applyReaderCacheLimit() async {
+        let requestedSize = AppSettings.shared.readCacheSize
+        guard let bytes = await SpiderDen.applyReadCacheLimit(),
+              requestedSize == AppSettings.shared.readCacheSize else { return }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB]
+        formatter.countStyle = .file
+        readCacheUsage = formatter.string(fromByteCount: bytes)
     }
 
     func refreshCacheSizes() { calculateCacheSize() }
