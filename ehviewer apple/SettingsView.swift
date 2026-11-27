@@ -961,6 +961,7 @@ struct SettingsView: View {
                 Text("640 MB").tag(640)
             }
             .accessibilityIdentifier("settings-reader-cache-capacity")
+            .accessibilityValue(Text("\(AppSettings.shared.readCacheSize) MB"))
 
             Text("再次阅读时复用缓存。超出上限时优先清除最旧图片；系统存储不足时可清除缓存。")
                 .font(.caption)

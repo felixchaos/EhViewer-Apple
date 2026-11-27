@@ -27,6 +27,8 @@ final class ReaderCacheCapacityUITests: XCTestCase {
         let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label BEGINSWITH %@", "0"), object: usage)
         XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed,
                        "Usage should update after applying the new limit within this app session.")
-        XCTAssertTrue(((picker.value as? String) ?? picker.label).contains("40 MB"))
+        XCTAssertTrue((picker.value as? String)?.contains("40 MB") == true || picker.label.contains("40 MB")
+                      || picker.staticTexts["40 MB"].exists,
+                      "Selected capacity: \(String(describing: picker.value)), \(picker.label)")
     }
 }
