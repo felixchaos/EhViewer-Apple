@@ -1,6 +1,44 @@
 import XCTest
+import UIKit
 
 final class GalleryDirectReadUITests: XCTestCase {
+    @MainActor func testDirectReadCoversTopAndBottomInLightAppearance() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1"
+        app.launchEnvironment["EH_FIXTURE_SAVED_READER_PAGE"] = "1"
+        app.launchArguments += ["-theme", "1"]
+        app.launch()
+        let row = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        row.press(forDuration: 0.8)
+        let read = app.buttons["直接阅读"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 6))
+        read.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["2 / 3"].waitForExistence(timeout: 8))
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "Direct reader screen edges"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        // Outside the fitted artwork and reader HUD. Check both ends on both
+        // sides so a white edge or an accidental placement cannot pass.
+        for (x, y) in [(0.16, 0.025), (0.84, 0.025), (0.16, 0.985), (0.84, 0.985)] {
+            let rect = CGRect(x: Double(image.width) * x, y: Double(image.height) * y, width: 1, height: 1).integral
+            let sample = try XCTUnwrap(image.cropping(to: rect))
+            var rgba = [UInt8](repeating: 0, count: 4)
+            try rgba.withUnsafeMutableBytes { bytes in
+                let context = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 1, height: 1,
+                                                      bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            XCTAssertLessThanOrEqual(rgba.prefix(3).max() ?? 255, 30, "Reader edge at (\(x), \(y)): \(rgba)")
+        }
+    }
+
     @MainActor func testDirectReadRestoresSecondPageAndReturnsToTheSameRow() {
         continueAfterFailure = false
         let app = XCUIApplication()
