@@ -650,7 +650,6 @@ struct GalleryListView: View {
     private var galleryList: some View {
         // Perf P0-3: 一次性读取配置，避免每个 Row 重复读 UserDefaults
         let showJpn = AppSettings.shared.showJpnTitle
-        let fixThumb = AppSettings.shared.fixThumbUrl
         let isBatchSelecting = selectionBindings?.isSelecting.wrappedValue == true
         let presentation = AppSettings.shared.listMode
         let list = List {
@@ -712,7 +711,7 @@ struct GalleryListView: View {
                                                      ? EhColor.accent : EhColor.tertiaryLabel)
                                     .padding(.leading, EhSpacing.page)
                                 GalleryRow(
-                                    gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                    gallery: gallery, showJpnTitle: showJpn,
                                     showsContextMenu: false, presentation: presentation == .compact ? .compact : .list
                                 )
                             }
@@ -730,7 +729,7 @@ struct GalleryListView: View {
                                 NavigationLink(value: galleryDestination(gallery)) { EmptyView() }
                                     .opacity(0)
                                 GalleryRow(
-                                    gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                    gallery: gallery, showJpnTitle: showJpn,
                                     presentation: presentation,
                                     onRequestRead: onRequestDirectRead,
                                     onRequestDownload: requestDownload,
@@ -833,7 +832,7 @@ struct GalleryListView: View {
 
     private func makeGridCard(_ gallery: GalleryInfo) -> GalleryRow {
         GalleryRow(gallery: gallery, showJpnTitle: AppSettings.shared.showJpnTitle,
-                   fixThumbUrl: AppSettings.shared.fixThumbUrl, presentation: .grid,
+                   presentation: .grid,
                    onRequestRead: onRequestDirectRead, onRequestDownload: requestDownload,
                    onRequestFavorite: toggleFavorite, onTagTap: searchTag)
     }
@@ -853,7 +852,6 @@ struct GalleryListView: View {
     private var sidebarContent: some View {
         // Perf P0-3: 一次性读取配置
         let showJpn = AppSettings.shared.showJpnTitle
-        let fixThumb = AppSettings.shared.fixThumbUrl
         return VStack(spacing: 0) {
             // 搜索栏 (全宽，置于内容顶部)
             if !hidesOwnSearchBar { searchBarView }
@@ -886,7 +884,7 @@ struct GalleryListView: View {
                             }
                         } else {
                             ForEach(viewModel.galleries, id: \.gid) { gallery in
-                                GalleryRow(gallery: gallery, showJpnTitle: showJpn, fixThumbUrl: fixThumb,
+                                GalleryRow(gallery: gallery, showJpnTitle: showJpn,
                                            presentation: presentation,
                                            onRequestDownload: requestDownload,
                                            onRequestFavorite: toggleFavorite,
@@ -1757,7 +1755,6 @@ struct SimpleRatingView: View {
 struct GalleryRow: View {
     let gallery: GalleryInfo
     let showJpnTitle: Bool
-    let fixThumbUrl: Bool
     var showsContextMenu = true
     var presentation: EhSettings.ListMode = .list
     /// 由父视图处理：收藏可能需要弹收藏夹选择器，下载需要移动网络确认，
@@ -1769,32 +1766,6 @@ struct GalleryRow: View {
     var onTagTap: ((String) -> Void)? = nil
     /// 当前搜索用到的标签，命中的 chip 会排前并高亮
     var highlightedTags: Set<String> = []
-
-    /// 行的显示全部交给 EhGalleryRow(gallery:)，这里只负责把封面 URL 修正好。
-    /// 显示开关、缩略图缩放、已下载/已收藏都在那个组件里统一处理——
-    /// 放在调用方就会出现「首页有、别的页没有」。
-    private var displayGallery: GalleryInfo {
-        guard let fixed = thumbURL?.absoluteString, fixed != gallery.thumb else { return gallery }
-        var copy = gallery
-        copy.thumb = fixed
-        return copy
-    }
-
-    /// 对齐 Android EhUrl.getFixedThumbUrl: 修复缩略图 CDN 域名不可达问题
-    /// 开启时将 ehgt.org / gt0-3.ehgt.org 替换为当前站点的缩略图前缀
-    private var thumbURL: URL? {
-        guard var urlStr = gallery.thumb, !urlStr.isEmpty else { return nil }
-        if fixThumbUrl {
-            // 替换 ehgt.org 变体 (gt0.ehgt.org, gt1.ehgt.org ...)
-            let site = AppSettings.shared.gallerySite
-            let fixedPrefix = EhURL.thumbPrefix(for: site)
-            // 匹配 https://ehgt.org/ 或 https://gt[0-3].ehgt.org/
-            if let range = urlStr.range(of: "https://(?:gt\\d\\.)?ehgt\\.org/", options: .regularExpression) {
-                urlStr.replaceSubrange(range, with: fixedPrefix)
-            }
-        }
-        return URL(string: urlStr)
-    }
 
     @ViewBuilder
     var body: some View {
@@ -1810,7 +1781,7 @@ struct GalleryRow: View {
         if presentation == .grid {
             gridCard
         } else {
-            EhGalleryRow(gallery: displayGallery, onTagTap: onTagTap,
+            EhGalleryRow(gallery: gallery, onTagTap: onTagTap,
                          highlightedTags: highlightedTags, isCompact: presentation == .compact)
                 .contentShape(Rectangle())
         }
@@ -1819,7 +1790,7 @@ struct GalleryRow: View {
     private var gridCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
-                EhCoverThumbnail(url: displayGallery.thumb, size: geometry.size,
+                EhCoverThumbnail(url: gallery.thumb, size: geometry.size,
                                  category: gallery.category, language: gallery.simpleLanguage,
                                  contentMode: .fit)
             }

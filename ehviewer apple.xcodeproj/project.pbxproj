@@ -87,6 +87,7 @@
 				"ehviewer appleTests/ReaderPageExportTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
 				"ehviewer appleTests/SettingsBackupTests.swift",
+				"ehviewer appleTests/ThumbnailImageLoaderTests.swift",
 				"ehviewer appleTests/StartupGateTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 				Info.plist,
@@ -115,6 +116,7 @@
 				"ehviewer appleTests/ReaderPageExportTests.swift",
 				"ehviewer appleTests/ReaderStallTests.swift",
 				"ehviewer appleTests/SettingsBackupTests.swift",
+				"ehviewer appleTests/ThumbnailImageLoaderTests.swift",
 				"ehviewer appleTests/StartupGateTests.swift",
 				"ehviewer appleTests/ehviewer_appleTests.swift",
 			);

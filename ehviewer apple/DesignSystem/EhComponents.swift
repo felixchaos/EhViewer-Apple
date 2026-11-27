@@ -10,6 +10,7 @@
 
 import SwiftUI
 import EhModels
+import EhSettings
 
 // MARK: - 封面
 
@@ -35,7 +36,8 @@ struct EhCoverThumbnail: View {
     var contentMode: ContentMode = .fill
 
     var body: some View {
-        CachedAsyncImage(url: URL(string: url ?? ""), showProgress: false) { image in
+        CachedAsyncImage(url: url.flatMap { $0.isEmpty ? nil : URL(string: $0) }, showProgress: false,
+                         fixCoverLink: AppSettings.shared.fixThumbUrl) { image in
             image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
             EhColor.thumbnailPlaceholder

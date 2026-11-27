@@ -20,6 +20,8 @@ public actor EhAPI {
     /// 仅使用最小化 delegate 控制重定向行为
     private var imageSession: URLSession
 
+    private var thumbnailSession: URLSession
+
     /// 域名前置专用 URLSession (内置 DNS 直连 + 自定义 TLS 验证)
     /// 对应 Android: OkHttp 的 Dns 接口 (EhDns.kt) 在 socket 层用内置 IP 解析域名
     /// iOS 无等效接口，因此通过 URL 中替换 IP + Host header 保留域名 + 自定义证书验证实现
@@ -37,13 +39,16 @@ public actor EhAPI {
         try AppSettings.shared.applyProxy(draft)
         let old = session
         let oldImage = imageSession
+        let oldThumbnail = thumbnailSession
         rebuildProxiedSessions(AppSettings.shared.appliedProxy)
         old.finishTasksAndInvalidate()
         oldImage.finishTasksAndInvalidate()
+        oldThumbnail.finishTasksAndInvalidate()
     }
 
     private func rebuildProxiedSessions(_ applied: ProxySettings) {
         let proxy = applied.connectionProxyDictionary
+        thumbnailSession = URLSession(configuration: ThumbnailRequestPolicy.configuration(proxy: applied))
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -86,7 +91,9 @@ public actor EhAPI {
         // 手动代理（对齐 Android 的 proxy 设置）。没配就保持 nil，
         // 让系统按自己的规则走 VPN / 系统代理 —— 这正是原来那条
         // 「不设置 connectionProxyDictionary」注释想保住的行为。
-        let proxy = AppSettings.shared.appliedProxy.connectionProxyDictionary
+        let applied = AppSettings.shared.appliedProxy
+        let proxy = applied.connectionProxyDictionary
+        thumbnailSession = URLSession(configuration: ThumbnailRequestPolicy.configuration(proxy: applied))
         config.connectionProxyDictionary = proxy
         // 不使用 waitsForConnectivity — 立即尝试，快速失败后交由域名前置回退
         session = URLSession(configuration: config)
@@ -129,6 +136,11 @@ public actor EhAPI {
             delegate: DomainFrontingDelegate(blockRedirects: true),
             delegateQueue: nil
         )
+    }
+
+    /// Visible thumbnail requests follow the applied proxy without falling back to a direct connection.
+    public func thumbnailData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await thumbnailSession.data(for: request)
     }
 
     // MARK: - 请求辅助
