@@ -117,7 +117,9 @@ enum EhOfflineUIFixture {
     )
 
     static func seed() {
-        if ProcessInfo.processInfo.environment["EH_FIXTURE_READ_CACHE_LIMIT"] == "1" {
+        if ProcessInfo.processInfo.environment["EH_FIXTURE_READ_CACHE_CLEAR_FAILURE"] == "1" {
+            seedBlockedReadingCache()
+        } else if ProcessInfo.processInfo.environment["EH_FIXTURE_READ_CACHE_LIMIT"] == "1" {
             seedReadingCacheLimit()
         }
         seedColdReader()
@@ -190,10 +192,29 @@ enum EhOfflineUIFixture {
         }
     }
 
+    private static let blockedCacheMarker = Data("offline cache path obstruction".utf8)
+
+    private static func seedBlockedReadingCache() {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("spider_image")
+        do {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+            try blockedCacheMarker.write(to: directory)
+            SpiderDen.initialize()
+        } catch {
+            print("[OfflineFixture] Failed to obstruct the reading cache: \(error)")
+        }
+    }
+
     private static func seedReadingCacheLimit() {
         let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("spider_image", isDirectory: true)
         do {
+            if (try? Data(contentsOf: directory)) == blockedCacheMarker {
+                try FileManager.default.removeItem(at: directory)
+            }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let file = directory.appendingPathComponent("fixture-live-cache-limit")
             try Data().write(to: file, options: .atomic)

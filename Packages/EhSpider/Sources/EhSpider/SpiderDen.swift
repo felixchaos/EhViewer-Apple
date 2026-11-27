@@ -123,12 +123,10 @@ public actor SpiderDen {
         await readCache?.trimForCurrentCapacity()
     }
 
-    /// 清空整个阅读缓存
-    public static func clearReadCache() {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("spider_image")
-        try? FileManager.default.removeItem(at: dir)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    /// Empty only the reader disk cache, ordered with reader IO and trimming.
+    public static func clearReadCache() async throws {
+        guard let cache = readCache else { throw ReaderDiskCacheError.unavailable }
+        try await cache.removeAll()
     }
 
     /// 清除指定画廊的所有缓存图片 (删除画廊时调用, 避免缓存泄漏)
@@ -501,6 +499,11 @@ public enum SpiderMode: Sendable {
 
 // MARK: - SimpleDiskCache (简单磁盘缓存)
 
+enum ReaderDiskCacheError: Error {
+    case unavailable
+    case invalidDirectory
+}
+
 /// 简单的LRU磁盘缓存
 /// 对应 Android SimpleDiskCache
 /// 审计修复 C-1: 所有文件系统操作统一在 queue 上执行，消除数据竞争
@@ -630,6 +633,36 @@ final class SimpleDiskCache: @unchecked Sendable {
             .replacingOccurrences(of: "+", with: "-")
             .prefix(32) ?? key.prefix(32)
         return directory.appendingPathComponent(String(hash))
+    }
+
+    func removeAll() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            queue.async {
+                do {
+                    try self.removeAllOnCacheQueue()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func removeAllOnCacheQueue() throws {
+        let files = FileManager.default
+        // The system can purge Caches while the app is running. Recreate a
+        // missing directory without exposing an empty-root gap to other IO.
+        if !files.fileExists(atPath: directory.path) {
+            try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let attributes = try files.attributesOfItem(atPath: directory.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw ReaderDiskCacheError.invalidDirectory
+        }
+        // A cache-path symlink must never turn this into a purge of its target.
+        for item in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            try files.removeItem(at: item)
+        }
     }
 
     func trimForCurrentCapacity() async -> Int64? {

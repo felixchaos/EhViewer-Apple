@@ -189,6 +189,102 @@ import os
         #expect(cache.contains(key: "page"))
     }
 
+    @MainActor @Test func clearWaitsForOlderWritesAndPreservesFollowingWritesAndDownloads() async throws {
+        let root = try makeCacheDirectory()
+        let queue = DispatchQueue(label: "ehviewer.test.clear-reader-cache")
+        let gate = DispatchSemaphore(value: 0)
+        defer {
+            gate.signal()
+            queue.sync {}
+            try? FileManager.default.removeItem(at: root)
+        }
+        let cacheDir = root.appendingPathComponent("Caches/spider_image", isDirectory: true)
+        let download = root.appendingPathComponent("Documents/download", isDirectory: true)
+        for directory in [cacheDir, download] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let sentinel = download.appendingPathComponent("00000001.png")
+        let permanentBytes = Data([8, 7, 6])
+        try permanentBytes.write(to: sentinel)
+        let cache = SimpleDiskCache(directory: cacheDir, maxSize: 100, queue: queue)
+        #expect(cache.set(Data([1]), forKey: "old"))
+        let cachedFile = try #require(FileManager.default.contentsOfDirectory(
+            at: cacheDir, includingPropertiesForKeys: nil
+        ).first)
+        // A symlink entry in Caches must be removed without traversing it.
+        try FileManager.default.createSymbolicLink(
+            at: cacheDir.appendingPathComponent("fixture-link"), withDestinationURL: download
+        )
+
+        let priorWrite = AsyncStream<Bool>.makeStream()
+        queue.async {
+            do {
+                guard gate.wait(timeout: .now() + 5) == .success else {
+                    priorWrite.continuation.yield(false)
+                    priorWrite.continuation.finish()
+                    return
+                }
+                try Data([2]).write(to: cachedFile)
+                priorWrite.continuation.yield(true)
+            } catch {
+                priorWrite.continuation.yield(false)
+            }
+            priorWrite.continuation.finish()
+        }
+        let started = AsyncStream<Void>.makeStream()
+        let clear = Task { @MainActor in
+            started.continuation.yield()
+            started.continuation.finish()
+            try await cache.removeAll()
+        }
+        var running = started.stream.makeAsyncIterator()
+        _ = await running.next()
+        #expect(FileManager.default.fileExists(atPath: cachedFile.path),
+                "An out-of-queue clear would delete this while the earlier write is blocked.")
+        gate.signal()
+        var result = priorWrite.stream.makeAsyncIterator()
+        #expect(await result.next() == true)
+        try await clear.value
+        #expect(FileManager.default.fileExists(atPath: cacheDir.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cacheDir.path).isEmpty)
+        #expect(await cache.getDataAsync(forKey: "old") == nil)
+        #expect(await cache.setAsync(Data([3]), forKey: "later"))
+        #expect(await cache.getDataAsync(forKey: "later") == Data([3]))
+        #expect(try Data(contentsOf: sentinel) == permanentBytes)
+    }
+
+    @Test func clearRejectsBlockedAndRedirectedCacheRootsWithoutRemovingThem() async throws {
+        let root = try makeCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloads = root.appendingPathComponent("downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: false)
+        let marker = downloads.appendingPathComponent("permanent")
+        let payload = Data([6, 5, 4])
+        try payload.write(to: marker)
+        let blocked = root.appendingPathComponent("blocked")
+        try payload.write(to: blocked)
+        let redirected = root.appendingPathComponent("redirected")
+        try FileManager.default.createSymbolicLink(at: redirected, withDestinationURL: downloads)
+        for directory in [blocked, redirected] {
+            let cache = SimpleDiskCache(directory: directory, maxSize: 100)
+            await #expect(throws: ReaderDiskCacheError.self) {
+                try await cache.removeAll()
+            }
+        }
+        #expect(try Data(contentsOf: blocked) == payload)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: redirected.path) == downloads.path)
+        #expect(try Data(contentsOf: marker) == payload)
+    }
+
+    @Test func clearRecreatesAPurgedDirectoryForLaterWrites() async throws {
+        let root = try makeCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = SimpleDiskCache(directory: root.appendingPathComponent("purged"), maxSize: 100)
+        try await cache.removeAll()
+        #expect(await cache.setAsync(Data([1]), forKey: "new"))
+        #expect(await cache.getDataAsync(forKey: "new") == Data([1]))
+    }
+
     private func makeCacheDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("EhReaderDiskCache-\(UUID())", isDirectory: true)

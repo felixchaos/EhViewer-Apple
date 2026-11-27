@@ -976,9 +976,14 @@ struct SettingsView: View {
             }
 
             Button("清空阅读缓存") {
-                SpiderDen.clearReadCache()
-                vm.refreshCacheSizes()
-                EhToast.success("已清空阅读缓存")
+                Task { await vm.clearReaderCache() }
+            }
+            .disabled(vm.isClearingReaderCache)
+
+            if vm.readerCacheClearFailed {
+                Text("无法清空阅读缓存。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -1805,6 +1810,9 @@ class SettingsViewModel {
     /// 此前设置里只显示 URLCache 的占用，而阅读器的图根本不在那儿，
     /// 所以「缓存大小」这一项和用户实际感受到的占用对不上。
     var readCacheUsage: String = "计算中..."
+    private(set) var isClearingReaderCache = false
+    private(set) var readerCacheClearFailed = false
+    @ObservationIgnored private var readerCacheClearRevision = UUID()
 
     func calculateCacheSize() {
         let byteFormatter = ByteCountFormatter()
@@ -1816,7 +1824,9 @@ class SettingsViewModel {
 
     func applyReaderCacheLimit() async {
         let requestedSize = AppSettings.shared.readCacheSize
+        let revision = readerCacheClearRevision
         guard let bytes = await SpiderDen.applyReadCacheLimit(),
+              revision == readerCacheClearRevision, !isClearingReaderCache,
               requestedSize == AppSettings.shared.readCacheSize else { return }
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useMB]
@@ -1824,7 +1834,20 @@ class SettingsViewModel {
         readCacheUsage = formatter.string(fromByteCount: bytes)
     }
 
-    func refreshCacheSizes() { calculateCacheSize() }
+    func clearReaderCache() async {
+        guard !isClearingReaderCache else { return }
+        isClearingReaderCache = true
+        readerCacheClearFailed = false
+        readerCacheClearRevision = UUID()
+        defer { isClearingReaderCache = false }
+        do {
+            try await SpiderDen.clearReadCache()
+            calculateCacheSize()
+            EhToast.success("已清空阅读缓存")
+        } catch {
+            readerCacheClearFailed = true
+        }
+    }
 
     func clearCache() {
         // 清除内存缓存
