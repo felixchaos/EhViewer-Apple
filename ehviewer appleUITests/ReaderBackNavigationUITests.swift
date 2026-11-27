@@ -106,6 +106,8 @@ final class ReaderBackNavigationUITests: XCTestCase {
         }
         XCTAssertTrue(row.exists && visible.contains(row.frame.midY))
         let rowY = row.frame.midY
+        let profile = app.buttons["我的"].firstMatch
+        let startedWithChrome = profile.isHittable
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
         let read = app.buttons["直接阅读"].firstMatch
         XCTAssertTrue(read.waitForExistence(timeout: 6))
@@ -114,10 +116,18 @@ final class ReaderBackNavigationUITests: XCTestCase {
         XCTAssertTrue(waitForHit(close))
         edgeDrag(in: app, to: 0.78, velocity: .fast, hold: 0)
         XCTAssertTrue(close.waitForNonExistence(timeout: 6))
-        XCTAssertTrue(waitForHit(app.buttons["我的"].firstMatch))
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForHit(row))
         XCTAssertEqual(row.frame.midY, rowY, accuracy: 4)
         XCTAssertFalse(app.buttons["gallery-detail-back"].exists, "Direct entry goes straight back to the list.")
+        if startedWithChrome {
+            XCTAssertTrue(waitForHit(profile))
+        } else {
+            XCTAssertFalse(profile.isHittable, "Returning should preserve the pre-reader immersive state.")
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.43))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.58))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
+            XCTAssertTrue(waitForHit(profile), "A downward drag must still reveal navigation after returning.")
+        }
     }
 
     @MainActor func testResumeReaderButtonReturnsToHome() throws {
