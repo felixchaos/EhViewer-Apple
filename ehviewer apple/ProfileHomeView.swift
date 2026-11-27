@@ -53,6 +53,9 @@ struct ProfileHomeView: View {
             }
             .contentMargins(.bottom, 24 + floatingTabBarClearance, for: .scrollContent)
             .background(EhColor.groupedBackground)
+            #if os(iOS)
+            .ehTabBarAutoHide()
+            #endif
             .ehCompactHeader()
             .scrollContentBackground(.hidden)
             .navigationDestination(for: ProfileRoute.self) { route in

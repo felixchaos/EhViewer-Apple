@@ -20,17 +20,27 @@ final class CompactHomeReselectUITests: XCTestCase {
         waitUntil(first, isHittable: true)
         let startingTitle = first.label
 
-        app.swipeUp()
-        app.swipeUp()
-        waitUntil(first, isHittable: false)
-        // Even a small forward scroll away from the top must leave navigation available.
-        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.48))
-        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.56))
-        lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0)
-        waitUntil(first, isHittable: false)
+        let profileTab = app.buttons["我的"].firstMatch
+        waitUntil(profileTab, isHittable: true)
+        let source = app.buttons["热门"].firstMatch
+        waitUntil(source, isHittable: true)
 
-        // No reversing the scroll to reveal the bar. Browse still owns the selected Home tab.
-        waitUntil(app.buttons["收藏"].firstMatch, isHittable: true)
+        app.swipeUp()
+        app.swipeUp()
+        waitUntil(first, isHittable: false)
+        waitUntil(profileTab, isHittable: false)
+        waitUntil(source, isHittable: false)
+        waitUntil(search, isHittable: false)
+
+        // Reverse a short distance without reaching the first result.
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.44))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.56))
+        upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0)
+        waitUntil(first, isHittable: false)
+        waitUntil(profileTab, isHittable: true)
+        waitUntil(source, isHittable: true)
+        waitUntil(search, isHittable: true)
+
         let homeTab = app.buttons.matching(NSPredicate(format: "label == %@ AND selected == YES", "首页")).firstMatch
         waitUntil(homeTab, isHittable: true)
         homeTab.tap()
@@ -41,6 +51,35 @@ final class CompactHomeReselectUITests: XCTestCase {
         // field; assert the visible results editor rather than the first AX match.
         let applied = app.textFields.matching(NSPredicate(format: "value == %@", "offlineretap"))
         XCTAssertTrue(applied.allElementsBoundByIndex.contains(where: \.isHittable))
+    }
+
+    @MainActor func testShortBrowseListAndSearchEditorKeepChromeReachable() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Synthetic Gallery"].firstMatch.waitForExistence(timeout: 8))
+        if app.descendants(matching: .any)["adaptive-tab-sidebar"].exists {
+            throw XCTSkip("This verifies the compact Browse controls.")
+        }
+        let profile = app.buttons["我的"].firstMatch
+        let source = app.buttons["热门"].firstMatch
+        let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题")).firstMatch
+        // A bounce at either boundary of an effectively non-scrollable list
+        // must not strand either bar in its hidden state.
+        app.swipeUp()
+        app.swipeDown()
+        waitUntil(profile, isHittable: true)
+        waitUntil(source, isHittable: true)
+        waitUntil(search, isHittable: true)
+        search.tap()
+        search.typeText("fixture")
+        XCTAssertEqual(search.value as? String, "fixture")
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.34))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.47))
+        lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0)
+        waitUntil(search, isHittable: true)
+        XCTAssertEqual(search.value as? String, "fixture", "Scrolling the active editor must not clear focus or text.")
     }
 
     @MainActor func testDetailAndReaderStillKeepApplicationTabsOutOfTheWay() throws {

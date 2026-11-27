@@ -159,6 +159,9 @@ struct HistoryView: View {
             }
         }
         .listStyle(.plain)
+        #if os(iOS)
+        .ehTabBarAutoHide()
+        #endif
         .sheet(item: $pendingFavorite) { gallery in
             FavoriteSlotPicker(
                 onSelect: { slot in

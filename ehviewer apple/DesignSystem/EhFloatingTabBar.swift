@@ -156,6 +156,101 @@ extension View {
 }
 
 
+/// Holds only the active scroll driver's decision for this window. Inactive
+/// retained tabs cannot clear another list's decision when they disappear.
+@MainActor @Observable
+final class EhTabBarScrollVisibility {
+    private(set) var hiddenOwner: UUID?
+
+    func setHidden(_ hidden: Bool, owner: UUID) {
+        if hidden {
+            if hiddenOwner != owner { hiddenOwner = owner }
+        } else if hiddenOwner == owner {
+            hiddenOwner = nil
+        }
+    }
+
+    func reset() {
+        if hiddenOwner != nil { hiddenOwner = nil }
+    }
+}
+
+private struct EhTabBarScrollVisibilityKey: EnvironmentKey {
+    static let defaultValue: EhTabBarScrollVisibility? = nil
+}
+
+extension EnvironmentValues {
+    var ehTabBarScrollVisibility: EhTabBarScrollVisibility? {
+        get { self[EhTabBarScrollVisibilityKey.self] }
+        set { self[EhTabBarScrollVisibilityKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Hide when advancing through a list and reveal on reverse scrolling.
+    func ehTabBarAutoHide(enabled: Bool = true) -> some View {
+        modifier(EhTabBarAutoHideModifier(enabled: enabled))
+    }
+}
+
+private struct EhTabBarAutoHideModifier: ViewModifier {
+    let enabled: Bool
+    @Environment(\.ehTabBarDriverActive) private var driverIsActive
+    @Environment(\.ehTabBarScrollVisibility) private var visibility
+    @State private var owner = UUID()
+    @State private var lastOffset: CGFloat?
+    @State private var isUserScrolling = false
+
+    private var active: Bool { enabled && driverIsActive && visibility != nil }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+                // Bound overscroll; releasing a bounce must not count as
+                // scrolling in the opposite direction.
+                let maxOffset = max(0, geometry.contentSize.height + geometry.contentInsets.top
+                                    + geometry.contentInsets.bottom - geometry.containerSize.height)
+                return min(max(0, geometry.contentOffset.y + geometry.contentInsets.top), maxOffset)
+            } action: { old, offset in
+                recordOffset(offset, previous: old)
+            }
+            .onScrollPhaseChange { _, phase in
+                isUserScrolling = phase == .interacting || phase == .decelerating
+                if !isUserScrolling { lastOffset = nil }
+            }
+            .onChange(of: active) { _, _ in clear() }
+            .onDisappear { clear() }
+        } else {
+            content
+        }
+    }
+
+    private func recordOffset(_ offset: CGFloat, previous: CGFloat) {
+        guard active else { return }
+        if offset < 40 {
+            lastOffset = offset
+            visibility?.setHidden(false, owner: owner)
+            return
+        }
+        // Ignore programmatic reselect/restore and layout shifts caused by
+        // collapsing the header or changing the container's insets.
+        guard isUserScrolling else {
+            lastOffset = offset
+            return
+        }
+        let delta = offset - (lastOffset ?? previous)
+        guard abs(delta) > 12 else { return }
+        lastOffset = offset
+        visibility?.setHidden(delta > 0, owner: owner)
+    }
+
+    private func clear() {
+        lastOffset = nil
+        visibility?.setHidden(false, owner: owner)
+    }
+}
+
 private struct EhHomeReselectKey: EnvironmentKey {
     static let defaultValue: UUID? = nil
 }
@@ -193,20 +288,40 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
     let isEnabled: Bool
     var onReselect: ((Tab) -> Void)?
 
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHiddenByDestination = false
+    @State private var scrollVisibility = EhTabBarScrollVisibility()
 
-    // Ordinary list scrolling never removes access to other top-level destinations.
-    private var shouldHide: Bool { !isEnabled || isHiddenByDestination }
+    private var enablesScrollChrome: Bool { isEnabled && !voiceOverEnabled }
+    private var shouldHide: Bool {
+        !isEnabled || isHiddenByDestination || (enablesScrollChrome && scrollVisibility.hiddenOwner != nil)
+    }
 
     func body(content: Content) -> some View {
         content
             .environment(\.ehFloatingTabBarClearance,
                          isEnabled ? EhSize.tabBarHeight + EhSize.tabBarBottomInset : 0)
-            .onPreferenceChange(EhHidesTabBarKey.self) { isHiddenByDestination = $0 }
+            .environment(\.ehTabBarScrollVisibility, enablesScrollChrome ? scrollVisibility : nil)
+            .onPreferenceChange(EhHidesTabBarKey.self) { hidden in
+                isHiddenByDestination = hidden
+                if hidden { scrollVisibility.reset() }
+            }
+            .onChange(of: selection) { _, _ in scrollVisibility.reset() }
+            .onChange(of: enablesScrollChrome) { _, _ in scrollVisibility.reset() }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !shouldHide {
-                    EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                if isEnabled && !isHiddenByDestination {
+                    // Keep the list's viewport steady while the bar animates.
+                    // Changing the safe-area height would look like more scroll
+                    // geometry changes and perturb the current scroll position.
+                    Color.clear
+                        .frame(height: EhSize.tabBarHeight + EhSize.tabBarBottomInset)
+                        .overlay(alignment: .top) {
+                            if !shouldHide {
+                                EhFloatingTabBar(items: items, selection: $selection, onReselect: onReselect)
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+                        }
                 }
             }
             // 键盘弹出时不要把导航条顶起来——它应该留在原地被键盘盖住。
@@ -216,7 +331,7 @@ private struct EhFloatingTabBarModifier<Tab: Hashable>: ViewModifier {
             .background {
                 EhColor.background.ignoresSafeArea(.container, edges: .bottom)
             }
-            .animation(.easeInOut(duration: 0.22), value: shouldHide)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: shouldHide)
     }
 }
 

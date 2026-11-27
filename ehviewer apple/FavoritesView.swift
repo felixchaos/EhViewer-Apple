@@ -390,6 +390,9 @@ struct FavoritesView: View {
                     }
                 }
                 .listStyle(.plain)
+                #if os(iOS)
+                .ehTabBarAutoHide(enabled: !isSelectMode)
+                #endif
             }
         }
         .onAppear { loadLocalFavorites() }

@@ -1035,6 +1035,9 @@ struct DownloadsView: View {
             }
         }
         .listStyle(.plain)
+        #if os(iOS)
+        .ehTabBarAutoHide(enabled: !isSelectMode)
+        #endif
         .overlay {
             if isExporting {
                 VStack(spacing: 10) {

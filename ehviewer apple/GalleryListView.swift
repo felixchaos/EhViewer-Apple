@@ -25,6 +25,10 @@ struct GalleryListView: View {
     @Environment(\.ehTagWorkspaceNavigation) private var workspaceNavigation
     @Environment(\.ehWorkspaceIsActive) private var workspaceIsActive
     @Environment(\.ehDownloadSetupNavigation) private var downloadSetup
+    #if os(iOS)
+    @Environment(\.ehTabBarScrollVisibility) private var compactScrollVisibility
+    @Environment(\.accessibilityReduceMotion) private var reduceBrowseMotion
+    #endif
     @State private var needsSiteRefresh = false
     private var workspaceRoute: TagWorkspaceRoute?
     private var tagOriginOverride: TagWorkspaceOrigin?
@@ -407,22 +411,32 @@ struct GalleryListView: View {
         }
     }
 
+    private var hidesCompactBrowseHeader: Bool {
+        #if os(iOS)
+        browseSource != nil && !isSearchFocused && compactScrollVisibility?.hiddenOwner != nil
+        #else
+        false
+        #endif
+    }
+
     @ViewBuilder
     private var compactListBody: some View {
         VStack(spacing: 0) {
             // 顶部横向切页 — 首页/订阅/热门/排行。
             // 这四者是同一类内容的不同数据源，放在同一层级横向切换；
             // 此前热门与排行要经「更多」标签页二级跳转才能到达。
-            if let browseSource {
+            if !hidesCompactBrowseHeader, let browseSource {
                 EhTopTabs(
                     items: BrowseSource.allCases.map { ($0, $0.title) },
                     selection: browseSource
                 )
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("browse-source-categories")
             }
 
             // 排行榜的时间范围。挂在切页条下面而不是另起一屏，
             // 是因为它和「首页/订阅/热门」是同一层级的数据源筛选。
-            if let toplistPeriod {
+            if !hidesCompactBrowseHeader, let toplistPeriod {
                 EhFilterPills(
                     items: Self.toplistPeriods.map { ($0.tl, $0.title) },
                     selection: toplistPeriod
@@ -450,7 +464,7 @@ struct GalleryListView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 // 搜索栏 (全宽，置于内容顶部)
-                if !hidesOwnSearchBar {
+                if !hidesOwnSearchBar && !hidesCompactBrowseHeader {
                     searchBarView
                 }
 
@@ -462,6 +476,9 @@ struct GalleryListView: View {
                 #endif
                 withSearchFocusPanel { compactListBody }
             }
+            #if os(iOS)
+            .animation(reduceBrowseMotion ? nil : .easeInOut(duration: 0.22), value: hidesCompactBrowseHeader)
+            #endif
             #if EH_OFFLINE_UI_FIXTURE && targetEnvironment(simulator)
             .navigationDestination(for: StandaloneListFixture.self) { _ in
                 GalleryListView(mode: .home, isPushed: true)
@@ -751,6 +768,7 @@ struct GalleryListView: View {
         }
         .listStyle(.plain)
         #if os(iOS)
+        .ehTabBarAutoHide(enabled: !isBatchSelecting)
         .scrollDismissesKeyboard(.immediately)
         #endif
         .refreshable {
