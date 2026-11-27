@@ -11,7 +11,7 @@ struct EhSettingsSwitchStyle: ToggleStyle {
             HStack {
                 configuration.label
                 Spacer(minLength: 12)
-                Toggle(isOn: configuration.$isOn) { EmptyView() }
+                Toggle(isOn: .constant(configuration.isOn)) { EmptyView() }
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .allowsHitTesting(false)

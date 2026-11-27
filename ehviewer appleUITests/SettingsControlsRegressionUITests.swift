@@ -22,7 +22,7 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         let scale = picker("page-scaling", in: app)
         XCTAssertTrue(scale.waitForExistence(timeout: 5))
         let original = (scale.value as? String) ?? scale.label
-        let option = original.contains("适合宽度") ? "适合高度" : "适合宽度"
+        let option = original.contains("适应宽度") ? "适应高度" : "适应宽度"
         scale.tap()
         choose(option, in: app)
         XCTAssertTrue(reads(scale, as: option))
@@ -47,6 +47,40 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertEqual(privacy.value as? String, before)
     }
 
+    @MainActor func testReadingScaleAndCenterMatchActualReaderAfterOpening() {
+        let app = launch(localReader: true)
+        open("阅读", in: app)
+        let scale = picker("page-scaling", in: app)
+        scale.tap()
+        choose("原始大小", in: app)
+        XCTAssertTrue(reads(scale, as: "原始大小"))
+        let position = picker("start-position", in: app)
+        position.tap()
+        choose("居中", in: app)
+        XCTAssertTrue(reads(position, as: "居中"))
+        back(in: app)
+        let home = app.buttons["首页"].firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        home.tap()
+        let row = app.staticTexts["Synthetic Gallery"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        row.press(forDuration: 0.8)
+        let direct = app.buttons["直接阅读"].firstMatch
+        XCTAssertTrue(direct.waitForExistence(timeout: 6))
+        direct.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        let settings = app.buttons["reader-settings"].firstMatch
+        if !settings.waitForExistence(timeout: 4) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 6))
+        settings.tap()
+        let readerScale = app.descendants(matching: .any)["reader-picker-page-scaling"].firstMatch
+        let readerPosition = app.descendants(matching: .any)["reader-picker-start-position"].firstMatch
+        XCTAssertTrue(readerScale.waitForExistence(timeout: 5))
+        XCTAssertTrue(reads(readerScale, as: "原始大小"))
+        XCTAssertTrue(reads(readerPosition, as: "居中"))
+    }
+
     @MainActor func testThumbnailSizePickerPersistsAfterReopening() {
         let app = launch()
         open("列表与缩略图", in: app)
@@ -69,12 +103,16 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         for _ in 0..<6 where !custom.isHittable { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(custom.isHittable)
         if (custom.value as? String) == "1" { custom.tap() }
-        let slider = app.sliders.firstMatch
+        let slider = app.sliders["settings-reading-brightness"].firstMatch
         XCTAssertFalse(slider.exists)
+        // Move the toggle clear of the navigation bars, then use the
+        // settings-label area as well as the switch in the other tests.
+        if custom.frame.midY > app.frame.height * 0.78 { app.swipeUp(velocity: .slow) }
         custom.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
-        XCTAssertTrue(slider.waitForExistence(timeout: 5), "Slider must appear without leaving Settings.")
-        if !slider.isHittable { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(slider.isHittable)
+        XCTAssertEqual(custom.value as? String, "1")
+        for _ in 0..<3 where !slider.isHittable { app.swipeUp(velocity: .slow) }
+        if !slider.isHittable { print(app.debugDescription) }
+        XCTAssertTrue(slider.isHittable, "Slider must become reachable without leaving Settings.")
         slider.adjust(toNormalizedSliderPosition: 0.81)
         let saved = slider.value as? String
         XCTAssertNotNil(saved)
@@ -107,10 +145,11 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["跟随系统"].firstMatch.isSelected)
     }
 
-    @MainActor private func launch() -> XCUIApplication {
+    @MainActor private func launch(localReader: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["EH_OFFLINE_UI_FIXTURE"] = "1"
+        if localReader { app.launchEnvironment["EH_FIXTURE_LOCAL_READER"] = "1" }
         app.launch()
         let profile = app.buttons["我的"].firstMatch
         XCTAssertTrue(profile.waitForExistence(timeout: 8))

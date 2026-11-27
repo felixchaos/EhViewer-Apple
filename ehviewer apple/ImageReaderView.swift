@@ -468,8 +468,8 @@ struct ImageReaderView: View {
             if fixture.hasPrefix("spread"), !vm.isDoublePageEnabled { vm.toggleDoublePage() }
         }
         #endif
-        scaleMode = ScaleMode(rawValue: AppSettings.shared.pageScaling) ?? .fit
-        startPosition = StartPosition(rawValue: AppSettings.shared.startPosition) ?? .topRight
+        scaleMode = ScaleMode(persistedRawValue: AppSettings.shared.pageScaling)
+        startPosition = StartPosition(persistedRawValue: AppSettings.shared.startPosition)
         verticalPageInterval = AppSettings.shared.showPageInterval
 
         #if os(iOS)
@@ -1771,6 +1771,7 @@ struct ReaderSettingsSheet: View {
                             Text(mode.label).tag(mode)
                         }
                     }
+                    .accessibilityIdentifier("reader-picker-page-scaling")
                     .onChange(of: scaleMode) { _, newValue in
                         AppSettings.shared.pageScaling = newValue.rawValue
                     }
@@ -1782,6 +1783,7 @@ struct ReaderSettingsSheet: View {
                             Text(pos.label).tag(pos)
                         }
                     }
+                    .accessibilityIdentifier("reader-picker-start-position")
                     .onChange(of: startPosition) { _, newValue in
                         AppSettings.shared.startPosition = newValue.rawValue
                     }

@@ -64,6 +64,10 @@ enum ScaleMode: Int, CaseIterable {
     case fit = 3
     case fixed = 4
 
+    init(persistedRawValue value: Int) {
+        self = Self(rawValue: value) ?? .fit
+    }
+
     var label: String {
         switch self {
         case .origin: return "原始大小"
@@ -83,6 +87,12 @@ enum StartPosition: Int, CaseIterable {
     case bottomLeft = 2
     case bottomRight = 3
     case center = 4
+
+    init(persistedRawValue value: Int) {
+        // Older Settings wrote 5 for Center; all actual reader enum
+        // values keep their existing meaning without a settings rewrite.
+        self = value == 5 ? .center : (Self(rawValue: value) ?? .topRight)
+    }
 
     var label: String {
         switch self {

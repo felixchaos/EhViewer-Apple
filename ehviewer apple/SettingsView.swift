@@ -705,31 +705,25 @@ struct SettingsView: View {
                 }
             }
 
-            // 页面缩放 (对齐 Android Settings.KEY_PAGE_SCALING)
             Picker("页面缩放", selection: Binding(
-                get: { AppSettings.shared.pageScaling },
-                set: { AppSettings.shared.pageScaling = $0 }
+                get: { ScaleMode(persistedRawValue: AppSettings.shared.pageScaling) },
+                set: { AppSettings.shared.pageScaling = $0.rawValue }
             )) {
-                Text("适合屏幕").tag(0)
-                Text("适合宽度").tag(1)
-                Text("适合高度").tag(2)
-                Text("原始大小").tag(3)
-                Text("等比缩放").tag(4)
+                ForEach(ScaleMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.label).tag(mode)
+                }
             }
             .accessibilityIdentifier("settings-picker-page-scaling")
 
-            // 起始位置 (对齐 Android Settings.KEY_START_POSITION)
             Picker("起始位置", selection: Binding(
-                get: { AppSettings.shared.startPosition },
-                set: { AppSettings.shared.startPosition = $0 }
+                get: { StartPosition(persistedRawValue: AppSettings.shared.startPosition) },
+                set: { AppSettings.shared.startPosition = $0.rawValue }
             )) {
-                Text("默认").tag(0)
-                Text("顶部").tag(1)
-                Text("右上").tag(2)
-                Text("底部").tag(3)
-                Text("右下").tag(4)
-                Text("居中").tag(5)
+                ForEach(StartPosition.allCases, id: \.rawValue) { position in
+                    Text(position.label).tag(position)
+                }
             }
+            .accessibilityIdentifier("settings-picker-start-position")
 
             // 屏幕旋转 (对齐 Android Settings.KEY_SCREEN_ROTATION)
             Picker("屏幕旋转", selection: Binding(
@@ -803,6 +797,7 @@ struct SettingsView: View {
                 ), in: 0...100, step: 1) {
                     Text("亮度: \(AppSettings.shared.screenLightness)%")
                 }
+                .accessibilityIdentifier("settings-reading-brightness")
             }
 
             // 自动翻页间隔 (对齐 Android Settings.KEY_AUTO_PAGE_INTERVAL)
