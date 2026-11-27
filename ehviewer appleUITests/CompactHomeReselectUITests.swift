@@ -32,6 +32,13 @@ final class CompactHomeReselectUITests: XCTestCase {
         waitUntil(source, isHittable: false)
         waitUntil(search, isHittable: false)
 
+        let viewport = app.collectionViews.allElementsBoundByIndex.first { $0.isHittable && $0.frame.height > app.frame.height / 2 }
+        XCTAssertNotNil(viewport, "The collapsed Browse list must retain the native scroll viewport.")
+        if let viewport {
+            XCTAssertEqual(viewport.frame.minY, app.frame.minY, accuracy: 4)
+            XCTAssertEqual(viewport.frame.maxY, app.frame.maxY, accuracy: 4)
+        }
+
         // Reverse a short distance without reaching the first result.
         let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.44))
         let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.56))
@@ -68,6 +75,8 @@ final class CompactHomeReselectUITests: XCTestCase {
         // A bounce at either boundary of an effectively non-scrollable list
         // must not strand either bar in its hidden state.
         app.swipeUp()
+        waitUntil(profile, isHittable: true)
+        waitUntil(source, isHittable: true)
         app.swipeDown()
         waitUntil(profile, isHittable: true)
         waitUntil(source, isHittable: true)

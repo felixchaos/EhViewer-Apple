@@ -201,6 +201,43 @@ extension View {
     }
 }
 
+extension View {
+    /// Keep the normal status-bar boundary and horizontal workspace boundary;
+    /// only the active collapsed Browse surface can extend past the top inset.
+    func ehWorkspaceChromeClip(topOverflow: CGFloat, bottomOverflow: CGFloat) -> some View {
+        modifier(EhWorkspaceChromeClipModifier(topOverflow: topOverflow, bottomOverflow: bottomOverflow))
+    }
+}
+
+private struct EhWorkspaceChromeClipModifier: ViewModifier {
+    let topOverflow: CGFloat
+    let bottomOverflow: CGFloat
+    @Environment(\.ehTabBarScrollVisibility) private var visibility
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let fillsWindow = visibility?.fillsWindow == true
+        content.clipShape(EhWorkspaceChromeClipShape(topOverflow: fillsWindow ? topOverflow : 0,
+                                                     bottomOverflow: bottomOverflow))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: fillsWindow)
+    }
+}
+
+private struct EhWorkspaceChromeClipShape: Shape {
+    var topOverflow: CGFloat
+    let bottomOverflow: CGFloat
+
+    var animatableData: CGFloat {
+        get { topOverflow }
+        set { topOverflow = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY - topOverflow,
+                    width: rect.width, height: rect.height + topOverflow + bottomOverflow))
+    }
+}
+
 private struct EhTabBarAutoHideModifier: ViewModifier {
     let enabled: Bool
     let fillsWindow: Bool
