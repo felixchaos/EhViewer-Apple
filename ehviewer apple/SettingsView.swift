@@ -537,6 +537,7 @@ struct SettingsView: View {
                 Text("浅色").tag(1)
                 Text("深色").tag(2)
             }
+            .accessibilityIdentifier("settings-picker-theme")
 
             // 启动页面 (对齐 Android Settings.KEY_LAUNCH_PAGE)
             Picker("启动页面", selection: Binding(
@@ -601,6 +602,7 @@ struct SettingsView: View {
                 Text("中").tag(1)
                 Text("大").tag(2)
             }
+            .accessibilityIdentifier("settings-picker-thumbnail-size")
 
             // 缩略图分辨率 —— 走 uconfig Cookie (tp)
             Picker("缩略图分辨率", selection: Binding(
@@ -714,6 +716,7 @@ struct SettingsView: View {
                 Text("原始大小").tag(3)
                 Text("等比缩放").tag(4)
             }
+            .accessibilityIdentifier("settings-picker-page-scaling")
 
             // 起始位置 (对齐 Android Settings.KEY_START_POSITION)
             Picker("起始位置", selection: Binding(

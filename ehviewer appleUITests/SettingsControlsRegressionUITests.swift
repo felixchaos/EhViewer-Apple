@@ -4,7 +4,7 @@ final class SettingsControlsRegressionUITests: XCTestCase {
     @MainActor func testAppearancePickerChangesAndPersistsAfterReopening() {
         let app = launch()
         open("外观", in: app)
-        let theme = picker("主题", in: app)
+        let theme = picker("theme", in: app)
         XCTAssertTrue(theme.waitForExistence(timeout: 5))
         let original = (theme.value as? String) ?? theme.label
         let option = original.contains("深色") ? "浅色" : "深色"
@@ -16,10 +16,10 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertTrue(reads(theme, as: option))
     }
 
-    @MainActor func testReadingPickerAndPrivacySwitchPersistAfterReopening() {
+    @MainActor func testReadingPickerPersistsAfterReopening() {
         let app = launch()
         open("阅读", in: app)
-        let scale = picker("页面缩放", in: app)
+        let scale = picker("page-scaling", in: app)
         XCTAssertTrue(scale.waitForExistence(timeout: 5))
         let original = (scale.value as? String) ?? scale.label
         let option = original.contains("适合宽度") ? "适合高度" : "适合宽度"
@@ -29,7 +29,10 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         back(in: app)
         open("阅读", in: app)
         XCTAssertTrue(reads(scale, as: option))
-        back(in: app)
+    }
+
+    @MainActor func testPrivacySwitchChangesImmediatelyAndPersistsAfterReopening() {
+        let app = launch()
         open("隐私与锁定", in: app)
         let privacy = app.switches["切到后台时隐藏内容"].firstMatch
         XCTAssertTrue(privacy.waitForExistence(timeout: 5))
@@ -42,6 +45,46 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         XCTAssertEqual(privacy.value as? String, after)
         privacy.tap()
         XCTAssertEqual(privacy.value as? String, before)
+    }
+
+    @MainActor func testThumbnailSizePickerPersistsAfterReopening() {
+        let app = launch()
+        open("列表与缩略图", in: app)
+        let size = picker("thumbnail-size", in: app)
+        XCTAssertTrue(size.exists)
+        let original = (size.value as? String) ?? size.label
+        let option = original.contains("大") ? "小" : "大"
+        size.tap()
+        choose(option, in: app)
+        XCTAssertTrue(reads(size, as: option))
+        back(in: app)
+        open("列表与缩略图", in: app)
+        XCTAssertTrue(reads(size, as: option))
+    }
+
+    @MainActor func testBrightnessSwitchRevealsWorkingSliderAndPersists() {
+        let app = launch()
+        open("阅读", in: app)
+        let custom = app.switches["自定义亮度"].firstMatch
+        for _ in 0..<6 where !custom.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(custom.isHittable)
+        if (custom.value as? String) == "1" { custom.tap() }
+        let slider = app.sliders.firstMatch
+        XCTAssertFalse(slider.exists)
+        custom.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        XCTAssertTrue(slider.waitForExistence(timeout: 5), "Slider must appear without leaving Settings.")
+        if !slider.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(slider.isHittable)
+        slider.adjust(toNormalizedSliderPosition: 0.81)
+        let saved = slider.value as? String
+        XCTAssertNotNil(saved)
+        back(in: app)
+        open("阅读", in: app)
+        for _ in 0..<6 where !slider.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(slider.isHittable)
+        XCTAssertEqual(slider.value as? String, saved)
+        custom.tap()
+        XCTAssertTrue(slider.waitForNonExistence(timeout: 5))
     }
 
     @MainActor func testNetworkSegmentAndTextInputProduceUnappliedDraft() {
@@ -75,8 +118,10 @@ final class SettingsControlsRegressionUITests: XCTestCase {
         return app
     }
 
-    @MainActor private func picker(_ title: String, in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, title + ",")).firstMatch
+    @MainActor private func picker(_ key: String, in app: XCUIApplication) -> XCUIElement {
+        let element = app.descendants(matching: .any).matching(identifier: "settings-picker-"+key).firstMatch
+        if !element.waitForExistence(timeout: 4) { print(app.debugDescription) }
+        return element
     }
 
     @MainActor private func reads(_ picker: XCUIElement, as name: String) -> Bool {
@@ -90,7 +135,8 @@ final class SettingsControlsRegressionUITests: XCTestCase {
             option.tap()
         } else {
             let label = app.staticTexts[title].firstMatch
-            XCTAssertTrue(label.waitForExistence(timeout: 4), title + " not available")
+            if !label.waitForExistence(timeout: 4) { print(app.debugDescription) }
+            XCTAssertTrue(label.exists, title + " not available")
             label.tap()
         }
     }

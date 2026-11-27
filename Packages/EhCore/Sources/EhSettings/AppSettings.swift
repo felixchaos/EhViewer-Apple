@@ -20,6 +20,18 @@ public final class AppSettings: @unchecked Sendable {
     // MARK: - 辅助方法: UserDefaults 读写 + Observation 桥接
     // ──────────────────────────────────────────
     
+    // Computed UserDefaults preferences do not get observation from the
+    // macro automatically. These helpers keep settings controls and their
+    // dependent rows in sync without introducing a second source of truth.
+    private func readPreference<Value>(_ keyPath: KeyPath<AppSettings, Value>, _ read: () -> Value) -> Value {
+        access(keyPath: keyPath)
+        return read()
+    }
+
+    private func updatePreference<Value>(_ keyPath: KeyPath<AppSettings, Value>, _ write: () -> Void) {
+        withMutation(keyPath: keyPath, write)
+    }
+
     /// 读取 UserDefaults 并触发 observation access
     @ObservationIgnored
     private let _defaults: UserDefaults
@@ -82,10 +94,9 @@ public final class AppSettings: @unchecked Sendable {
 
     /// 阅读时同步下载 — 浏览未下载的画廊时，把看过的图片顺手存进下载目录
     /// (对齐 Android 上游 2026-06-16 `sync_download_while_reading`，默认关闭)
-    @ObservationIgnored
     public var syncDownloadWhileReading: Bool {
-        get { _defaults.bool(forKey: "sync_download_while_reading") }
-        set { _defaults.set(newValue, forKey: "sync_download_while_reading") }
+        get { readPreference(\.syncDownloadWhileReading) { _defaults.bool(forKey: "sync_download_while_reading") } }
+        set { updatePreference(\.syncDownloadWhileReading) { _defaults.set(newValue, forKey: "sync_download_while_reading") } }
     }
 
     @ObservationIgnored
@@ -138,13 +149,14 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     // MARK: - 缓存
-    @ObservationIgnored
     public var readCacheSize: Int {
         get {
-            let v = _defaults.object(forKey: "read_cache_size") as? Int ?? 320
-            return max(40, min(640, v))
+            readPreference(\.readCacheSize) {
+                let v = _defaults.object(forKey: "read_cache_size") as? Int ?? 320
+                return max(40, min(640, v))
+            }
         }
-        set { _defaults.set(max(40, min(640, newValue)), forKey: "read_cache_size") }
+        set { updatePreference(\.readCacheSize) { _defaults.set(max(40, min(640, newValue)), forKey: "read_cache_size") } }
     }
 
     // MARK: - 外观 (UI 联动)
@@ -254,10 +266,9 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
-    @ObservationIgnored
     public var thumbSize: Int {
-        get { _defaults.object(forKey: "thumb_size") as? Int ?? 1 }
-        set { _defaults.set(newValue, forKey: "thumb_size") }
+        get { readPreference(\.thumbSize) { _defaults.object(forKey: "thumb_size") as? Int ?? 1 } }
+        set { updatePreference(\.thumbSize) { _defaults.set(newValue, forKey: "thumb_size") } }
     }
 
     public var showGalleryPages: Bool {
@@ -330,66 +341,56 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     /// 大屏幕列表布局模式 (对齐 Android: 0=自适应双栏, 1=全宽单列表)
-    @ObservationIgnored
     public var wideScreenListMode: Int {
-        get { _defaults.integer(forKey: "wide_screen_list_mode") }
-        set { _defaults.set(newValue, forKey: "wide_screen_list_mode") }
+        get { readPreference(\.wideScreenListMode) { _defaults.integer(forKey: "wide_screen_list_mode") } }
+        set { updatePreference(\.wideScreenListMode) { _defaults.set(newValue, forKey: "wide_screen_list_mode") } }
     }
 
-    @ObservationIgnored
     public var showEhEvents: Bool {
-        get { _defaults.object(forKey: "show_eh_events") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "show_eh_events") }
+        get { readPreference(\.showEhEvents) { _defaults.object(forKey: "show_eh_events") as? Bool ?? true } }
+        set { updatePreference(\.showEhEvents) { _defaults.set(newValue, forKey: "show_eh_events") } }
     }
 
-    @ObservationIgnored
     public var showEhLimits: Bool {
-        get { _defaults.object(forKey: "show_eh_limits") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "show_eh_limits") }
+        get { readPreference(\.showEhLimits) { _defaults.object(forKey: "show_eh_limits") as? Bool ?? true } }
+        set { updatePreference(\.showEhLimits) { _defaults.set(newValue, forKey: "show_eh_limits") } }
     }
 
     // MARK: - 过滤 / 搜索
-    @ObservationIgnored
     public var defaultCategories: Int {
-        get { _defaults.object(forKey: "default_categories") as? Int ?? 0x3FF }
-        set { _defaults.set(newValue, forKey: "default_categories") }
+        get { readPreference(\.defaultCategories) { _defaults.object(forKey: "default_categories") as? Int ?? 0x3FF } }
+        set { updatePreference(\.defaultCategories) { _defaults.set(newValue, forKey: "default_categories") } }
     }
 
-    @ObservationIgnored
     public var excludedTagNamespaces: Int {
-        get { _defaults.integer(forKey: "excluded_tag_namespaces") }
-        set { _defaults.set(newValue, forKey: "excluded_tag_namespaces") }
+        get { readPreference(\.excludedTagNamespaces) { _defaults.integer(forKey: "excluded_tag_namespaces") } }
+        set { updatePreference(\.excludedTagNamespaces) { _defaults.set(newValue, forKey: "excluded_tag_namespaces") } }
     }
 
-    @ObservationIgnored
     public var excludedLanguages: String? {
-        get { _defaults.string(forKey: "excluded_languages") }
-        set { _defaults.set(newValue, forKey: "excluded_languages") }
+        get { readPreference(\.excludedLanguages) { _defaults.string(forKey: "excluded_languages") } }
+        set { updatePreference(\.excludedLanguages) { _defaults.set(newValue, forKey: "excluded_languages") } }
     }
 
-    @ObservationIgnored
     public var cellularNetworkWarning: Bool {
-        get { _defaults.bool(forKey: "cellular_network_warning") }
-        set { _defaults.set(newValue, forKey: "cellular_network_warning") }
+        get { readPreference(\.cellularNetworkWarning) { _defaults.bool(forKey: "cellular_network_warning") } }
+        set { updatePreference(\.cellularNetworkWarning) { _defaults.set(newValue, forKey: "cellular_network_warning") } }
     }
 
     // MARK: - 阅读器
-    @ObservationIgnored
     public var readingDirection: Int {
-        get { _defaults.object(forKey: "reading_direction") as? Int ?? 2 }
-        set { _defaults.set(newValue, forKey: "reading_direction") }
+        get { readPreference(\.readingDirection) { _defaults.object(forKey: "reading_direction") as? Int ?? 2 } }
+        set { updatePreference(\.readingDirection) { _defaults.set(newValue, forKey: "reading_direction") } }
     }
 
-    @ObservationIgnored
     public var pageScaling: Int {
-        get { _defaults.object(forKey: "page_scaling") as? Int ?? 3 }
-        set { _defaults.set(newValue, forKey: "page_scaling") }
+        get { readPreference(\.pageScaling) { _defaults.object(forKey: "page_scaling") as? Int ?? 3 } }
+        set { updatePreference(\.pageScaling) { _defaults.set(newValue, forKey: "page_scaling") } }
     }
 
-    @ObservationIgnored
     public var startPosition: Int {
-        get { _defaults.integer(forKey: "start_position") }
-        set { _defaults.set(newValue, forKey: "start_position") }
+        get { readPreference(\.startPosition) { _defaults.integer(forKey: "start_position") } }
+        set { updatePreference(\.startPosition) { _defaults.set(newValue, forKey: "start_position") } }
     }
 
     public var keepScreenOn: Bool {
@@ -404,40 +405,34 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
-    @ObservationIgnored
     public var readingFullscreen: Bool {
-        get { _defaults.object(forKey: "reading_fullscreen") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "reading_fullscreen") }
+        get { readPreference(\.readingFullscreen) { _defaults.object(forKey: "reading_fullscreen") as? Bool ?? true } }
+        set { updatePreference(\.readingFullscreen) { _defaults.set(newValue, forKey: "reading_fullscreen") } }
     }
 
-    @ObservationIgnored
     public var showClock: Bool {
-        get { _defaults.object(forKey: "gallery_show_clock") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "gallery_show_clock") }
+        get { readPreference(\.showClock) { _defaults.object(forKey: "gallery_show_clock") as? Bool ?? true } }
+        set { updatePreference(\.showClock) { _defaults.set(newValue, forKey: "gallery_show_clock") } }
     }
 
-    @ObservationIgnored
     public var showProgress: Bool {
-        get { _defaults.object(forKey: "gallery_show_progress") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "gallery_show_progress") }
+        get { readPreference(\.showProgress) { _defaults.object(forKey: "gallery_show_progress") as? Bool ?? true } }
+        set { updatePreference(\.showProgress) { _defaults.set(newValue, forKey: "gallery_show_progress") } }
     }
 
-    @ObservationIgnored
     public var showBattery: Bool {
-        get { _defaults.object(forKey: "gallery_show_battery") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "gallery_show_battery") }
+        get { readPreference(\.showBattery) { _defaults.object(forKey: "gallery_show_battery") as? Bool ?? true } }
+        set { updatePreference(\.showBattery) { _defaults.set(newValue, forKey: "gallery_show_battery") } }
     }
 
-    @ObservationIgnored
     public var customScreenLightness: Bool {
-        get { _defaults.bool(forKey: "custom_screen_lightness") }
-        set { _defaults.set(newValue, forKey: "custom_screen_lightness") }
+        get { readPreference(\.customScreenLightness) { _defaults.bool(forKey: "custom_screen_lightness") } }
+        set { updatePreference(\.customScreenLightness) { _defaults.set(newValue, forKey: "custom_screen_lightness") } }
     }
 
-    @ObservationIgnored
     public var screenLightness: Int {
-        get { _defaults.object(forKey: "screen_lightness") as? Int ?? 50 }
-        set { _defaults.set(newValue, forKey: "screen_lightness") }
+        get { readPreference(\.screenLightness) { _defaults.object(forKey: "screen_lightness") as? Int ?? 50 } }
+        set { updatePreference(\.screenLightness) { _defaults.set(newValue, forKey: "screen_lightness") } }
     }
 
     // MARK: - 阅读器 (新增)
@@ -455,24 +450,21 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     /// 反转音量键
-    @ObservationIgnored
     public var reverseVolumePage: Bool {
-        get { _defaults.bool(forKey: "reverse_volume_page") }
-        set { _defaults.set(newValue, forKey: "reverse_volume_page") }
+        get { readPreference(\.reverseVolumePage) { _defaults.bool(forKey: "reverse_volume_page") } }
+        set { updatePreference(\.reverseVolumePage) { _defaults.set(newValue, forKey: "reverse_volume_page") } }
     }
 
     /// 显示页面间距
-    @ObservationIgnored
     public var showPageInterval: Bool {
-        get { _defaults.bool(forKey: "show_page_interval") }
-        set { _defaults.set(newValue, forKey: "show_page_interval") }
+        get { readPreference(\.showPageInterval) { _defaults.bool(forKey: "show_page_interval") } }
+        set { updatePreference(\.showPageInterval) { _defaults.set(newValue, forKey: "show_page_interval") } }
     }
 
     /// 屏幕旋转 (0=跟随系统, 1=竖屏, 2=横屏)
-    @ObservationIgnored
     public var screenRotation: Int {
-        get { _defaults.integer(forKey: "screen_rotation") }
-        set { _defaults.set(newValue, forKey: "screen_rotation") }
+        get { readPreference(\.screenRotation) { _defaults.integer(forKey: "screen_rotation") } }
+        set { updatePreference(\.screenRotation) { _defaults.set(newValue, forKey: "screen_rotation") } }
     }
 
     public static let autoPageIntervalRange = 1...60
@@ -491,17 +483,15 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     /// 色彩滤镜 (护眼模式)
-    @ObservationIgnored
     public var colorFilter: Bool {
-        get { _defaults.bool(forKey: "color_filter") }
-        set { _defaults.set(newValue, forKey: "color_filter") }
+        get { readPreference(\.colorFilter) { _defaults.bool(forKey: "color_filter") } }
+        set { updatePreference(\.colorFilter) { _defaults.set(newValue, forKey: "color_filter") } }
     }
 
     /// 色彩滤镜颜色
-    @ObservationIgnored
     public var colorFilterColor: Int {
-        get { _defaults.object(forKey: "color_filter_color") as? Int ?? 0x20000000 }
-        set { _defaults.set(newValue, forKey: "color_filter_color") }
+        get { readPreference(\.colorFilterColor) { _defaults.object(forKey: "color_filter_color") as? Int ?? 0x20000000 } }
+        set { updatePreference(\.colorFilterColor) { _defaults.set(newValue, forKey: "color_filter_color") } }
     }
 
     // MARK: - 收藏
@@ -511,10 +501,9 @@ public final class AppSettings: @unchecked Sendable {
         set { _defaults.set(newValue, forKey: "recent_fav_cat") }
     }
 
-    @ObservationIgnored
     public var defaultFavSlot: Int {
-        get { _defaults.object(forKey: "default_favorite_2") as? Int ?? -2 }
-        set { _defaults.set(newValue, forKey: "default_favorite_2") }
+        get { readPreference(\.defaultFavSlot) { _defaults.object(forKey: "default_favorite_2") as? Int ?? -2 } }
+        set { updatePreference(\.defaultFavSlot) { _defaults.set(newValue, forKey: "default_favorite_2") } }
     }
 
     /// 收藏夹名称 (0-9)
@@ -555,10 +544,9 @@ public final class AppSettings: @unchecked Sendable {
     }
 
     /// 是否启用灵动岛 (Live Activity) 显示下载进度 (仅 iOS)
-    @ObservationIgnored
     public var showLiveActivity: Bool {
-        get { _defaults.object(forKey: "show_live_activity") as? Bool ?? true }
-        set { _defaults.set(newValue, forKey: "show_live_activity") }
+        get { readPreference(\.showLiveActivity) { _defaults.object(forKey: "show_live_activity") as? Bool ?? true } }
+        set { updatePreference(\.showLiveActivity) { _defaults.set(newValue, forKey: "show_live_activity") } }
     }
 
     // MARK: - 首次启动引导
@@ -621,17 +609,15 @@ public final class AppSettings: @unchecked Sendable {
     }
     
     /// 安全延迟时间 (秒) - 应用进入后台后多久需要重新认证
-    @ObservationIgnored
     public var securityDelay: Int {
-        get { _defaults.object(forKey: "security_delay") as? Int ?? 0 }
-        set { _defaults.set(newValue, forKey: "security_delay") }
+        get { readPreference(\.securityDelay) { _defaults.object(forKey: "security_delay") as? Int ?? 0 } }
+        set { updatePreference(\.securityDelay) { _defaults.set(newValue, forKey: "security_delay") } }
     }
 
     // MARK: - 高级
-    @ObservationIgnored
     public var saveParseErrorBody: Bool {
-        get { _defaults.bool(forKey: "save_parse_error_body") }
-        set { _defaults.set(newValue, forKey: "save_parse_error_body") }
+        get { readPreference(\.saveParseErrorBody) { _defaults.bool(forKey: "save_parse_error_body") } }
+        set { updatePreference(\.saveParseErrorBody) { _defaults.set(newValue, forKey: "save_parse_error_body") } }
     }
 
     @ObservationIgnored
@@ -643,31 +629,27 @@ public final class AppSettings: @unchecked Sendable {
     // MARK: - Android 对齐: 附加设置
 
     /// 详情页信息大小 (对齐 Android Settings.KEY_DETAIL_SIZE; 0=normal, 1=large)
-    @ObservationIgnored
     public var detailSize: Int {
-        get { _defaults.integer(forKey: "detail_size") }
-        set { _defaults.set(newValue, forKey: "detail_size") }
+        get { readPreference(\.detailSize) { _defaults.integer(forKey: "detail_size") } }
+        set { updatePreference(\.detailSize) { _defaults.set(newValue, forKey: "detail_size") } }
     }
 
     /// 缩略图分辨率 (对齐 Android Settings.KEY_THUMB_RESOLUTION; 0=normal, 1=large)
-    @ObservationIgnored
     public var thumbResolution: Int {
-        get { _defaults.integer(forKey: "thumb_resolution") }
-        set { _defaults.set(newValue, forKey: "thumb_resolution") }
+        get { readPreference(\.thumbResolution) { _defaults.integer(forKey: "thumb_resolution") } }
+        set { updatePreference(\.thumbResolution) { _defaults.set(newValue, forKey: "thumb_resolution") } }
     }
 
     /// 修复缩略图链接 (对齐 Android Settings.KEY_FIX_THUMB_URL)
-    @ObservationIgnored
     public var fixThumbUrl: Bool {
-        get { _defaults.bool(forKey: "fix_thumb_url") }
-        set { _defaults.set(newValue, forKey: "fix_thumb_url") }
+        get { readPreference(\.fixThumbUrl) { _defaults.bool(forKey: "fix_thumb_url") } }
+        set { updatePreference(\.fixThumbUrl) { _defaults.set(newValue, forKey: "fix_thumb_url") } }
     }
 
     /// 内置 ExHentai Hosts (对齐 Android Settings.KEY_BUILT_IN_HOSTS_EX)
-    @ObservationIgnored
     public var builtExHosts: Bool {
-        get { _defaults.object(forKey: "built_ex_hosts") as? Bool ?? false }
-        set { _defaults.set(newValue, forKey: "built_ex_hosts") }
+        get { readPreference(\.builtExHosts) { _defaults.object(forKey: "built_ex_hosts") as? Bool ?? false } }
+        set { updatePreference(\.builtExHosts) { _defaults.set(newValue, forKey: "built_ex_hosts") } }
     }
 
     /// 隐私遮罩（对齐 Android privacy_settings.xml 的 enable_secure，默认关闭）。
@@ -684,10 +666,9 @@ public final class AppSettings: @unchecked Sendable {
     /// 沿用 Android 的键名会和应用锁串在一起（开隐私遮罩会顺带打开应用锁），
     /// 而改动 enableSecurity 的键又会把现有用户的应用锁设置清掉。
     /// 所以新设置换个键，旧的不动。
-    @ObservationIgnored
     public var enableSecureScreen: Bool {
-        get { _defaults.bool(forKey: "secure_screen") }
-        set { _defaults.set(newValue, forKey: "secure_screen") }
+        get { readPreference(\.enableSecureScreen) { _defaults.bool(forKey: "secure_screen") } }
+        set { updatePreference(\.enableSecureScreen) { _defaults.set(newValue, forKey: "secure_screen") } }
     }
 
     // MARK: - 代理
