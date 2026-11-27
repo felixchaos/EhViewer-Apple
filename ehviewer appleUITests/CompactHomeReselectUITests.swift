@@ -22,15 +22,17 @@ final class CompactHomeReselectUITests: XCTestCase {
 
         let profileTab = app.buttons["我的"].firstMatch
         waitUntil(profileTab, isHittable: true)
-        let source = app.buttons["热门"].firstMatch
-        waitUntil(source, isHittable: true)
+        let sources = app.buttons.matching(NSPredicate(format: "label == %@", "热门"))
+        let resultSearch = app.textFields.matching(NSPredicate(format: "value == %@", "offlineretap"))
+        waitUntilAny(sources, isHittable: true, description: "Browse categories")
+        waitUntilAny(resultSearch, isHittable: true, description: "active search")
 
         app.swipeUp()
         app.swipeUp()
         waitUntil(first, isHittable: false)
         waitUntil(profileTab, isHittable: false)
-        waitUntil(source, isHittable: false)
-        waitUntil(search, isHittable: false)
+        waitUntilAny(sources, isHittable: false, description: "Browse categories")
+        waitUntilAny(resultSearch, isHittable: false, description: "active search")
 
         let viewport = app.collectionViews.allElementsBoundByIndex.first { $0.isHittable && $0.frame.height > app.frame.height / 2 }
         XCTAssertNotNil(viewport, "The collapsed Browse list must retain the native scroll viewport.")
@@ -39,14 +41,24 @@ final class CompactHomeReselectUITests: XCTestCase {
             XCTAssertEqual(viewport.frame.maxY, app.frame.maxY, accuracy: 4)
         }
 
+        let witness = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Reselect result "))
+            .allElementsBoundByIndex.first { $0.isHittable && (0.3...0.55).contains($0.frame.midY / app.frame.height) }
+        XCTAssertNotNil(witness)
+        let beforeReverse = witness?.frame.midY
+        let witnessTitle = witness?.label
         // Reverse a short distance without reaching the first result.
         let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.44))
         let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.56))
         upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0)
+        if let witnessTitle, let beforeReverse {
+            let row = app.staticTexts.matching(NSPredicate(format: "label == %@", witnessTitle)).firstMatch
+            XCTAssertTrue(row.isHittable)
+            XCTAssertGreaterThan(row.frame.midY - beforeReverse, 6, "The downward drag must move the list, not hit a retained layer.")
+        }
         waitUntil(first, isHittable: false)
         waitUntil(profileTab, isHittable: true)
-        waitUntil(source, isHittable: true)
-        waitUntil(search, isHittable: true)
+        waitUntilAny(sources, isHittable: true, description: "Browse categories")
+        waitUntilAny(resultSearch, isHittable: true, description: "active search")
 
         let homeTab = app.buttons.matching(NSPredicate(format: "label == %@ AND selected == YES", "首页")).firstMatch
         waitUntil(homeTab, isHittable: true)
@@ -70,7 +82,7 @@ final class CompactHomeReselectUITests: XCTestCase {
             throw XCTSkip("This verifies the compact Browse controls.")
         }
         let profile = app.buttons["我的"].firstMatch
-        let source = app.buttons["热门"].firstMatch
+        let source = app.buttons.matching(NSPredicate(format: "label == %@", "热门")).firstMatch
         let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索标签或标题")).firstMatch
         // A bounce at either boundary of an effectively non-scrollable list
         // must not strand either bar in its hidden state.
@@ -132,6 +144,15 @@ final class CompactHomeReselectUITests: XCTestCase {
         waitUntil(back, isHittable: true)
         back.tap()
         waitUntil(profileTab, isHittable: true)
+    }
+
+    @MainActor private func waitUntilAny(_ query: XCUIElementQuery, isHittable: Bool, description: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        let wait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            query.allElementsBoundByIndex.contains(where: \.isHittable) == isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [wait], timeout: 6), .completed,
+                       "Expected \(description) hittable=\(isHittable)", file: file, line: line)
     }
 
     @MainActor private func waitUntil(_ element: XCUIElement, isHittable: Bool, file: StaticString = #filePath, line: UInt = #line) {

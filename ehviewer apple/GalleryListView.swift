@@ -430,8 +430,6 @@ struct GalleryListView: View {
                     items: BrowseSource.allCases.map { ($0, $0.title) },
                     selection: browseSource
                 )
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("browse-source-categories")
             }
 
             // 排行榜的时间范围。挂在切页条下面而不是另起一屏，

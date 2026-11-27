@@ -299,6 +299,10 @@ private struct EhTabBarAutoHideModifier: ViewModifier {
             lastOffset = offset
             return
         }
+        // Seed a movement anchor before gating on distance. A short, slow
+        // reverse drag may update by only a few points per frame; comparing
+        // each sample to the prior frame would never reach the threshold.
+        if lastOffset == nil { lastOffset = previous }
         let delta = offset - (lastOffset ?? previous)
         guard abs(delta) > 12 else { return }
         lastOffset = offset
