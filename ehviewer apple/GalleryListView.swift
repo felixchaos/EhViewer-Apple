@@ -800,7 +800,7 @@ struct GalleryListView: View {
     /// Group cards into native list rows. Keeping the containing List preserves
     /// refresh, the Home reselect anchor and scroll-driven chrome in grid mode.
     @ViewBuilder
-    private func galleryGridRows<Card: View>(@ViewBuilder card: (GalleryInfo) -> Card) -> some View {
+    private func galleryGridRows<Card: View>(@ViewBuilder card: @escaping (GalleryInfo) -> Card) -> some View {
         let galleries = viewModel.galleries
         let pairs = stride(from: 0, to: galleries.count, by: 2).map { index in
             GalleryGridPair(leading: galleries[index], trailing: index + 1 < galleries.count ? galleries[index + 1] : nil)
